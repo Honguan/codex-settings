@@ -2,9 +2,7 @@
 param(
     [ValidateSet('Interactive', 'Global', 'Project', 'All')]
     [string]$Mode = 'Interactive',
-
     [string]$ProjectPath,
-
     [string]$DestinationRoot = (Join-Path $env:LOCALAPPDATA 'CodexSettingsBackup')
 )
 
@@ -19,10 +17,7 @@ function Copy-ExistingItem {
         [Parameter(Mandatory = $true)][string]$Destination
     )
 
-    if (-not (Test-Path -LiteralPath $Source)) {
-        return 0
-    }
-
+    if (-not (Test-Path -LiteralPath $Source)) { return 0 }
     New-Item -ItemType Directory -Path (Split-Path -Parent $Destination) -Force | Out-Null
     Copy-Item -LiteralPath $Source -Destination $Destination -Recurse -Force
     return 1
@@ -32,7 +27,7 @@ if ($Mode -eq 'Interactive') {
     Write-Host ''
     Write-Host 'Backup Codex Settings'
     Write-Host '====================='
-    Write-Host '[1] Global settings, registry, profile, and ccusage state'
+    Write-Host '[1] Global managed settings, registry, profile, and ccusage state'
     Write-Host '[2] Project settings'
     Write-Host '[3] Global and project settings'
     Write-Host '[0] Exit'
@@ -60,17 +55,21 @@ New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null
 
 $itemCount = 0
 $metadata = [ordered]@{
-    Version = 2
+    Version = 3
     CreatedAt = (Get-Date).ToString('o')
     Mode = $Mode
     ProjectRoot = $ProjectPath
+    PowerShellVersion = [string]$PSVersionTable.PSVersion
 }
 
 if ($Mode -eq 'Global' -or $Mode -eq 'All') {
     $codexHome = Join-Path $HOME '.codex'
     $globalTarget = Join-Path $backupRoot 'global\.codex'
 
-    foreach ($name in @('AGENTS.md', 'AGENTS.override.md', 'config.toml', 'rules', 'agents', 'hooks.json', 'hooks', 'tools', '.codex-settings-manifest.json')) {
+    foreach ($name in @(
+        'AGENTS.md', 'AGENTS.override.md', 'config.toml', 'rules', 'agents', 'hooks.json', 'hooks', 'tools',
+        '.codex-settings-manifest.json', 'model-router-state.json', 'config.toml.codex-model-router.bak'
+    )) {
         $itemCount += Copy-ExistingItem -Source (Join-Path $codexHome $name) -Destination (Join-Path $globalTarget $name)
     }
 
@@ -86,12 +85,14 @@ if ($Mode -eq 'Global' -or $Mode -eq 'All') {
     $profilePath = $PROFILE.CurrentUserAllHosts
     $profileTarget = Join-Path $backupRoot 'global\powershell\profile.ps1'
     $profileExisted = Test-Path -LiteralPath $profilePath -PathType Leaf
-    if ($profileExisted) {
-        $itemCount += Copy-ExistingItem -Source $profilePath -Destination $profileTarget
-    }
+    if ($profileExisted) { $itemCount += Copy-ExistingItem -Source $profilePath -Destination $profileTarget }
 
     $ccusage = Get-CcusageState
     $metadata.Global = [ordered]@{
+        BackedUpCodexItems = @(
+            'AGENTS.md', 'AGENTS.override.md', 'config.toml', 'rules', 'agents', 'hooks.json', 'hooks', 'tools',
+            '.codex-settings-manifest.json', 'model-router-state.json', 'config.toml.codex-model-router.bak'
+        )
         ProjectRegistry = [ordered]@{
             Path = $registryPath
             Existed = $registryExisted
@@ -122,11 +123,11 @@ if ($Mode -eq 'Project' -or $Mode -eq 'All') {
 }
 
 $metadata.ItemCount = $itemCount
-$metadata | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $backupRoot 'backup-meta.json') -Encoding UTF8
+Write-JsonFileAtomic -Path (Join-Path $backupRoot 'backup-meta.json') -Value $metadata -Depth 12
 
 Write-Host ''
 Write-Host "Backed up items : $itemCount"
 Write-Host "Backup path     : $backupRoot"
 if ($null -ne $metadata.Global -and $metadata.Global.Context7.KeyPresent) {
-    Write-Host 'Context7 key    : detected but intentionally not copied'
+    Write-Host 'Context7 key    : detected but intentionally not copied by manual backup'
 }
