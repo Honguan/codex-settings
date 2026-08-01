@@ -59,17 +59,25 @@ function Select-InteractiveMode {
     }
 }
 
-function Resolve-InstallTarget {
+function Resolve-InstallTargets {
     param(
         [Parameter(Mandatory = $true)][string]$InstallMode,
         [string]$RequestedProjectPath
     )
 
     if ($InstallMode -eq 'Global') {
-        return [pscustomobject]@{
-            TemplateRoot = Join-Path $ScriptRoot 'templates\global'
-            TargetRoot   = Join-Path $HOME '.codex'
-        }
+        return @(
+            [pscustomobject]@{
+                InstallMode = 'Global'
+                TemplateRoot = Join-Path $ScriptRoot 'templates\global'
+                TargetRoot = Join-Path $HOME '.codex'
+            },
+            [pscustomobject]@{
+                InstallMode = 'GlobalSkills'
+                TemplateRoot = Join-Path $ScriptRoot 'templates\user-skills'
+                TargetRoot = Join-Path $HOME '.agents\skills'
+            }
+        )
     }
 
     if ([string]::IsNullOrWhiteSpace($RequestedProjectPath)) {
@@ -93,10 +101,13 @@ function Resolve-InstallTarget {
         Write-Warning 'No CVS directory was found at the selected project root.'
     }
 
-    return [pscustomobject]@{
-        TemplateRoot = Join-Path $ScriptRoot ("templates\{0}-project" -f $InstallMode.ToLowerInvariant())
-        TargetRoot   = $resolvedProjectPath
-    }
+    return @(
+        [pscustomobject]@{
+            InstallMode = $InstallMode
+            TemplateRoot = Join-Path $ScriptRoot ("templates\{0}-project" -f $InstallMode.ToLowerInvariant())
+            TargetRoot = $resolvedProjectPath
+        }
+    )
 }
 
 function Install-Template {
@@ -139,7 +150,7 @@ function Install-Template {
         Copy-Item -LiteralPath $sourceFile.FullName -Destination $destinationPath -Force
 
         $manifestEntries += [pscustomobject]@{
-            Path   = $relativePath
+            Path = $relativePath
             Sha256 = (Get-FileHash -LiteralPath $destinationPath -Algorithm SHA256).Hash
         }
         $installedCount++
@@ -147,20 +158,20 @@ function Install-Template {
 
     $manifestPath = Join-Path $TargetRoot '.codex-settings-manifest.json'
     $manifest = [pscustomobject]@{
-        Version     = 1
-        Mode        = $InstallMode
+        Version = 1
+        Mode = $InstallMode
         InstalledAt = (Get-Date).ToString('o')
-        TargetRoot  = $TargetRoot
-        Files       = $manifestEntries
+        TargetRoot = $TargetRoot
+        Files = $manifestEntries
     }
     $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
 
     $backupMetadata = [pscustomobject]@{
-        Version      = 1
-        CreatedAt    = (Get-Date).ToString('o')
-        Mode         = $InstallMode
-        TargetRoot   = $TargetRoot
-        FilesRoot    = $backupFilesRoot
+        Version = 1
+        CreatedAt = (Get-Date).ToString('o')
+        Mode = $InstallMode
+        TargetRoot = $TargetRoot
+        FilesRoot = $backupFilesRoot
         BackedUpFiles = $backedUpCount
     }
     $backupMetadata | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $backupRoot 'backup-meta.json') -Encoding UTF8
@@ -170,13 +181,19 @@ function Install-Template {
     Write-Host "Backed up files : $backedUpCount"
     Write-Host "Target          : $TargetRoot"
     Write-Host "Backup          : $backupRoot"
-    Write-Host ''
-    Write-Host 'Restart Codex so it reloads AGENTS.md, config, rules, and skills.'
 }
 
 if ($Mode -eq 'Interactive') {
     $Mode = Select-InteractiveMode
 }
 
-$target = Resolve-InstallTarget -InstallMode $Mode -RequestedProjectPath $ProjectPath
-Install-Template -InstallMode $Mode -TemplateRoot $target.TemplateRoot -TargetRoot $target.TargetRoot
+$targets = @(Resolve-InstallTargets -InstallMode $Mode -RequestedProjectPath $ProjectPath)
+foreach ($target in $targets) {
+    Install-Template `
+        -InstallMode $target.InstallMode `
+        -TemplateRoot $target.TemplateRoot `
+        -TargetRoot $target.TargetRoot
+}
+
+Write-Host ''
+Write-Host 'Restart Codex so it reloads AGENTS.md, config, rules, and skills.'
