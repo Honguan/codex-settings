@@ -15,7 +15,8 @@ codex-settings/
 ├─ uninstall.ps1
 ├─ lib/
 │  ├─ codex-settings-common.ps1
-│  └─ install-functions.ps1
+│  ├─ install-functions.ps1
+│  └─ project-registry.ps1
 └─ templates/
    ├─ global/
    │  ├─ AGENTS.md
@@ -57,6 +58,46 @@ codex-settings/
 
 安裝前會檢查命令、版本、目標目錄寫入權限、PowerShell Profile 寫入權限及內建 TOML 模板。
 
+Git 或 CVS 專案安裝成功後會自動登記到：
+
+```text
+%LOCALAPPDATA%\CodexSettings\projects.json
+```
+
+登記檔只保存專案類型、路徑與安裝時間，不保存憑證、Token 或專案內容。重複安裝同一專案只會更新現有登記，不會建立重複項目。
+
+## 一次更新全域與所有登記專案
+
+執行：
+
+```powershell
+./update.ps1
+```
+
+預設流程：
+
+1. 確認設定倉庫沒有未提交變更。
+2. 執行 `git pull --ff-only` 更新設定倉庫。
+3. 更新全域 Codex 設定、MCP、ccusage、`cs` 與 `cdaily`。
+4. 依序更新所有已登記的 Git 與 CVS 專案設定。
+5. 顯示每個目標的成功或失敗狀態。
+
+每個目標仍使用獨立的交易式安裝流程。單一專案失敗不會阻止其他登記專案更新；全部執行完成後會列出實際錯誤，並在存在失敗時回傳 Exit Code 1。
+
+可用參數：
+
+```powershell
+./update.ps1 -SkipRepositoryPull
+./update.ps1 -SkipGlobal
+./update.ps1 -SkipCcusageInstall
+```
+
+- `-SkipRepositoryPull`：不執行設定倉庫的 `git pull`。
+- `-SkipGlobal`：只更新已登記專案。
+- `-SkipCcusageInstall`：更新全域設定時不重新安裝 ccusage。
+
+不存在或已移動的登記路徑會標記為失敗，但不會自動刪除登記。重新以新路徑安裝專案，或完整解除安裝舊專案設定後，可更新登記資料。
+
 ## 安全合併與交易式安裝
 
 安裝器不再直接覆蓋既有設定：
@@ -72,6 +113,8 @@ codex-settings/
 2. 套用設定、MCP、ccusage、`cs` 與 `cdaily`。
 3. 全部成功後才寫入新版 Manifest。
 4. 任一步驟失敗時，自動回復檔案、Profile、ccusage 與本次建立的 Context7 Key。
+
+Git／CVS 安裝也會把專案登記檔納入交易；登記失敗時會回復本次專案設定與登記內容。
 
 交易備份位於：
 
@@ -138,6 +181,7 @@ cdaily 30
 
 - `~/.codex`
 - `~/.agents/skills`
+- 已登記 Git／CVS 專案清單
 - PowerShell Profile
 - ccusage 是否安裝及版本
 - Context7 Key 是否存在的狀態
@@ -150,22 +194,25 @@ Context7 Key 本身不會寫入備份。
 ./restore.ps1
 ```
 
-會還原設定、Profile 與 ccusage 原始安裝狀態。若備份時存在 Context7 Key，但目前已不存在，會提醒重新設定，不會從備份讀取秘密。
+會還原設定、已登記專案清單、Profile 與 ccusage 原始安裝狀態。若備份時存在 Context7 Key，但目前已不存在，會提醒重新設定，不會從備份讀取秘密。
 
 ### 移除
 
 ```powershell
 ./uninstall.ps1 -Mode Global
+./uninstall.ps1 -Mode Project -ProjectPath 'E:\Git\MyProject'
 ```
 
-會：
+全域移除會：
 
 - 只移除本套件管理的 AGENTS、Rules、TOML 與 Hooks 區塊。
-- 保留使用者其他設定。
+- 保留使用者其他設定與已登記專案清單。
 - 移除 Profile 中的 `cs`、`cdaily`。
 - 還原安裝前的 ccusage 狀態及版本。
 - 只在 Key 由本安裝器建立時移除 `CONTEXT7_API_KEY`。
 - 備份所有即將移除或更新的內容。
+
+專案設定完整移除且沒有剩餘受管理檔案時，會自動從登記清單移除該專案。若有使用者修改過的受管理檔案被保留，專案仍會維持登記。
 
 ## 全域 MCP
 
