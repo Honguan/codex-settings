@@ -2,6 +2,84 @@ $script:CsStartMarker = '# >>> CS CODEX SESSION VIEWER >>>'
 $script:CsEndMarker = '# <<< CS CODEX SESSION VIEWER <<<'
 $script:CdailyStartMarker = '# >>> CDAILY CODEX DAILY REPORT >>>'
 $script:CdailyEndMarker = '# <<< CDAILY CODEX DAILY REPORT <<<'
+$script:CodexSettingsStateRoot = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'CodexSettings'
+
+function Write-BytesAtomic {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][byte[]]$Bytes
+    )
+
+    $directory = Split-Path -Parent $Path
+    if (-not [string]::IsNullOrWhiteSpace($directory)) {
+        New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    }
+
+    $temporaryPath = Join-Path $directory ('.codex-settings-' + [guid]::NewGuid().ToString('N') + '.tmp')
+    try {
+        [IO.File]::WriteAllBytes($temporaryPath, $Bytes)
+        if (Test-Path -LiteralPath $Path -PathType Leaf) {
+            try {
+                [IO.File]::Replace($temporaryPath, $Path, $null, $true)
+            } catch {
+                Move-Item -LiteralPath $temporaryPath -Destination $Path -Force
+            }
+        } else {
+            Move-Item -LiteralPath $temporaryPath -Destination $Path
+        }
+    } finally {
+        Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Copy-FileAtomic {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Source,
+        [Parameter(Mandatory = $true)][string]$Destination
+    )
+
+    Write-BytesAtomic -Path $Destination -Bytes ([IO.File]::ReadAllBytes($Source))
+}
+
+function Write-JsonFileAtomic {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)]$Value,
+        [int]$Depth = 12
+    )
+
+    $json = $Value | ConvertTo-Json -Depth $Depth
+    Write-BytesAtomic -Path $Path -Bytes ((New-Object Text.UTF8Encoding($false)).GetBytes($json))
+}
+
+function Get-LegacyTextEncoding {
+    [CmdletBinding()]
+    param()
+
+    try {
+        [Text.Encoding]::RegisterProvider([Text.CodePagesEncodingProvider]::Instance)
+    } catch {
+        # Windows PowerShell already exposes legacy code pages.
+    }
+
+    $codePage = [Globalization.CultureInfo]::CurrentCulture.TextInfo.ANSICodePage
+    if ($codePage -in @(0, 65001, 1200, 1201)) {
+        throw "The current Windows ANSI code page is not suitable for legacy text detection: $codePage"
+    }
+
+    try {
+        return [Text.Encoding]::GetEncoding(
+            $codePage,
+            [Text.EncoderExceptionFallback]::new(),
+            [Text.DecoderExceptionFallback]::new()
+        )
+    } catch {
+        throw "Unable to load Windows ANSI code page $codePage. $($_.Exception.Message)"
+    }
+}
 
 function Get-TextFileState {
     [CmdletBinding()]
@@ -11,38 +89,59 @@ function Get-TextFileState {
         return [pscustomobject]@{
             Exists = $false
             Content = ''
-            Encoding = New-Object Text.UTF8Encoding($false)
+            Encoding = New-Object Text.UTF8Encoding($false, $true)
+            EncodingName = 'utf-8'
+            CodePage = 65001
             NewLine = "`r`n"
         }
     }
 
     $bytes = [IO.File]::ReadAllBytes($Path)
-    $encoding = New-Object Text.UTF8Encoding($false)
     $offset = 0
+    $encoding = $null
+    $encodingName = $null
 
     if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
-        $encoding = New-Object Text.UTF8Encoding($true)
+        $encoding = New-Object Text.UTF8Encoding($true, $true)
+        $encodingName = 'utf-8-bom'
         $offset = 3
     } elseif ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFF -and $bytes[1] -eq 0xFE) {
-        $encoding = [Text.Encoding]::Unicode
+        $encoding = New-Object Text.UnicodeEncoding($false, $true, $true)
+        $encodingName = 'utf-16-le'
         $offset = 2
     } elseif ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFE -and $bytes[1] -eq 0xFF) {
-        $encoding = [Text.Encoding]::BigEndianUnicode
+        $encoding = New-Object Text.UnicodeEncoding($true, $true, $true)
+        $encodingName = 'utf-16-be'
         $offset = 2
+    } else {
+        $utf8 = New-Object Text.UTF8Encoding($false, $true)
+        try {
+            [void]$utf8.GetString($bytes)
+            $encoding = $utf8
+            $encodingName = 'utf-8'
+        } catch [Text.DecoderFallbackException] {
+            $encoding = Get-LegacyTextEncoding
+            $encodingName = "windows-$($encoding.CodePage)"
+        }
     }
 
-    $content = if ($bytes.Length -gt $offset) {
-        $encoding.GetString($bytes, $offset, $bytes.Length - $offset)
-    } else {
-        ''
+    try {
+        $content = if ($bytes.Length -gt $offset) {
+            $encoding.GetString($bytes, $offset, $bytes.Length - $offset)
+        } else {
+            ''
+        }
+    } catch [Text.DecoderFallbackException] {
+        throw "Unable to decode text file without data loss: $Path. Detected encoding: $encodingName"
     }
 
     $newLine = if ($content.Contains("`r`n")) { "`r`n" } else { "`n" }
-
     return [pscustomobject]@{
         Exists = $true
         Content = $content
         Encoding = $encoding
+        EncodingName = $encodingName
+        CodePage = $encoding.CodePage
         NewLine = $newLine
     }
 }
@@ -55,12 +154,46 @@ function Write-TextFileState {
         [Parameter(Mandatory = $true)]$Encoding
     )
 
-    $directory = Split-Path -Parent $Path
-    if (-not [string]::IsNullOrWhiteSpace($directory)) {
-        New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    try {
+        $body = $Encoding.GetBytes($Content)
+    } catch [Text.EncoderFallbackException] {
+        throw "The updated text cannot be represented by code page $($Encoding.CodePage): $Path"
     }
 
-    [IO.File]::WriteAllText($Path, $Content, $Encoding)
+    $preamble = $Encoding.GetPreamble()
+    if ($preamble.Length -gt 0) {
+        $bytes = New-Object byte[] ($preamble.Length + $body.Length)
+        [Array]::Copy($preamble, 0, $bytes, 0, $preamble.Length)
+        [Array]::Copy($body, 0, $bytes, $preamble.Length, $body.Length)
+    } else {
+        $bytes = $body
+    }
+
+    Write-BytesAtomic -Path $Path -Bytes $bytes
+}
+
+function Protect-LocalSecret {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$Value)
+
+    if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
+        throw 'Local secret backup is supported only on Windows.'
+    }
+    $secure = ConvertTo-SecureString -String $Value -AsPlainText -Force
+    return ConvertFrom-SecureString -SecureString $secure
+}
+
+function Unprotect-LocalSecret {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$ProtectedValue)
+
+    if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
+        throw 'Local secret restore is supported only on Windows.'
+    }
+    $secure = ConvertTo-SecureString -String $ProtectedValue
+    $pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+    try { return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer) }
+    finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer) }
 }
 
 function Remove-ManagedBlock {
@@ -87,11 +220,7 @@ function Merge-ManagedBlock {
 
     $base = Remove-ManagedBlock -Content $ExistingContent -StartMarker $StartMarker -EndMarker $EndMarker
     $block = $StartMarker + $NewLine + $ManagedContent.Trim() + $NewLine + $EndMarker
-
-    if ([string]::IsNullOrWhiteSpace($base)) {
-        return $block + $NewLine
-    }
-
+    if ([string]::IsNullOrWhiteSpace($base)) { return $block + $NewLine }
     return $base.TrimEnd() + $NewLine + $NewLine + $block + $NewLine
 }
 
@@ -106,31 +235,19 @@ function Get-TomlShape {
 
     foreach ($line in ($Content -split '\r?\n')) {
         $trimmed = $line.Trim()
-        if ($trimmed -eq '' -or $trimmed.StartsWith('#')) {
-            continue
-        }
-
+        if ($trimmed -eq '' -or $trimmed.StartsWith('#')) { continue }
         if ($trimmed -match '^\[([^\]]+)\]\s*(?:#.*)?$') {
             $currentSection = $matches[1].Trim()
-            if (-not $sections.Add($currentSection)) {
-                [void]$duplicates.Add("section:$currentSection")
-            }
+            if (-not $sections.Add($currentSection)) { [void]$duplicates.Add("section:$currentSection") }
             continue
         }
-
         if ($null -eq $currentSection -and $trimmed -match '^([A-Za-z0-9_.-]+)\s*=') {
             $key = $matches[1]
-            if (-not $topLevelKeys.Add($key)) {
-                [void]$duplicates.Add("key:$key")
-            }
+            if (-not $topLevelKeys.Add($key)) { [void]$duplicates.Add("key:$key") }
         }
     }
 
-    return [pscustomobject]@{
-        TopLevelKeys = $topLevelKeys
-        Sections = $sections
-        Duplicates = @($duplicates)
-    }
+    return [pscustomobject]@{ TopLevelKeys = $topLevelKeys; Sections = $sections; Duplicates = @($duplicates) }
 }
 
 function Select-TomlTemplateContent {
@@ -145,11 +262,9 @@ function Select-TomlTemplateContent {
     $output = New-Object 'System.Collections.Generic.List[string]'
     $pending = New-Object 'System.Collections.Generic.List[string]'
     $index = 0
-
     while ($index -lt $lines.Count) {
         $line = $lines[$index]
         $trimmed = $line.Trim()
-
         if ($trimmed -match '^\[([^\]]+)\]\s*(?:#.*)?$') {
             $sectionName = $matches[1].Trim()
             $block = New-Object 'System.Collections.Generic.List[string]'
@@ -157,43 +272,27 @@ function Select-TomlTemplateContent {
             $pending.Clear()
             [void]$block.Add($line)
             $index++
-
             while ($index -lt $lines.Count -and $lines[$index].Trim() -notmatch '^\[([^\]]+)\]\s*(?:#.*)?$') {
-                [void]$block.Add($lines[$index])
-                $index++
+                [void]$block.Add($lines[$index]); $index++
             }
-
             if (-not $ExistingShape.Sections.Contains($sectionName)) {
                 foreach ($item in $block) { [void]$output.Add($item) }
                 [void]$output.Add('')
             }
             continue
         }
-
-        if ($trimmed -eq '' -or $trimmed.StartsWith('#')) {
-            [void]$pending.Add($line)
-            $index++
-            continue
-        }
-
+        if ($trimmed -eq '' -or $trimmed.StartsWith('#')) { [void]$pending.Add($line); $index++; continue }
         if ($trimmed -match '^([A-Za-z0-9_.-]+)\s*=') {
             $key = $matches[1]
             if (-not $ExistingShape.TopLevelKeys.Contains($key)) {
                 foreach ($item in $pending) { [void]$output.Add($item) }
-                [void]$output.Add($line)
-                [void]$output.Add('')
+                [void]$output.Add($line); [void]$output.Add('')
             }
-            $pending.Clear()
-            $index++
-            continue
+            $pending.Clear(); $index++; continue
         }
-
         foreach ($item in $pending) { [void]$output.Add($item) }
-        $pending.Clear()
-        [void]$output.Add($line)
-        $index++
+        $pending.Clear(); [void]$output.Add($line); $index++
     }
-
     return (($output -join $NewLine).Trim())
 }
 
@@ -209,22 +308,15 @@ function Merge-TomlTemplate {
 
     $base = Remove-ManagedBlock -Content $ExistingContent -StartMarker $StartMarker -EndMarker $EndMarker
     $baseShape = Get-TomlShape -Content $base
-    if ($baseShape.Duplicates.Count -gt 0) {
-        throw "Existing TOML contains duplicate entries: $($baseShape.Duplicates -join ', ')"
-    }
-
+    if ($baseShape.Duplicates.Count -gt 0) { throw "Existing TOML contains duplicate entries: $($baseShape.Duplicates -join ', ')" }
     $selected = Select-TomlTemplateContent -TemplateContent $TemplateContent -ExistingShape $baseShape -NewLine $NewLine
-    if ([string]::IsNullOrWhiteSpace($selected)) {
-        $result = if ([string]::IsNullOrWhiteSpace($base)) { '' } else { $base.TrimEnd() + $NewLine }
+    $result = if ([string]::IsNullOrWhiteSpace($selected)) {
+        if ([string]::IsNullOrWhiteSpace($base)) { '' } else { $base.TrimEnd() + $NewLine }
     } else {
-        $result = Merge-ManagedBlock -ExistingContent $base -ManagedContent $selected -StartMarker $StartMarker -EndMarker $EndMarker -NewLine $NewLine
+        Merge-ManagedBlock -ExistingContent $base -ManagedContent $selected -StartMarker $StartMarker -EndMarker $EndMarker -NewLine $NewLine
     }
-
     $resultShape = Get-TomlShape -Content $result
-    if ($resultShape.Duplicates.Count -gt 0) {
-        throw "Merged TOML contains duplicate entries: $($resultShape.Duplicates -join ', ')"
-    }
-
+    if ($resultShape.Duplicates.Count -gt 0) { throw "Merged TOML contains duplicate entries: $($resultShape.Duplicates -join ', ')" }
     return $result
 }
 
@@ -235,33 +327,17 @@ function Merge-HooksJson {
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$TemplateContent
     )
 
-    $existing = if ([string]::IsNullOrWhiteSpace($ExistingContent)) {
-        [pscustomobject]@{ hooks = [pscustomobject]@{} }
-    } else {
-        $ExistingContent | ConvertFrom-Json -ErrorAction Stop
-    }
-
-    if ($null -eq $existing.hooks) {
-        $existing | Add-Member -NotePropertyName hooks -NotePropertyValue ([pscustomobject]@{}) -Force
-    }
-
+    $existing = if ([string]::IsNullOrWhiteSpace($ExistingContent)) { [pscustomobject]@{ hooks = [pscustomobject]@{} } } else { $ExistingContent | ConvertFrom-Json -ErrorAction Stop }
+    if ($null -eq $existing.hooks) { $existing | Add-Member -NotePropertyName hooks -NotePropertyValue ([pscustomobject]@{}) -Force }
     foreach ($property in @($existing.hooks.PSObject.Properties)) {
-        $filtered = @($property.Value | Where-Object {
-            ($_ | ConvertTo-Json -Depth 20 -Compress) -notmatch 'crlf-updated-files\.ps1'
-        })
+        $filtered = @($property.Value | Where-Object { ($_ | ConvertTo-Json -Depth 20 -Compress) -notmatch 'crlf-updated-files\.ps1' })
         $existing.hooks | Add-Member -NotePropertyName $property.Name -NotePropertyValue $filtered -Force
     }
-
     $template = $TemplateContent | ConvertFrom-Json -ErrorAction Stop
     foreach ($property in @($template.hooks.PSObject.Properties)) {
-        $current = @()
-        if ($existing.hooks.PSObject.Properties.Name -contains $property.Name) {
-            $current = @($existing.hooks.PSObject.Properties[$property.Name].Value)
-        }
-        $combined = @($current) + @($property.Value)
-        $existing.hooks | Add-Member -NotePropertyName $property.Name -NotePropertyValue $combined -Force
+        $current = if ($existing.hooks.PSObject.Properties.Name -contains $property.Name) { @($existing.hooks.PSObject.Properties[$property.Name].Value) } else { @() }
+        $existing.hooks | Add-Member -NotePropertyName $property.Name -NotePropertyValue (@($current) + @($property.Value)) -Force
     }
-
     return ($existing | ConvertTo-Json -Depth 30)
 }
 
@@ -269,22 +345,13 @@ function Remove-ManagedHooksJson {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Content)
 
-    if ([string]::IsNullOrWhiteSpace($Content)) {
-        return ''
-    }
-
+    if ([string]::IsNullOrWhiteSpace($Content)) { return '' }
     $object = $Content | ConvertFrom-Json -ErrorAction Stop
-    if ($null -eq $object.hooks) {
-        return $Content
-    }
-
+    if ($null -eq $object.hooks) { return $Content }
     foreach ($property in @($object.hooks.PSObject.Properties)) {
-        $filtered = @($property.Value | Where-Object {
-            ($_ | ConvertTo-Json -Depth 20 -Compress) -notmatch 'crlf-updated-files\.ps1'
-        })
+        $filtered = @($property.Value | Where-Object { ($_ | ConvertTo-Json -Depth 20 -Compress) -notmatch 'crlf-updated-files\.ps1' })
         $object.hooks | Add-Member -NotePropertyName $property.Name -NotePropertyValue $filtered -Force
     }
-
     return ($object | ConvertTo-Json -Depth 30)
 }
 
@@ -293,55 +360,35 @@ function Remove-CcusageProfileBlocks {
     param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Content)
 
     $result = Remove-ManagedBlock -Content $Content -StartMarker $script:CsStartMarker -EndMarker $script:CsEndMarker
-    $result = Remove-ManagedBlock -Content $result -StartMarker $script:CdailyStartMarker -EndMarker $script:CdailyEndMarker
-    return $result
+    return Remove-ManagedBlock -Content $result -StartMarker $script:CdailyStartMarker -EndMarker $script:CdailyEndMarker
 }
 
 function Get-CcusageState {
     [CmdletBinding()]
     param()
 
-    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
-        return [pscustomobject]@{ Installed = $false; Version = $null }
-    }
-
+    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) { return [pscustomobject]@{ Installed = $false; Version = $null } }
     $output = & npm list --global ccusage --depth=0 --json 2>$null
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace(($output | Out-String))) {
-        return [pscustomobject]@{ Installed = $false; Version = $null }
-    }
-
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace(($output | Out-String))) { return [pscustomobject]@{ Installed = $false; Version = $null } }
     try {
         $data = ($output | Out-String) | ConvertFrom-Json -ErrorAction Stop
         $version = [string]$data.dependencies.ccusage.version
-        return [pscustomobject]@{
-            Installed = -not [string]::IsNullOrWhiteSpace($version)
-            Version = if ([string]::IsNullOrWhiteSpace($version)) { $null } else { $version }
-        }
-    } catch {
-        return [pscustomobject]@{ Installed = $false; Version = $null }
-    }
+        return [pscustomobject]@{ Installed = -not [string]::IsNullOrWhiteSpace($version); Version = if ([string]::IsNullOrWhiteSpace($version)) { $null } else { $version } }
+    } catch { return [pscustomobject]@{ Installed = $false; Version = $null } }
 }
 
 function Restore-CcusageState {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)]$State)
 
-    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
-        throw 'npm is required to restore the ccusage package state.'
-    }
-
+    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) { throw 'npm is required to restore the ccusage package state.' }
     if ([bool]$State.Installed) {
-        if ([string]::IsNullOrWhiteSpace([string]$State.Version)) {
-            throw 'The previous ccusage version is missing.'
-        }
+        if ([string]::IsNullOrWhiteSpace([string]$State.Version)) { throw 'The previous ccusage version is missing.' }
         & npm install --global ("ccusage@{0}" -f [string]$State.Version)
     } else {
         & npm uninstall --global ccusage
     }
-
-    if ($LASTEXITCODE -ne 0) {
-        throw "Unable to restore the ccusage package state. npm exit code: $LASTEXITCODE"
-    }
+    if ($LASTEXITCODE -ne 0) { throw "Unable to restore the ccusage package state. npm exit code: $LASTEXITCODE" }
 }
 
 function Test-DirectoryWritable {
@@ -350,23 +397,67 @@ function Test-DirectoryWritable {
 
     New-Item -ItemType Directory -Path $Path -Force | Out-Null
     $testPath = Join-Path $Path ('.codex-settings-write-test-' + [guid]::NewGuid().ToString('N'))
-    try {
-        [IO.File]::WriteAllText($testPath, 'test', (New-Object Text.UTF8Encoding($false)))
-    } finally {
-        Remove-Item -LiteralPath $testPath -Force -ErrorAction SilentlyContinue
+    try { [IO.File]::WriteAllText($testPath, 'test', (New-Object Text.UTF8Encoding($false))) }
+    finally { Remove-Item -LiteralPath $testPath -Force -ErrorAction SilentlyContinue }
+}
+
+function Enter-CodexSettingsLock {
+    [CmdletBinding()]
+    param([string]$Name = 'settings')
+
+    New-Item -ItemType Directory -Path $script:CodexSettingsStateRoot -Force | Out-Null
+    $path = Join-Path $script:CodexSettingsStateRoot ("$Name.lock")
+    for ($attempt = 0; $attempt -lt 2; $attempt++) {
+        try {
+            $stream = New-Object IO.FileStream($path, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::Read)
+            $payload = [ordered]@{
+                ProcessId = $PID
+                ProcessStartUtc = (Get-Process -Id $PID).StartTime.ToUniversalTime().ToString('o')
+                CreatedAt = (Get-Date).ToString('o')
+            } | ConvertTo-Json -Compress
+            $bytes = (New-Object Text.UTF8Encoding($false)).GetBytes($payload)
+            $stream.Write($bytes, 0, $bytes.Length)
+            $stream.Flush($true)
+            return [pscustomobject]@{ Path = $path; Stream = $stream }
+        } catch [IO.IOException] {
+            $active = $true
+            try {
+                $existing = Get-Content -LiteralPath $path -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+                $process = Get-Process -Id ([int]$existing.ProcessId) -ErrorAction SilentlyContinue
+                $active = $null -ne $process -and $process.StartTime.ToUniversalTime().ToString('o') -eq [string]$existing.ProcessStartUtc
+            } catch { $active = $true }
+            if ($active) { throw "Another codex-settings operation is running. Lock: $path" }
+            Remove-Item -LiteralPath $path -Force -ErrorAction Stop
+        }
     }
+    throw "Unable to acquire codex-settings lock: $path"
+}
+
+function Exit-CodexSettingsLock {
+    [CmdletBinding()]
+    param($Lock)
+
+    if ($null -eq $Lock) { return }
+    try { $Lock.Stream.Dispose() } finally { Remove-Item -LiteralPath $Lock.Path -Force -ErrorAction SilentlyContinue }
 }
 
 function New-FileTransaction {
     [CmdletBinding()]
-    param([Parameter(Mandatory = $true)][string]$Root)
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [string]$Mode = 'Operation'
+    )
 
     New-Item -ItemType Directory -Path $Root -Force | Out-Null
-    return [pscustomobject]@{
+    $transaction = [pscustomobject]@{
         Root = $Root
+        CreatedAt = (Get-Date).ToString('o')
         Entries = New-Object 'System.Collections.Generic.List[object]'
         Seen = @{}
+        Metadata = [ordered]@{ Mode = $Mode; Status = 'InProgress' }
     }
+    Save-TransactionMetadata -Transaction $transaction -Metadata @{}
+    return $transaction
 }
 
 function Save-TransactionFile {
@@ -377,26 +468,18 @@ function Save-TransactionFile {
     )
 
     $fullPath = [IO.Path]::GetFullPath($Path)
-    if ($Transaction.Seen.ContainsKey($fullPath)) {
-        return
-    }
-
+    if ($Transaction.Seen.ContainsKey($fullPath)) { return }
     $Transaction.Seen[$fullPath] = $true
     $hashBytes = [Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($fullPath))
     $name = ([BitConverter]::ToString($hashBytes)).Replace('-', '')
     $backupPath = Join-Path $Transaction.Root ('files\' + $name)
     $exists = Test-Path -LiteralPath $fullPath -PathType Leaf
-
     if ($exists) {
         New-Item -ItemType Directory -Path (Split-Path -Parent $backupPath) -Force | Out-Null
-        Copy-Item -LiteralPath $fullPath -Destination $backupPath -Force
+        Copy-FileAtomic -Source $fullPath -Destination $backupPath
     }
-
-    [void]$Transaction.Entries.Add([pscustomobject]@{
-        Path = $fullPath
-        Existed = $exists
-        BackupPath = if ($exists) { $backupPath } else { $null }
-    })
+    [void]$Transaction.Entries.Add([pscustomobject]@{ Path = $fullPath; Existed = $exists; BackupPath = if ($exists) { $backupPath } else { $null } })
+    Save-TransactionMetadata -Transaction $Transaction -Metadata @{}
 }
 
 function Undo-FileTransaction {
@@ -406,8 +489,7 @@ function Undo-FileTransaction {
     for ($index = $Transaction.Entries.Count - 1; $index -ge 0; $index--) {
         $entry = $Transaction.Entries[$index]
         if ([bool]$entry.Existed) {
-            New-Item -ItemType Directory -Path (Split-Path -Parent ([string]$entry.Path)) -Force | Out-Null
-            Copy-Item -LiteralPath ([string]$entry.BackupPath) -Destination ([string]$entry.Path) -Force
+            Copy-FileAtomic -Source ([string]$entry.BackupPath) -Destination ([string]$entry.Path)
         } else {
             Remove-Item -LiteralPath ([string]$entry.Path) -Force -ErrorAction SilentlyContinue
         }
@@ -421,14 +503,76 @@ function Save-TransactionMetadata {
         [Parameter(Mandatory = $true)][hashtable]$Metadata
     )
 
+    foreach ($key in $Metadata.Keys) { $Transaction.Metadata[$key] = $Metadata[$key] }
     $payload = [ordered]@{
-        Version = 2
-        CreatedAt = (Get-Date).ToString('o')
+        Version = 3
+        CreatedAt = $Transaction.CreatedAt
+        UpdatedAt = (Get-Date).ToString('o')
         Files = @($Transaction.Entries)
     }
-    foreach ($key in $Metadata.Keys) {
-        $payload[$key] = $Metadata[$key]
+    foreach ($key in $Transaction.Metadata.Keys) { $payload[$key] = $Transaction.Metadata[$key] }
+    Write-JsonFileAtomic -Path (Join-Path $Transaction.Root 'backup-meta.json') -Value $payload -Depth 14
+}
+
+function Complete-FileTransaction {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)]$Transaction)
+
+    Save-TransactionMetadata -Transaction $Transaction -Metadata @{ Status = 'Completed'; CompletedAt = (Get-Date).ToString('o') }
+}
+
+function Restore-ExternalTransactionState {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)]$Metadata)
+
+    if ($Metadata.PSObject.Properties.Name -contains 'CcusageBefore' -and $null -ne $Metadata.CcusageBefore) {
+        Restore-CcusageState -State $Metadata.CcusageBefore
     }
 
-    $payload | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $Transaction.Root 'backup-meta.json') -Encoding UTF8
+    if ($Metadata.PSObject.Properties.Name -contains 'Context7Before' -and $null -ne $Metadata.Context7Before) {
+        if ([bool]$Metadata.Context7Before.WasPresent) {
+            $value = Unprotect-LocalSecret -ProtectedValue ([string]$Metadata.Context7Before.ProtectedValue)
+            [Environment]::SetEnvironmentVariable('CONTEXT7_API_KEY', $value, 'User')
+            [Environment]::SetEnvironmentVariable('CONTEXT7_API_KEY', $value, 'Process')
+        } else {
+            [Environment]::SetEnvironmentVariable('CONTEXT7_API_KEY', $null, 'User')
+            [Environment]::SetEnvironmentVariable('CONTEXT7_API_KEY', $null, 'Process')
+        }
+    } elseif (($Metadata.PSObject.Properties.Name -contains 'Context7InstallerMayCreate') -and [bool]$Metadata.Context7InstallerMayCreate -and
+        (-not [bool]$Metadata.Context7KeyWasPresent)) {
+        [Environment]::SetEnvironmentVariable('CONTEXT7_API_KEY', $null, 'User')
+        [Environment]::SetEnvironmentVariable('CONTEXT7_API_KEY', $null, 'Process')
+    }
+}
+
+function Repair-PendingTransactions {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$BackupRoot)
+
+    $recovered = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($directory in @(Get-ChildItem -LiteralPath $BackupRoot -Directory -ErrorAction SilentlyContinue)) {
+        $metadataPath = Join-Path $directory.FullName 'backup-meta.json'
+        if (-not (Test-Path -LiteralPath $metadataPath -PathType Leaf)) { continue }
+        try { $metadata = Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json -ErrorAction Stop }
+        catch { continue }
+        if ([string]$metadata.Status -ne 'InProgress' -or $null -eq $metadata.Files) { continue }
+
+        for ($index = @($metadata.Files).Count - 1; $index -ge 0; $index--) {
+            $entry = @($metadata.Files)[$index]
+            if ([bool]$entry.Existed) {
+                if (-not (Test-Path -LiteralPath ([string]$entry.BackupPath) -PathType Leaf)) {
+                    throw "Pending transaction backup is missing: $($entry.BackupPath)"
+                }
+                Copy-FileAtomic -Source ([string]$entry.BackupPath) -Destination ([string]$entry.Path)
+            } else {
+                Remove-Item -LiteralPath ([string]$entry.Path) -Force -ErrorAction SilentlyContinue
+            }
+        }
+        Restore-ExternalTransactionState -Metadata $metadata
+        $metadata.Status = 'Recovered'
+        $metadata | Add-Member -NotePropertyName RecoveredAt -NotePropertyValue (Get-Date).ToString('o') -Force
+        Write-JsonFileAtomic -Path $metadataPath -Value $metadata -Depth 14
+        [void]$recovered.Add($directory.FullName)
+    }
+    return @($recovered)
 }
