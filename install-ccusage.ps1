@@ -9,6 +9,10 @@ $ErrorActionPreference = 'Stop'
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $ScriptRoot 'lib\codex-settings-common.ps1')
 
+if ($PSVersionTable.PSVersion.Major -lt 7) {
+    throw "PowerShell 7 or newer is required to install cs and cdaily. Current: $($PSVersionTable.PSVersion)"
+}
+
 $templatePath = Join-Path $ScriptRoot 'templates\powershell\ccusage-profile.ps1'
 if (-not (Test-Path -LiteralPath $templatePath -PathType Leaf)) {
     throw "ccusage profile template was not found: $templatePath"
@@ -30,7 +34,7 @@ $profileState = Get-TextFileState -Path $profilePath
 $backupPath = $null
 if ($profileState.Exists) {
     $backupPath = "$profilePath.ccusage-backup-$(Get-Date -Format 'yyyyMMdd-HHmmss-fff')"
-    Copy-Item -LiteralPath $profilePath -Destination $backupPath -Force
+    Copy-FileAtomic -Source $profilePath -Destination $backupPath
 }
 
 try {
@@ -86,24 +90,22 @@ try {
         PackageBefore = $packageBefore
         PackageAfter = $packageAfter
         InstalledLatest = -not $SkipPackageInstall
+        PowerShellVersion = [string]$PSVersionTable.PSVersion
     }
 
-    if ($PassThru) {
-        return $result
-    }
+    if ($PassThru) { return $result }
 
     Write-Host 'ccusage@latest, cs, and cdaily installed successfully.'
-    Write-Host "Profile: $profilePath"
-    if ($backupPath) {
-        Write-Host "Backup : $backupPath"
-    }
+    Write-Host "PowerShell: $($PSVersionTable.PSVersion)"
+    Write-Host "Profile   : $profilePath"
+    if ($backupPath) { Write-Host "Backup    : $backupPath" }
 } catch {
     $primaryError = $_.Exception.Message
     $rollbackErrors = New-Object 'System.Collections.Generic.List[string]'
 
     try {
         if ($profileState.Exists) {
-            Copy-Item -LiteralPath $backupPath -Destination $profilePath -Force
+            Copy-FileAtomic -Source $backupPath -Destination $profilePath
         } else {
             Remove-Item -LiteralPath $profilePath -Force -ErrorAction SilentlyContinue
         }
@@ -112,16 +114,11 @@ try {
     }
 
     if (-not $SkipPackageInstall) {
-        try {
-            Restore-CcusageState -State $packageBefore
-        } catch {
-            [void]$rollbackErrors.Add("ccusage rollback failed: $($_.Exception.Message)")
-        }
+        try { Restore-CcusageState -State $packageBefore }
+        catch { [void]$rollbackErrors.Add("ccusage rollback failed: $($_.Exception.Message)") }
     }
 
     $message = "ccusage setup failed: $primaryError"
-    if ($rollbackErrors.Count -gt 0) {
-        $message += "`nRollback errors:`n- " + ($rollbackErrors -join "`n- ")
-    }
+    if ($rollbackErrors.Count -gt 0) { $message += "`nRollback errors:`n- " + ($rollbackErrors -join "`n- ") }
     throw $message
 }
