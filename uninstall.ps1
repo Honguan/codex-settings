@@ -12,6 +12,7 @@ $ErrorActionPreference = 'Stop'
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $BackupBase = Join-Path $env:LOCALAPPDATA 'CodexSettingsBackup'
 . (Join-Path $ScriptRoot 'lib\codex-settings-common.ps1')
+. (Join-Path $ScriptRoot 'lib\project-registry.ps1')
 
 function Backup-UninstallFile {
     param(
@@ -238,6 +239,17 @@ foreach ($target in $availableTargets) {
     if ($null -ne $result) { $results += $result }
 }
 
+$projectUnregistered = $false
+if ($Mode -eq 'Project' -and -not (Test-Path -LiteralPath (Join-Path $targets[0].Root '.codex-settings-manifest.json') -PathType Leaf)) {
+    $registryPath = Get-CodexProjectRegistryPath
+    if ((Test-Path -LiteralPath $registryPath -PathType Leaf) -and $results.Count -gt 0) {
+        $registryBackup = Join-Path $results[0].Backup 'external\registry\projects.json'
+        New-Item -ItemType Directory -Path (Split-Path -Parent $registryBackup) -Force | Out-Null
+        Copy-Item -LiteralPath $registryPath -Destination $registryBackup -Force
+    }
+    $projectUnregistered = Unregister-CodexProject -Path $targets[0].Root
+}
+
 Write-Host ''
 foreach ($result in $results) {
     Write-Host "Target        : $($result.Target)"
@@ -249,4 +261,7 @@ foreach ($result in $results) {
         foreach ($key in $result.External.Keys) { Write-Host ("{0,-14}: {1}" -f $key, $result.External[$key]) }
     }
     Write-Host ''
+}
+if ($projectUnregistered) {
+    Write-Host "Unregistered project: $($targets[0].Root)"
 }
