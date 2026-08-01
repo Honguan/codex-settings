@@ -8,6 +8,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $ScriptRoot 'lib\codex-settings-common.ps1')
+. (Join-Path $ScriptRoot 'lib\project-registry.ps1')
 
 function Copy-DirectoryContent {
     param(
@@ -119,6 +120,23 @@ if ($metadata.PSObject.Properties.Name -contains 'Files' -and $null -ne $metadat
 }
 
 if ($metadata.PSObject.Properties.Name -contains 'Global' -and $null -ne $metadata.Global) {
+    $registryMetadata = $metadata.Global.ProjectRegistry
+    if ($null -ne $registryMetadata) {
+        $registryPath = [string]$registryMetadata.Path
+        if ([string]::IsNullOrWhiteSpace($registryPath)) { $registryPath = Get-CodexProjectRegistryPath }
+        if ([bool]$registryMetadata.Existed) {
+            $registryBackup = Join-Path $BackupPath ([string]$registryMetadata.BackupRelativePath)
+            if (-not (Test-Path -LiteralPath $registryBackup -PathType Leaf)) {
+                throw "Project registry backup is missing: $registryBackup"
+            }
+            New-Item -ItemType Directory -Path (Split-Path -Parent $registryPath) -Force | Out-Null
+            Copy-Item -LiteralPath $registryBackup -Destination $registryPath -Force
+            $restoredCount++
+        } else {
+            Remove-Item -LiteralPath $registryPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+
     $profileMetadata = $metadata.Global.PowerShellProfile
     if ($null -ne $profileMetadata) {
         $profilePath = [string]$profileMetadata.Path
