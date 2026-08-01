@@ -65,16 +65,16 @@ prefix_rule(
 
 # 10. Confirm GitHub Actions mutations.
 prefix_rule(
-    pattern = [["gh", "gh.exe"], ["workflow", "run"]],
+    pattern = [["gh", "gh.exe"], ["workflow", "run"], ["enable", "disable", "run", "delete", "rerun", "cancel"]],
     decision = "prompt",
-    justification = "Confirm GitHub Actions workflow mutations and reruns.",
+    justification = "Confirm GitHub Actions workflow changes, cancellations, and reruns.",
 )
 
 # 11. Confirm GitHub collaboration mutations.
 prefix_rule(
-    pattern = [["gh", "gh.exe"], ["pr", "issue", "release"]],
+    pattern = [["gh", "gh.exe"], ["pr", "issue", "release"], ["create", "edit", "close", "reopen", "delete", "merge", "review", "ready", "comment", "lock", "unlock", "checkout", "upload"]],
     decision = "prompt",
-    justification = "Confirm pull request, issue, and release operations because these commands may write remotely.",
+    justification = "Confirm pull request, issue, and release operations that modify local or remote state.",
 )
 
 # 12. Confirm package scripts.
