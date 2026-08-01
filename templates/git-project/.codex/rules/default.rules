@@ -1,0 +1,31 @@
+# Read-only Git inspection can run without an extra prompt.
+prefix_rule(
+    pattern = [["git", "git.exe"], ["status", "diff", "log", "show", "rev-parse"]],
+    decision = "allow",
+    justification = "Allow read-only Git repository inspection.",
+)
+
+# Normal repository mutations require confirmation.
+prefix_rule(
+    pattern = [["git", "git.exe"], ["add", "commit", "push", "pull", "merge", "rebase", "checkout", "switch", "restore", "reset", "clean", "branch", "tag"]],
+    decision = "prompt",
+    justification = "Confirm Git operations that may change the working tree, history, or remote repository.",
+)
+
+prefix_rule(
+    pattern = [["git", "git.exe"], ["reset"], ["--hard"]],
+    decision = "forbidden",
+    justification = "Use a non-destructive restore method or perform hard reset manually after reviewing local changes.",
+)
+
+prefix_rule(
+    pattern = [["git", "git.exe"], ["clean"], ["-f", "-fd", "-df", "-fdx", "-xdf"]],
+    decision = "forbidden",
+    justification = "Review and remove untracked files manually instead of using forced clean.",
+)
+
+prefix_rule(
+    pattern = [["git", "git.exe"], ["push"], ["--force", "-f", "--force-with-lease"]],
+    decision = "forbidden",
+    justification = "Use a normal push or perform history rewriting manually after review.",
+)
