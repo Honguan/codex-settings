@@ -1,4 +1,7 @@
-$script:CodexProjectRegistryPath = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'CodexSettings\projects.json'
+$localAppData = [Environment]::GetFolderPath('LocalApplicationData')
+if ([string]::IsNullOrWhiteSpace($localAppData)) { $localAppData = $env:LOCALAPPDATA }
+if ([string]::IsNullOrWhiteSpace($localAppData)) { throw 'Local application data directory could not be resolved.' }
+$script:CodexProjectRegistryPath = Join-Path $localAppData 'CodexSettings\projects.json'
 
 function Get-CodexProjectRegistryPath {
     [CmdletBinding()]
@@ -24,7 +27,11 @@ function Normalize-CodexProjectPath {
         [IO.Path]::GetFullPath($Path)
     }
 
-    return $normalized.TrimEnd([char[]]'\/')
+    $root = [IO.Path]::GetPathRoot($normalized)
+    if ($normalized.Length -gt $root.Length) {
+        $normalized = $normalized.TrimEnd([char[]]'\/')
+    }
+    return $normalized
 }
 
 function Read-CodexProjectRegistry {
