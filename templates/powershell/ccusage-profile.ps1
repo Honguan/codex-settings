@@ -73,7 +73,7 @@ function global:cs {
 
     function Format-SessionId([string]$Id) {
         if ([string]::IsNullOrWhiteSpace($Id)) { return '' }
-        if ($Id.Length -gt 17) { return $Id.Substring(0, 8) + '...' + $Id.Substring($Id.Length - 6) }
+        if ($Id.Length -gt 6) { return $Id.Substring($Id.Length - 6) }
         return $Id
     }
 
@@ -191,7 +191,7 @@ function global:cs {
             throw "No Codex sessions were returned. Expected local data under: $sessionRoot"
         }
 
-        $arguments = @($Value)
+        $arguments = @($Value | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
         $count = 10
         $parsedCount = 0
         $listMode = $arguments.Count -eq 0
@@ -203,19 +203,7 @@ function global:cs {
         if ($listMode) {
             if ($count -lt 1 -or $count -gt 100) { throw 'The session count must be between 1 and 100.' }
             $recent = @($sessions | Select-Object -First $count)
-            $records = @(
-                for ($index = 0; $index -lt $recent.Count; $index++) {
-                    $row = $recent[$index]
-                    [pscustomobject]@{
-                        ID = $index + 1
-                        Title = Get-Title $row
-                        Models = Get-Models $row.models
-                        Time = if ((Get-Activity $row) -eq [DateTimeOffset]::MinValue) { '' } else { (Get-Activity $row).ToLocalTime().ToString('yyyy-MM-dd HH:mm') }
-                        Row = $row
-                    }
-                }
-            )
-            Show-Details (Select-Rows $records)
+            Show-Details $recent
             return
         }
 

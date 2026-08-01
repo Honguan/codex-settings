@@ -508,7 +508,7 @@ function Save-TransactionMetadata {
         Version = 3
         CreatedAt = $Transaction.CreatedAt
         UpdatedAt = (Get-Date).ToString('o')
-        Files = @($Transaction.Entries)
+        Files = $Transaction.Entries.ToArray()
     }
     foreach ($key in $Transaction.Metadata.Keys) { $payload[$key] = $Transaction.Metadata[$key] }
     Write-JsonFileAtomic -Path (Join-Path $Transaction.Root 'backup-meta.json') -Value $payload -Depth 14
