@@ -64,18 +64,16 @@ codex-settings/
 
 | 用途 | 模型 | 推理強度 |
 |---|---|---|
-| 主要對話與預設執行 | `gpt-5.6-terra` | `high` |
-| 一般審查與驗證 | `gpt-5.6-terra` | 由主要設定使用 `high` |
+| 主要對話、預設執行與 `/review` | `gpt-5.6-terra` | `high` |
 
 設定內容：
 
 ```toml
 model = "gpt-5.6-terra"
 model_reasoning_effort = "high"
-review_model = "gpt-5.6-terra"
 ```
 
-Terra 負責一般調查、規劃、驗證與重新規劃；Sol 不作為日常 Review Model，而是模型路由無法解決核心邏輯時的最後唯讀顧問。
+沒有另外設定 `review_model`。Codex 的 `/review` 預設沿用目前 Session 模型，因此在主模型已是 Terra 時，不需要重複指定。Terra 負責一般調查、規劃、審查、驗證與重新規劃；Sol 則保留為模型路由無法解決核心邏輯時的最後唯讀顧問。
 
 ## 與 codex-model-router 相容性
 
@@ -83,7 +81,7 @@ Terra 負責一般調查、規劃、驗證與重新規劃；Sol 不作為日常 
 
 | 設定擁有者 | 負責內容 |
 |---|---|
-| `codex-settings` | 全域主模型、審查模型、AGENTS、Rules、MCP、Hook、ccusage、PowerShell Profile |
+| `codex-settings` | 全域主模型、AGENTS、Rules、MCP、Hook、ccusage、PowerShell Profile |
 | `codex-model-router` | `terra.toml`、`luna.toml`、`sol.toml`、`model-router` Skill、`implementation-planning` Skill |
 
 模型路由使用的完整名稱：
