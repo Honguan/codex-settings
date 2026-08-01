@@ -247,7 +247,7 @@ function Get-TomlShape {
         }
     }
 
-    return [pscustomobject]@{ TopLevelKeys = $topLevelKeys; Sections = $sections; Duplicates = @($duplicates) }
+    return [pscustomobject]@{ TopLevelKeys = $topLevelKeys; Sections = $sections; Duplicates = $duplicates.ToArray() }
 }
 
 function Select-TomlTemplateContent {
@@ -574,5 +574,5 @@ function Repair-PendingTransactions {
         Write-JsonFileAtomic -Path $metadataPath -Value $metadata -Depth 14
         [void]$recovered.Add($directory.FullName)
     }
-    return @($recovered)
+    return $recovered.ToArray()
 }

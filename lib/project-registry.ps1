@@ -81,7 +81,7 @@ function Read-CodexProjectRegistry {
     return [pscustomobject]@{
         Version = 1
         UpdatedAt = [string]$data.UpdatedAt
-        Projects = @($projects)
+        Projects = $projects.ToArray()
     }
 }
 
@@ -153,7 +153,7 @@ function Register-CodexProject {
         [void]$projects.Add($registered)
     }
 
-    $registry.Projects = @($projects)
+    $registry.Projects = $projects.ToArray()
     [void](Write-CodexProjectRegistry -Registry $registry)
     return $registered
 }

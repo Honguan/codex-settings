@@ -133,7 +133,7 @@ try {
                 Status = 'RolledBack'
                 RolledBackAt = (Get-Date).ToString('o')
                 FailureReason = $reason
-                RollbackErrors = @($rollbackErrors)
+                RollbackErrors = $rollbackErrors.ToArray()
             }
         } catch { [void]$rollbackErrors.Add("Journal update failed: $($_.Exception.Message)") }
 

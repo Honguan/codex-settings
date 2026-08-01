@@ -170,7 +170,7 @@ function Install-Target($Target, $Transaction) {
         }
     }
 
-    return [pscustomobject]@{ Mode = $Target.Mode; Root = $Target.Root; Previous = $previous; Files = @($entries) }
+    return [pscustomobject]@{ Mode = $Target.Mode; Root = $Target.Root; Previous = $previous; Files = $entries.ToArray() }
 }
 
 function Set-Context7Key([switch]$Skip, $PreviousManifest) {

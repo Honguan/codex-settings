@@ -155,7 +155,7 @@ function global:cs {
                 'Cost (USD)'   = Format-Cost $_.costUSD
                 Time           = if ((Get-Activity $_) -eq [DateTimeOffset]::MinValue) { '' } else { (Get-Activity $_).ToLocalTime().ToString('yyyy-MM-dd HH:mm') }
             }
-        }) | Format-Table -AutoSize -Wrap | Out-Host
+        }) | Format-Table -AutoSize | Out-Host
     }
 
     function Select-Rows([object[]]$Records) {

@@ -174,7 +174,7 @@ function Uninstall-ManagedTarget {
         if ($remainingEntries.Count -eq 0) {
             Remove-Item -LiteralPath $manifestPath -Force
         } else {
-            $manifest.Files = @($remainingEntries)
+            $manifest.Files = $remainingEntries.ToArray()
             Write-JsonFileAtomic -Path $manifestPath -Value $manifest -Depth 14
         }
 
@@ -205,7 +205,7 @@ function Uninstall-ManagedTarget {
                 Status = 'RolledBack'
                 RolledBackAt = (Get-Date).ToString('o')
                 FailureReason = $reason
-                RollbackErrors = @($rollbackErrors)
+                RollbackErrors = $rollbackErrors.ToArray()
             }
         } catch { [void]$rollbackErrors.Add("Journal update failed: $($_.Exception.Message)") }
 
