@@ -4,7 +4,8 @@ param(
     [string]$Mode = 'Interactive',
     [string]$ProjectPath,
     [switch]$SkipContext7Key,
-    [switch]$SkipCcusageInstall
+    [switch]$SkipCcusageInstall,
+    [switch]$Force
 )
 
 $ErrorActionPreference = 'Stop'
@@ -49,7 +50,7 @@ try {
     $results = New-Object 'System.Collections.Generic.List[object]'
 
     try {
-        foreach ($target in $targets) { [void]$results.Add((Install-Target $target $transaction)) }
+        foreach ($target in $targets) { [void]$results.Add((Install-Target $target $transaction -Force:$Force)) }
         $external = $null
 
         if ($Mode -eq 'Global') {
@@ -108,8 +109,9 @@ try {
         Write-Host ''
         Write-Host 'Installation completed successfully.'
         foreach ($result in $results) {
+            $changedCount = @($result.Files | Where-Object Changed).Count
             Write-Host "Target: $($result.Root)"
-            Write-Host "Files : $($result.Files.Count)"
+            Write-Host "Files : $($result.Files.Count) (changed: $changedCount)"
         }
         if ($null -ne $registration) { Write-Host "Registered project: $($registration.Type) $($registration.Path)" }
         Write-Host "Backup: $transactionRoot"

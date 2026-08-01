@@ -111,7 +111,7 @@ function Get-Strategy([string]$ModeName, [string]$RelativePath) {
     return [pscustomobject]@{ Name = 'replace'; Start = $null; End = $null }
 }
 
-function Install-Target($Target, $Transaction) {
+function Install-Target($Target, $Transaction, [switch]$Force) {
     if (-not (Test-Path -LiteralPath $Target.Template -PathType Container)) { throw "Template missing: $($Target.Template)" }
     New-Item -ItemType Directory -Path $Target.Root -Force | Out-Null
     $previous = Get-Manifest $Target.Root
@@ -126,9 +126,12 @@ function Install-Target($Target, $Transaction) {
         $owned = Test-Owned $previousEntry $destination
         $state = Get-TextFileState $destination
         $strategy = Get-Strategy $Target.Mode $relative
+        $beforeHash = if ($state.Exists) { (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash } else { $null }
         Save-TransactionFile -Transaction $Transaction -Path $destination
 
-        if ($strategy.Name -eq 'replace') {
+        if ($Force -and $state.Exists) {
+            Copy-FileAtomic -Source $source.FullName -Destination $destination
+        } elseif ($strategy.Name -eq 'replace') {
             if ($state.Exists -and -not $owned) {
                 $sourceHash = (Get-FileHash $source.FullName -Algorithm SHA256).Hash
                 $destinationHash = (Get-FileHash $destination -Algorithm SHA256).Hash
@@ -155,6 +158,7 @@ function Install-Target($Target, $Transaction) {
             OriginalEncoding = [string]$state.EncodingName
             OriginalCodePage = [int]$state.CodePage
             Sha256 = (Get-FileHash $destination -Algorithm SHA256).Hash
+            Changed = $beforeHash -ne (Get-FileHash $destination -Algorithm SHA256).Hash
         })
     }
 
