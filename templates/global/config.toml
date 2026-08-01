@@ -1,8 +1,12 @@
-model = "gpt-5.6"
+# Primary interactive and default model. This matches codex-model-router Terra.
+model = "gpt-5.6-terra"
 model_reasoning_effort = "high"
 approval_policy = "on-request"
 sandbox_mode = "workspace-write"
-review_model = "gpt-5.6"
+
+# Routine review and verification model. Terra verifies normal work;
+# Sol remains a last-resort read-only advisor in codex-model-router.
+review_model = "gpt-5.6-terra"
 
 # Detect normal Git repositories and CVS repositories prepared by this package.
 project_root_markers = [".git", ".codex-root"]
