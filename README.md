@@ -27,7 +27,10 @@ codex-settings/
    └─ cvs-project/
       ├─ AGENTS.md
       ├─ .codex-root
-      ├─ .codex/rules/default.rules
+      ├─ .codex/
+      │  ├─ hooks.json
+      │  ├─ hooks/crlf-updated-files.ps1
+      │  └─ rules/default.rules
       └─ .agents/skills/php72-cvs/SKILL.md
 ```
 
@@ -86,6 +89,33 @@ request-execution-optimizer
 templates/user-skills/request-execution-optimizer/agents/openai.yaml
 ```
 
+## CVS 專案 CRLF Hook
+
+CVS 專案模板包含：
+
+```text
+<CVS專案根目錄>/.codex/hooks.json
+<CVS專案根目錄>/.codex/hooks/crlf-updated-files.ps1
+```
+
+執行邏輯：
+
+1. `PostToolUse` 在 `apply_patch`、`Edit` 或 `Write` 完成後執行。
+2. 從 Hook 輸入取得新增或修改的檔案路徑。
+3. 略過不存在、空白及含 NUL 位元的檔案。
+4. 以位元組方式把 LF 或 CR 換行統一成 CRLF，不重新編碼檔案。
+5. `Stop` 事件使用 `-Flush` 再處理一次已記錄檔案，然後移除暫存清單。
+
+Hook 命令會從目前工作目錄往上尋找 `.codex-root`，因此從 CVS 專案子目錄啟動 Codex 時仍能找到腳本。
+
+專案安裝完成並重新啟動 Codex 後，使用：
+
+```text
+/hooks
+```
+
+檢查並信任新的專案 Hook。Hook 內容變更後，其雜湊會改變，需要重新信任。
+
 ## 設定載入邏輯
 
 - 全域指示：`~/.codex/AGENTS.md`
@@ -93,6 +123,7 @@ templates/user-skills/request-execution-optimizer/agents/openai.yaml
 - 全域規則：`~/.codex/rules/*.rules`
 - 全域技能：`~/.agents/skills/*/SKILL.md`
 - 專案設定：`<project>/.codex/config.toml` 與 `<project>/.codex/rules/*.rules`
+- 專案 Hooks：`<project>/.codex/hooks.json`
 - 專案指示：從專案根目錄到目前工作目錄的 `AGENTS.md`
 - 專案技能：從目前目錄向上到專案根目錄的 `.agents/skills/*/SKILL.md`
 
