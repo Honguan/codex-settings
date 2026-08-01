@@ -4,9 +4,8 @@ model_reasoning_effort = "high"
 approval_policy = "on-request"
 sandbox_mode = "workspace-write"
 
-# Routine review and verification model. Terra verifies normal work;
-# Sol remains a last-resort read-only advisor in codex-model-router.
-review_model = "gpt-5.6-terra"
+# /review uses the current session model by default, so no separate
+# review_model override is needed while Terra is the primary model.
 
 # Detect normal Git repositories and CVS repositories prepared by this package.
 project_root_markers = [".git", ".codex-root"]
