@@ -1,0 +1,12 @@
+model = "gpt-5.6"
+model_reasoning_effort = "high"
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+review_model = "gpt-5.6"
+
+# Detect normal Git repositories and CVS repositories prepared by this package.
+project_root_markers = [".git", ".codex-root"]
+
+# AGENTS.md remains the preferred filename. These names are compatibility fallbacks.
+project_doc_fallback_filenames = ["AGENT.md", "agent.md"]
+project_doc_max_bytes = 65536
