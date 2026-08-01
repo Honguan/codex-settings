@@ -1,0 +1,26 @@
+# CVS projects must not invoke Git tooling.
+prefix_rule(
+    pattern = [["git", "git.exe"]],
+    decision = "forbidden",
+    justification = "This project uses CVS only. Use CVS commands instead.",
+)
+
+prefix_rule(
+    pattern = [["gh", "gh.exe"]],
+    decision = "forbidden",
+    justification = "GitHub CLI is not used in this CVS project.",
+)
+
+# Read-only CVS inspection can run without an extra prompt.
+prefix_rule(
+    pattern = [["cvs", "cvs.exe"], ["status", "diff", "log", "annotate", "history", "version", "editors", "watchers"]],
+    decision = "allow",
+    justification = "Allow read-only CVS repository inspection.",
+)
+
+# CVS operations that may change files or repository state require confirmation.
+prefix_rule(
+    pattern = [["cvs", "cvs.exe"], ["commit", "ci", "add", "remove", "rm", "update", "checkout", "co", "tag", "rtag", "release", "watch", "edit", "unedit"]],
+    decision = "prompt",
+    justification = "Confirm CVS operations that may modify the working copy or repository.",
+)
