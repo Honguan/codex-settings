@@ -1,26 +1,57 @@
-# CVS projects must not invoke Git tooling.
+# CVS project rules supplement the global rules.
+
+# 1. Block non-CVS version-control tools.
 prefix_rule(
-    pattern = [["git", "git.exe"]],
+    pattern = [["git", "git.exe", "gh", "gh.exe", "svn", "svn.exe", "hg", "hg.exe", "fossil", "fossil.exe"]],
     decision = "forbidden",
-    justification = "This project uses CVS only. Use CVS commands instead.",
+    justification = "This project uses CVS only. Do not use other version-control tools.",
 )
 
-prefix_rule(
-    pattern = [["gh", "gh.exe"]],
-    decision = "forbidden",
-    justification = "GitHub CLI is not used in this CVS project.",
-)
-
-# Read-only CVS inspection can run without an extra prompt.
+# 2. Allow CVS inspection.
 prefix_rule(
     pattern = [["cvs", "cvs.exe"], ["status", "diff", "log", "annotate", "history", "version", "editors", "watchers"]],
     decision = "allow",
     justification = "Allow read-only CVS repository inspection.",
 )
 
-# CVS operations that may change files or repository state require confirmation.
+# 3. Allow cvs -n update.
 prefix_rule(
-    pattern = [["cvs", "cvs.exe"], ["commit", "ci", "add", "remove", "rm", "update", "checkout", "co", "tag", "rtag", "release", "watch", "edit", "unedit"]],
+    pattern = [["cvs", "cvs.exe"], ["-n"], ["update"]],
+    decision = "allow",
+    justification = "Allow CVS dry-run update previews.",
+)
+
+# 4. Allow cvs -q -n update.
+prefix_rule(
+    pattern = [["cvs", "cvs.exe"], ["-q"], ["-n"], ["update"]],
+    decision = "allow",
+    justification = "Allow quiet CVS dry-run update previews.",
+)
+
+# 5. Allow cvs -n -q update.
+prefix_rule(
+    pattern = [["cvs", "cvs.exe"], ["-n"], ["-q"], ["update"]],
+    decision = "allow",
+    justification = "Allow CVS dry-run update previews with reversed global option order.",
+)
+
+# 6. Confirm working-copy mutations.
+prefix_rule(
+    pattern = [["cvs", "cvs.exe"], ["update", "checkout", "co", "release"]],
     decision = "prompt",
-    justification = "Confirm CVS operations that may modify the working copy or repository.",
+    justification = "Confirm operations that can change the CVS working copy.",
+)
+
+# 7. Confirm repository mutations.
+prefix_rule(
+    pattern = [["cvs", "cvs.exe"], ["commit", "ci", "add", "remove", "rm", "tag", "rtag", "import"]],
+    decision = "prompt",
+    justification = "Confirm operations that can change the CVS repository.",
+)
+
+# 8. Confirm CVS watch-state mutations.
+prefix_rule(
+    pattern = [["cvs", "cvs.exe"], ["watch", "edit", "unedit"]],
+    decision = "prompt",
+    justification = "Confirm CVS watch and edit state changes.",
 )

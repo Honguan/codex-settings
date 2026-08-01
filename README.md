@@ -1,13 +1,14 @@
 # Codex Settings
 
-用 Git 管理 Codex 全域設定、全域技能、Git 專案模板、CVS 專案模板，以及 Windows 一鍵安裝工具。
+用 Git 管理 Codex 全域設定、Git 專案模板、CVS 專案模板、MCP 與 Windows 一鍵安裝工具。
 
-## 目錄
+## 目前內容
 
 ```text
 codex-settings/
 ├─ Install.cmd
 ├─ install.ps1
+├─ install-ccusage.ps1
 ├─ backup.ps1
 ├─ restore.ps1
 ├─ update.ps1
@@ -16,39 +17,27 @@ codex-settings/
    ├─ global/
    │  ├─ AGENTS.md
    │  ├─ config.toml
-   │  └─ rules/default.rules
+   │  ├─ rules/default.rules        # 47 條
+   │  └─ tools/configure-pencil-mcp.ps1
+   ├─ powershell/
+   │  └─ ccusage-profile.ps1        # cs、cdaily
    ├─ user-skills/
    │  └─ request-execution-optimizer/
-   │     ├─ SKILL.md
-   │     └─ agents/openai.yaml
    ├─ git-project/
    │  ├─ AGENTS.md
-   │  └─ .codex/rules/default.rules
+   │  └─ .codex/rules/default.rules # 13 條
    └─ cvs-project/
       ├─ AGENTS.md
       ├─ .codex-root
-      ├─ .codex/
-      │  ├─ hooks.json
-      │  ├─ hooks/crlf-updated-files.ps1
-      │  └─ rules/default.rules
+      ├─ .codex/hooks.json
+      ├─ .codex/hooks/crlf-updated-files.ps1
+      ├─ .codex/rules/default.rules # 8 條
       └─ .agents/skills/php72-cvs/SKILL.md
 ```
 
-## 使用方式
+## 安裝
 
-### 雙擊安裝
-
-執行 `Install.cmd`，選擇：
-
-1. 安裝全域設定與全域技能
-2. 安裝 Git 專案設定
-3. 安裝 CVS 專案設定
-4. 備份目前設定
-5. 還原備份
-6. 更新此設定倉庫
-7. 移除由本工具安裝的設定
-
-### PowerShell
+雙擊 `Install.cmd`，或執行：
 
 ```powershell
 ./install.ps1 -Mode Global
@@ -56,95 +45,85 @@ codex-settings/
 ./install.ps1 -Mode CVS -ProjectPath 'E:\CVS\MyProject'
 ```
 
-全域安裝會部署到：
+全域模式會安裝：
 
-```text
-~/.codex/
-~/.agents/skills/request-execution-optimizer/
+- `~/.codex` 全域規則與設定。
+- `~/.agents/skills` 全域技能。
+- Context7、Playwright 與 Pencil MCP。
+- [ccusage](https://github.com/ccusage/ccusage) 最新版。
+- PowerShell 指令 `cs` 與 `cdaily`。
+
+`cs` 預設顯示最近 10 個 Codex Session；`cs 20` 顯示最近 20 個；`cs <Session ID>` 查詢指定 Session。`cdaily` 預設統計最近 7 天；`cdaily 30` 統計最近 30 天，時區固定為 `Asia/Taipei`。
+
+## 全域 MCP
+
+### Context7
+
+使用官方遠端端點：
+
+```toml
+[mcp_servers.context7]
+url = "https://mcp.context7.com/mcp"
 ```
 
-## 全域技能
+沒有 API Key 時仍可使用基本額度。API Key 不存入此倉庫。
 
-### 請求執行最佳化
+### Playwright
 
-技能識別名稱：
+使用 Microsoft 官方套件：
 
-```text
-request-execution-optimizer
+```toml
+[mcp_servers.playwright]
+command = "npx"
+args = ["-y", "@playwright/mcp@latest"]
 ```
 
-原始名稱 `transform-prompts-gpt-5p6` 已改為不綁定模型版本的名稱，避免後續更換模型時再次改名。
+### Pencil
 
-此技能會：
-
-- 將請求整理為最小、可執行、可驗證的任務契約。
-- 保留使用者指定的數值、語言、格式、範圍、權限與安全要求。
-- 避免過度規劃、擴大範圍、重複說明與不必要確認。
-- 區分唯讀、修改、外部寫入與破壞性操作的權限邊界。
-- 一般情況直接執行，不展示內部契約或隱藏推理。
-
-中文顯示名稱與預設提示位於：
+Pencil 的 MCP 執行檔包含 IDE 版本及平台路徑，不能安全寫死。全域安裝會執行：
 
 ```text
-templates/user-skills/request-execution-optimizer/agents/openai.yaml
+~/.codex/tools/configure-pencil-mcp.ps1
 ```
 
-## CVS 專案 CRLF Hook
+它會尋找 VS Code、Cursor 或 Pencil 桌面程式的 MCP 執行檔，找到後將正確的 `[mcp_servers.pencil]` 寫入 `~/.codex/config.toml`。沒有安裝 pen.dev 時只顯示警告，不會產生失效設定。
 
-CVS 專案模板包含：
+## CVS 更新流程
 
-```text
-<CVS專案根目錄>/.codex/hooks.json
-<CVS專案根目錄>/.codex/hooks/crlf-updated-files.ps1
-```
+CVS 專案規則要求每個目標依序執行：
 
-執行邏輯：
+1. `cvs status <target>`
+2. `cvs -n update <target>`
+3. 檢查衝突、錯誤與非預期變更
+4. 必要且安全時執行 `cvs update <target>`
+5. 再次執行 `cvs status <target>`
 
-1. `PostToolUse` 在 `apply_patch`、`Edit` 或 `Write` 完成後執行。
-2. 從 Hook 輸入取得新增或修改的檔案路徑。
-3. 略過不存在、空白及含 NUL 位元的檔案。
-4. 以位元組方式把 LF 或 CR 換行統一成 CRLF，不重新編碼檔案。
-5. `Stop` 事件使用 `-Flush` 再處理一次已記錄檔案，然後移除暫存清單。
+禁止無目標的根目錄 `cvs update`。遇到 `C`、非預期合併或不確定狀態時立即停止。
 
-Hook 命令會從目前工作目錄往上尋找 `.codex-root`，因此從 CVS 專案子目錄啟動 Codex 時仍能找到腳本。
+## CRLF Hook
 
-專案安裝完成並重新啟動 Codex 後，使用：
+CVS Hook 只處理 `.codex-root` 內的普通文字檔，並增加以下保護：
 
-```text
-/hooks
-```
+- 拒絕專案外路徑、符號連結、`CVS` 與 `.codex` 內部檔案。
+- 排除 shell、patch、diff、憑證與金鑰格式。
+- 略過空檔、含 NUL 的二進位檔與 UTF-16 類檔案。
+- 狀態檔存放於 `%LOCALAPPDATA%`，不污染 CVS 工作副本。
+- 合併重複路徑，失敗時輸出原因並回傳非零狀態。
 
-檢查並信任新的專案 Hook。Hook 內容變更後，其雜湊會改變，需要重新信任。
-
-## 設定載入邏輯
-
-- 全域指示：`~/.codex/AGENTS.md`
-- 全域設定：`~/.codex/config.toml`
-- 全域規則：`~/.codex/rules/*.rules`
-- 全域技能：`~/.agents/skills/*/SKILL.md`
-- 專案設定：`<project>/.codex/config.toml` 與 `<project>/.codex/rules/*.rules`
-- 專案 Hooks：`<project>/.codex/hooks.json`
-- 專案指示：從專案根目錄到目前工作目錄的 `AGENTS.md`
-- 專案技能：從目前目錄向上到專案根目錄的 `.agents/skills/*/SKILL.md`
-
-CVS 專案使用 `.codex-root` 作為根目錄標記，避免每層 `CVS` 目錄被誤判為專案根目錄。
-
-## 備份與移除
-
-安裝前會先備份被覆蓋的設定，預設存放於：
-
-```text
-%LOCALAPPDATA%\CodexSettingsBackup
-```
-
-全域設定與全域技能各自保存安裝清單及 SHA-256。移除時，已被使用者修改的檔案預設不會刪除。
+安裝 CVS 設定後重新啟動 Codex，使用 `/hooks` 檢查並信任專案 Hook。
 
 ## 安全範圍
 
-此倉庫不備份：
+不備份或提交：
 
 - `auth.json`
 - API Key、Token、密碼
 - Session、歷史紀錄與日誌
-- 本機私有路徑設定
-- MCP 機密參數
+- Pencil、Context7 或其他 MCP 的登入資訊
+- 本機私有設定
+
+安裝前的檔案備份預設放在：
+
+```text
+%LOCALAPPDATA%\CodexSettingsBackup
+```

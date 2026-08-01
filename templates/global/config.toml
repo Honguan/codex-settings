@@ -10,3 +10,22 @@ project_root_markers = [".git", ".codex-root"]
 # AGENTS.md remains the preferred filename. These names are compatibility fallbacks.
 project_doc_fallback_filenames = ["AGENT.md", "agent.md"]
 project_doc_max_bytes = 65536
+
+# Current library documentation. An API key can be configured separately for higher limits.
+[mcp_servers.context7]
+url = "https://mcp.context7.com/mcp"
+enabled = true
+startup_timeout_sec = 20
+tool_timeout_sec = 60
+
+# Browser automation through Microsoft's official Playwright MCP server.
+[mcp_servers.playwright]
+command = "npx"
+args = ["-y", "@playwright/mcp@latest"]
+enabled = true
+startup_timeout_sec = 60
+tool_timeout_sec = 120
+
+# Pencil uses a versioned local executable path. install.ps1 runs
+# tools/configure-pencil-mcp.ps1 to discover the installed extension or app
+# and append [mcp_servers.pencil] with the correct absolute path.

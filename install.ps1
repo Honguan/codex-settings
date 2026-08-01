@@ -16,7 +16,7 @@ function Get-RelativeTemplatePath {
         [Parameter(Mandatory = $true)][string]$FullName
     )
 
-    return $FullName.Substring($TemplateRoot.Length).TrimStart([char[]]'\/')
+    return $FullName.Substring($TemplateRoot.Length).TrimStart([char[]]'\\/')
 }
 
 function Invoke-RepositoryScript {
@@ -35,7 +35,7 @@ function Select-InteractiveMode {
     Write-Host ''
     Write-Host 'Codex Settings Installer'
     Write-Host '========================'
-    Write-Host '[1] Install global settings'
+    Write-Host '[1] Install global settings, MCP, ccusage, cs, and cdaily'
     Write-Host '[2] Install Git project settings'
     Write-Host '[3] Install CVS project settings'
     Write-Host '[4] Backup current settings'
@@ -195,5 +195,28 @@ foreach ($target in $targets) {
         -TargetRoot $target.TargetRoot
 }
 
+if ($Mode -eq 'Global') {
+    $pencilConfigurator = Join-Path $HOME '.codex\tools\configure-pencil-mcp.ps1'
+    if (Test-Path -LiteralPath $pencilConfigurator -PathType Leaf) {
+        & $pencilConfigurator
+
+        $globalRoot = Join-Path $HOME '.codex'
+        $manifestPath = Join-Path $globalRoot '.codex-settings-manifest.json'
+        $configPath = Join-Path $globalRoot 'config.toml'
+        if ((Test-Path -LiteralPath $manifestPath -PathType Leaf) -and
+            (Test-Path -LiteralPath $configPath -PathType Leaf)) {
+            $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+            foreach ($entry in $manifest.Files) {
+                if ([string]$entry.Path -eq 'config.toml') {
+                    $entry.Sha256 = (Get-FileHash -LiteralPath $configPath -Algorithm SHA256).Hash
+                }
+            }
+            $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
+        }
+    }
+
+    & (Join-Path $ScriptRoot 'install-ccusage.ps1')
+}
+
 Write-Host ''
-Write-Host 'Restart Codex so it reloads AGENTS.md, config, rules, and skills.'
+Write-Host 'Restart Codex so it reloads AGENTS.md, config, rules, skills, and MCP servers.'

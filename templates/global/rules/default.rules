@@ -1,26 +1,330 @@
-# Global rules should contain only rules that apply to every project.
-# Project-specific Git and CVS rules are installed from their own templates.
+# Global rules apply to every project. Project templates add stricter VCS-specific rules.
 
+# 1. Block disk formatting.
 prefix_rule(
     pattern = [["format", "format.com"]],
     decision = "forbidden",
     justification = "Disk formatting is outside normal development work.",
 )
 
+# 2. Block disk partition changes.
 prefix_rule(
     pattern = [["diskpart", "diskpart.exe"]],
     decision = "forbidden",
     justification = "Disk partition changes must be performed manually outside Codex.",
 )
 
+# 3. Confirm shutdown and restart operations.
 prefix_rule(
-    pattern = [["shutdown", "shutdown.exe"]],
+    pattern = [["shutdown", "shutdown.exe", "Restart-Computer", "Stop-Computer"]],
     decision = "prompt",
     justification = "Confirm before shutting down or restarting the system.",
 )
 
+# 4. Confirm recursive forced deletion.
 prefix_rule(
     pattern = [["Remove-Item", "remove-item"], ["-Recurse", "-r"], ["-Force", "-fo"]],
     decision = "prompt",
     justification = "Confirm recursive forced deletion before execution.",
+)
+
+# 5. Confirm execution policy changes.
+prefix_rule(
+    pattern = [["Set-ExecutionPolicy", "set-executionpolicy"]],
+    decision = "prompt",
+    justification = "Confirm PowerShell execution policy changes.",
+)
+
+# 6. Confirm registry mutations.
+prefix_rule(
+    pattern = [["reg", "reg.exe"], ["delete", "add", "copy", "restore", "import"]],
+    decision = "prompt",
+    justification = "Confirm Windows registry mutations.",
+)
+
+# 7. PHP syntax check.
+prefix_rule(
+    pattern = [["php", "php.exe"], ["-l"]],
+    decision = "allow",
+    justification = "Allow PHP syntax checks.",
+)
+
+# 8. JavaScript syntax check.
+prefix_rule(
+    pattern = [["node", "node.exe"], ["--check", "-c"]],
+    decision = "allow",
+    justification = "Allow JavaScript syntax checks without executing the program.",
+)
+
+# 9. Python syntax check.
+prefix_rule(
+    pattern = [["python", "python.exe", "python3", "python3.exe", "py", "py.exe"], ["-m"], ["py_compile", "compileall"]],
+    decision = "allow",
+    justification = "Allow Python bytecode and syntax validation modules.",
+)
+
+# 10. Ruby syntax check.
+prefix_rule(
+    pattern = [["ruby", "ruby.exe"], ["-c"]],
+    decision = "allow",
+    justification = "Allow Ruby syntax checks.",
+)
+
+# 11. Shell syntax check.
+prefix_rule(
+    pattern = [["bash", "bash.exe", "sh", "sh.exe"], ["-n"]],
+    decision = "allow",
+    justification = "Allow shell syntax checks.",
+)
+
+# 12. Lua syntax check.
+prefix_rule(
+    pattern = [["luac", "luac.exe"], ["-p"]],
+    decision = "allow",
+    justification = "Allow Lua syntax checks.",
+)
+
+# 13. JSON validation.
+prefix_rule(
+    pattern = [["jq", "jq.exe"], ["empty"]],
+    decision = "allow",
+    justification = "Allow JSON validation with jq.",
+)
+
+# 14. YAML validation.
+prefix_rule(
+    pattern = [["yamllint", "yamllint.exe"]],
+    decision = "allow",
+    justification = "Allow YAML linting.",
+)
+
+# 15. TOML validation.
+prefix_rule(
+    pattern = [["taplo", "taplo.exe"], ["check"]],
+    decision = "allow",
+    justification = "Allow TOML validation.",
+)
+
+# 16. XML validation.
+prefix_rule(
+    pattern = [["xmllint", "xmllint.exe"], ["--noout"]],
+    decision = "allow",
+    justification = "Allow XML validation.",
+)
+
+# 17. ShellCheck.
+prefix_rule(
+    pattern = [["shellcheck", "shellcheck.exe"]],
+    decision = "allow",
+    justification = "Allow shell script linting.",
+)
+
+# 18. Hadolint.
+prefix_rule(
+    pattern = [["hadolint", "hadolint.exe"]],
+    decision = "allow",
+    justification = "Allow Dockerfile linting.",
+)
+
+# 19. Actionlint.
+prefix_rule(
+    pattern = [["actionlint", "actionlint.exe"]],
+    decision = "allow",
+    justification = "Allow GitHub Actions workflow linting.",
+)
+
+# 20. Node.js version.
+prefix_rule(
+    pattern = [["node", "node.exe"], ["--version", "-v"]],
+    decision = "allow",
+    justification = "Allow Node.js version inspection.",
+)
+
+# 21. npm version.
+prefix_rule(
+    pattern = [["npm", "npm.cmd", "npm.exe"], ["--version", "-v", "version"]],
+    decision = "allow",
+    justification = "Allow npm version inspection.",
+)
+
+# 22. pnpm version.
+prefix_rule(
+    pattern = [["pnpm", "pnpm.cmd", "pnpm.exe"], ["--version", "-v"]],
+    decision = "allow",
+    justification = "Allow pnpm version inspection.",
+)
+
+# 23. Yarn version.
+prefix_rule(
+    pattern = [["yarn", "yarn.cmd", "yarn.exe"], ["--version", "-v"]],
+    decision = "allow",
+    justification = "Allow Yarn version inspection.",
+)
+
+# 24. Bun version.
+prefix_rule(
+    pattern = [["bun", "bun.exe"], ["--version", "-v"]],
+    decision = "allow",
+    justification = "Allow Bun version inspection.",
+)
+
+# 25. Java version.
+prefix_rule(
+    pattern = [["java", "java.exe", "javac", "javac.exe"], ["-version", "--version"]],
+    decision = "allow",
+    justification = "Allow Java runtime and compiler version inspection.",
+)
+
+# 26. Maven version.
+prefix_rule(
+    pattern = [["mvn", "mvn.cmd", "mvn.exe"], ["-version", "--version", "-v"]],
+    decision = "allow",
+    justification = "Allow Maven version inspection.",
+)
+
+# 27. Gradle version.
+prefix_rule(
+    pattern = [["gradle", "gradle.bat", "gradle.exe"], ["--version", "-v"]],
+    decision = "allow",
+    justification = "Allow Gradle version inspection.",
+)
+
+# 28. .NET information.
+prefix_rule(
+    pattern = [["dotnet", "dotnet.exe"], ["--info", "--version", "--list-sdks", "--list-runtimes"]],
+    decision = "allow",
+    justification = "Allow .NET installation inspection.",
+)
+
+# 29. Go information.
+prefix_rule(
+    pattern = [["go", "go.exe"], ["version", "env"]],
+    decision = "allow",
+    justification = "Allow Go version and environment inspection.",
+)
+
+# 30. Rust information.
+prefix_rule(
+    pattern = [["rustc", "rustc.exe", "cargo", "cargo.exe"], ["--version", "-V", "version"]],
+    decision = "allow",
+    justification = "Allow Rust compiler and Cargo version inspection.",
+)
+
+# 31. Native toolchain versions.
+prefix_rule(
+    pattern = [["gcc", "gcc.exe", "g++", "g++.exe", "clang", "clang.exe", "clang++", "clang++.exe", "cmake", "cmake.exe", "make", "make.exe", "ninja", "ninja.exe"], ["--version", "-v", "-version"]],
+    decision = "allow",
+    justification = "Allow native compiler and build tool version inspection.",
+)
+
+# 32. Swift version.
+prefix_rule(
+    pattern = [["swift", "swift.exe", "swiftc", "swiftc.exe"], ["--version", "-version"]],
+    decision = "allow",
+    justification = "Allow Swift version inspection.",
+)
+
+# 33. Kotlin version.
+prefix_rule(
+    pattern = [["kotlinc", "kotlinc.bat", "kotlinc.exe"], ["-version"]],
+    decision = "allow",
+    justification = "Allow Kotlin compiler version inspection.",
+)
+
+# 34. Dart version.
+prefix_rule(
+    pattern = [["dart", "dart.exe"], ["--version"]],
+    decision = "allow",
+    justification = "Allow Dart version inspection.",
+)
+
+# 35. Flutter version.
+prefix_rule(
+    pattern = [["flutter", "flutter.bat", "flutter.exe"], ["--version"]],
+    decision = "allow",
+    justification = "Allow Flutter version inspection.",
+)
+
+# 36. R version.
+prefix_rule(
+    pattern = [["R", "R.exe", "Rscript", "Rscript.exe"], ["--version", "-v"]],
+    decision = "allow",
+    justification = "Allow R version inspection.",
+)
+
+# 37. Julia version.
+prefix_rule(
+    pattern = [["julia", "julia.exe"], ["--version", "-v"]],
+    decision = "allow",
+    justification = "Allow Julia version inspection.",
+)
+
+# 38. Erlang version.
+prefix_rule(
+    pattern = [["erl", "erl.exe"], ["-version"]],
+    decision = "allow",
+    justification = "Allow Erlang version inspection.",
+)
+
+# 39. Elixir version.
+prefix_rule(
+    pattern = [["elixir", "elixir.bat", "elixir.exe"], ["--version", "-v"]],
+    decision = "allow",
+    justification = "Allow Elixir version inspection.",
+)
+
+# 40. Docker information.
+prefix_rule(
+    pattern = [["docker", "docker.exe"], ["version", "info"]],
+    decision = "allow",
+    justification = "Allow read-only Docker installation and daemon inspection.",
+)
+
+# 41. Kubernetes information.
+prefix_rule(
+    pattern = [["kubectl", "kubectl.exe"], ["version", "api-resources", "api-versions", "get", "describe"]],
+    decision = "allow",
+    justification = "Allow read-only Kubernetes client and configuration inspection.",
+)
+
+# 42. Helm information.
+prefix_rule(
+    pattern = [["helm", "helm.exe"], ["version", "env"]],
+    decision = "allow",
+    justification = "Allow Helm version and environment inspection.",
+)
+
+# 43. Terraform information.
+prefix_rule(
+    pattern = [["terraform", "terraform.exe"], ["version"]],
+    decision = "allow",
+    justification = "Allow Terraform version and provider inspection.",
+)
+
+# 44. Ansible version.
+prefix_rule(
+    pattern = [["ansible", "ansible.exe", "ansible-playbook", "ansible-playbook.exe"], ["--version"]],
+    decision = "allow",
+    justification = "Allow Ansible version inspection.",
+)
+
+# 45. Database client versions.
+prefix_rule(
+    pattern = [["mysql", "mysql.exe", "psql", "psql.exe", "sqlite3", "sqlite3.exe", "redis-cli", "redis-cli.exe"], ["--version", "-V", "-v"]],
+    decision = "allow",
+    justification = "Allow database client version inspection.",
+)
+
+# 46. Web server configuration tests.
+prefix_rule(
+    pattern = [["apachectl", "apachectl.exe", "httpd", "httpd.exe", "nginx", "nginx.exe"], ["-t"]],
+    decision = "allow",
+    justification = "Allow Apache and nginx configuration syntax tests.",
+)
+
+# 47. GitHub CLI inspection.
+prefix_rule(
+    pattern = [["gh", "gh.exe"], ["repo", "pr", "issue", "run", "workflow", "release"], ["list", "view", "status"]],
+    decision = "allow",
+    justification = "Allow GitHub CLI list, view, and status queries only.",
 )

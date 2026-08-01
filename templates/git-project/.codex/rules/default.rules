@@ -1,31 +1,92 @@
-# Read-only Git inspection can run without an extra prompt.
+# Git project rules supplement the global rules.
+
+# 1. Block CVS.
 prefix_rule(
-    pattern = [["git", "git.exe"], ["status", "diff", "log", "show", "rev-parse"]],
+    pattern = [["cvs", "cvs.exe"]],
+    decision = "forbidden",
+    justification = "This project uses Git, not CVS.",
+)
+
+# 2. Block Subversion.
+prefix_rule(
+    pattern = [["svn", "svn.exe"]],
+    decision = "forbidden",
+    justification = "This project uses Git, not Subversion.",
+)
+
+# 3. Block Mercurial.
+prefix_rule(
+    pattern = [["hg", "hg.exe"]],
+    decision = "forbidden",
+    justification = "This project uses Git, not Mercurial.",
+)
+
+# 4. Block Fossil.
+prefix_rule(
+    pattern = [["fossil", "fossil.exe"]],
+    decision = "forbidden",
+    justification = "This project uses Git, not Fossil.",
+)
+
+# 5. Allow Git inspection.
+prefix_rule(
+    pattern = [["git", "git.exe"], ["status", "diff", "log", "show", "rev-parse", "ls-files", "ls-tree", "blame"]],
     decision = "allow",
     justification = "Allow read-only Git repository inspection.",
 )
 
-# Normal repository mutations require confirmation.
+# 6. Confirm Git mutations.
 prefix_rule(
-    pattern = [["git", "git.exe"], ["add", "commit", "push", "pull", "merge", "rebase", "checkout", "switch", "restore", "reset", "clean", "branch", "tag"]],
+    pattern = [["git", "git.exe"], ["add", "commit", "push", "pull", "fetch", "merge", "rebase", "checkout", "switch", "restore", "reset", "clean", "branch", "tag", "stash", "cherry-pick", "revert", "worktree", "submodule"]],
     decision = "prompt",
-    justification = "Confirm Git operations that may change the working tree, history, or remote repository.",
+    justification = "Confirm Git operations that may change the working tree, history, index, or remote state.",
 )
 
+# 7. Block hard reset.
 prefix_rule(
     pattern = [["git", "git.exe"], ["reset"], ["--hard"]],
     decision = "forbidden",
-    justification = "Use a non-destructive restore method or perform hard reset manually after reviewing local changes.",
+    justification = "Hard reset can discard local work.",
 )
 
+# 8. Block forced clean.
 prefix_rule(
-    pattern = [["git", "git.exe"], ["clean"], ["-f", "-fd", "-df", "-fdx", "-xdf"]],
+    pattern = [["git", "git.exe"], ["clean"], ["-f", "-fd", "-df", "-fdx", "-xdf", "-ff", "-ffdx"]],
     decision = "forbidden",
-    justification = "Review and remove untracked files manually instead of using forced clean.",
+    justification = "Forced clean can delete untracked files.",
 )
 
+# 9. Block force push.
 prefix_rule(
     pattern = [["git", "git.exe"], ["push"], ["--force", "-f", "--force-with-lease"]],
     decision = "forbidden",
-    justification = "Use a normal push or perform history rewriting manually after review.",
+    justification = "Force push rewrites remote history.",
+)
+
+# 10. Confirm GitHub Actions mutations.
+prefix_rule(
+    pattern = [["gh", "gh.exe"], ["workflow", "run"]],
+    decision = "prompt",
+    justification = "Confirm GitHub Actions workflow mutations and reruns.",
+)
+
+# 11. Confirm GitHub collaboration mutations.
+prefix_rule(
+    pattern = [["gh", "gh.exe"], ["pr", "issue", "release"]],
+    decision = "prompt",
+    justification = "Confirm pull request, issue, and release operations because these commands may write remotely.",
+)
+
+# 12. Confirm package scripts.
+prefix_rule(
+    pattern = [["npm", "npm.cmd", "pnpm", "pnpm.cmd", "yarn", "yarn.cmd", "bun", "bun.exe"], ["run", "test", "exec", "dlx", "x"]],
+    decision = "prompt",
+    justification = "Confirm package scripts and executable runners because they execute project code.",
+)
+
+# 13. Confirm dependency mutations.
+prefix_rule(
+    pattern = [["npm", "npm.cmd", "pnpm", "pnpm.cmd", "yarn", "yarn.cmd", "bun", "bun.exe"], ["install", "i", "add", "remove", "uninstall", "update", "upgrade", "publish", "link"]],
+    decision = "prompt",
+    justification = "Confirm dependency and package publication changes.",
 )
