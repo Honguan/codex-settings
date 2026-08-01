@@ -11,6 +11,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $ScriptRoot 'lib\codex-settings-common.ps1')
+. (Join-Path $ScriptRoot 'lib\project-registry.ps1')
 
 function Copy-ExistingItem {
     param(
@@ -31,7 +32,7 @@ if ($Mode -eq 'Interactive') {
     Write-Host ''
     Write-Host 'Backup Codex Settings'
     Write-Host '====================='
-    Write-Host '[1] Global settings, profile, and ccusage state'
+    Write-Host '[1] Global settings, registry, profile, and ccusage state'
     Write-Host '[2] Project settings'
     Write-Host '[3] Global and project settings'
     Write-Host '[0] Exit'
@@ -76,6 +77,12 @@ if ($Mode -eq 'Global' -or $Mode -eq 'All') {
     $userSkills = Join-Path $HOME '.agents\skills'
     $itemCount += Copy-ExistingItem -Source $userSkills -Destination (Join-Path $backupRoot 'global\.agents\skills')
 
+    $registryPath = Get-CodexProjectRegistryPath
+    $registryExisted = Test-Path -LiteralPath $registryPath -PathType Leaf
+    if ($registryExisted) {
+        $itemCount += Copy-ExistingItem -Source $registryPath -Destination (Join-Path $backupRoot 'global\registry\projects.json')
+    }
+
     $profilePath = $PROFILE.CurrentUserAllHosts
     $profileTarget = Join-Path $backupRoot 'global\powershell\profile.ps1'
     $profileExisted = Test-Path -LiteralPath $profilePath -PathType Leaf
@@ -85,6 +92,11 @@ if ($Mode -eq 'Global' -or $Mode -eq 'All') {
 
     $ccusage = Get-CcusageState
     $metadata.Global = [ordered]@{
+        ProjectRegistry = [ordered]@{
+            Path = $registryPath
+            Existed = $registryExisted
+            BackupRelativePath = if ($registryExisted) { 'global\registry\projects.json' } else { $null }
+        }
         PowerShellProfile = [ordered]@{
             Path = $profilePath
             Existed = $profileExisted
