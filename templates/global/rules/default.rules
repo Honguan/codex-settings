@@ -1,0 +1,26 @@
+# Global rules should contain only rules that apply to every project.
+# Project-specific Git and CVS rules are installed from their own templates.
+
+prefix_rule(
+    pattern = [["format", "format.com"]],
+    decision = "forbidden",
+    justification = "Disk formatting is outside normal development work.",
+)
+
+prefix_rule(
+    pattern = [["diskpart", "diskpart.exe"]],
+    decision = "forbidden",
+    justification = "Disk partition changes must be performed manually outside Codex.",
+)
+
+prefix_rule(
+    pattern = [["shutdown", "shutdown.exe"]],
+    decision = "prompt",
+    justification = "Confirm before shutting down or restarting the system.",
+)
+
+prefix_rule(
+    pattern = [["Remove-Item", "remove-item"], ["-Recurse", "-r"], ["-Force", "-fo"]],
+    decision = "prompt",
+    justification = "Confirm recursive forced deletion before execution.",
+)
