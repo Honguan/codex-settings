@@ -7,7 +7,7 @@ function Select-Mode {
     Write-Host '[3] Install CVS project settings'
     Write-Host '[4] Backup current settings'
     Write-Host '[5] Restore a backup'
-    Write-Host '[6] Update this settings repository'
+    Write-Host '[6] Update global settings and registered projects'
     Write-Host '[7] Uninstall managed settings'
     Write-Host '[0] Exit'
 
@@ -32,6 +32,10 @@ function Test-Prerequisites([string]$InstallMode, [string]$TargetPath) {
     if ($PSVersionTable.PSVersion -lt [version]'5.1') {
         throw "PowerShell 5.1 or newer is required. Current: $($PSVersionTable.PSVersion)"
     }
+    if ($InstallMode -eq 'Global' -and $PSVersionTable.PSVersion.Major -lt 7) {
+        throw "PowerShell 7 or newer is required to install ccusage, cs, and cdaily. Current: $($PSVersionTable.PSVersion)"
+    }
+
     Test-DirectoryWritable -Path $TargetPath
     if ($InstallMode -ne 'Global') { return }
 
@@ -130,8 +134,7 @@ function Install-Target($Target, $Transaction) {
                 $destinationHash = (Get-FileHash $destination -Algorithm SHA256).Hash
                 if ($sourceHash -ne $destinationHash) { throw "Refusing to overwrite an unmanaged file: $destination" }
             }
-            New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
-            Copy-Item $source.FullName $destination -Force
+            Copy-FileAtomic -Source $source.FullName -Destination $destination
         } else {
             $existing = if ($owned -and $null -ne $previous -and [int]$previous.Version -lt 2) { '' } else { $state.Content }
             $template = [IO.File]::ReadAllText($source.FullName)
@@ -144,8 +147,14 @@ function Install-Target($Target, $Transaction) {
         }
 
         [void]$entries.Add([pscustomobject]@{
-            Path = $relative; Strategy = $strategy.Name; StartMarker = $strategy.Start; EndMarker = $strategy.End
-            ExistedBefore = [bool]$state.Exists; Sha256 = (Get-FileHash $destination -Algorithm SHA256).Hash
+            Path = $relative
+            Strategy = $strategy.Name
+            StartMarker = $strategy.Start
+            EndMarker = $strategy.End
+            ExistedBefore = [bool]$state.Exists
+            OriginalEncoding = [string]$state.EncodingName
+            OriginalCodePage = [int]$state.CodePage
+            Sha256 = (Get-FileHash $destination -Algorithm SHA256).Hash
         })
     }
 
@@ -192,8 +201,10 @@ function Set-Context7Key([switch]$Skip, $PreviousManifest) {
         $managedBefore = [bool]$PreviousManifest.External.Context7.CreatedByInstaller
     }
     return [pscustomobject]@{
-        CreatedNow = $createdNow; CreatedByInstaller = $managedBefore -or $createdNow
-        UserBefore = $userBefore; ProcessBefore = $processBefore
+        CreatedNow = $createdNow
+        CreatedByInstaller = $managedBefore -or $createdNow
+        UserBefore = $userBefore
+        ProcessBefore = $processBefore
     }
 }
 
@@ -201,9 +212,12 @@ function Write-Manifest($Result, $Transaction, $External) {
     $path = Join-Path $Result.Root '.codex-settings-manifest.json'
     Save-TransactionFile $Transaction $path
     $manifest = [ordered]@{
-        Version = 2; Mode = $Result.Mode; InstalledAt = (Get-Date).ToString('o')
-        TargetRoot = $Result.Root; Files = $Result.Files
+        Version = 3
+        Mode = $Result.Mode
+        InstalledAt = (Get-Date).ToString('o')
+        TargetRoot = $Result.Root
+        Files = $Result.Files
     }
     if ($null -ne $External) { $manifest.External = $External }
-    $manifest | ConvertTo-Json -Depth 12 | Set-Content $path -Encoding UTF8
+    Write-JsonFileAtomic -Path $path -Value $manifest -Depth 14
 }
