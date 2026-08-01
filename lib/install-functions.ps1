@@ -9,19 +9,67 @@ function Select-Mode {
     Write-Host '[5] Restore a backup'
     Write-Host '[6] Update global settings and registered projects'
     Write-Host '[7] Uninstall managed settings'
-    Write-Host '[0] Exit'
+    Write-Host '[0] Exit installer'
 
     switch (Read-Host 'Select') {
         '1' { return 'Global' }
         '2' { return 'Git' }
         '3' { return 'CVS' }
-        '4' { & (Join-Path $ScriptRoot 'backup.ps1'); exit $LASTEXITCODE }
-        '5' { & (Join-Path $ScriptRoot 'restore.ps1'); exit $LASTEXITCODE }
-        '6' { & (Join-Path $ScriptRoot 'update.ps1'); exit $LASTEXITCODE }
-        '7' { & (Join-Path $ScriptRoot 'uninstall.ps1'); exit $LASTEXITCODE }
-        '0' { exit 0 }
+        '4' { return 'Backup' }
+        '5' { return 'Restore' }
+        '6' { return 'Update' }
+        '7' { return 'Uninstall' }
+        '0' { return 'Exit' }
         default { throw 'Invalid selection.' }
     }
+}
+
+function Select-InstallStyle {
+    Write-Host ''
+    Write-Host 'Installation style'
+    Write-Host '[1] Merge managed settings and preserve other content'
+    Write-Host '[2] Replace template files completely'
+
+    switch (Read-Host 'Select') {
+        '1' { return 'Merge' }
+        '2' { return 'Replace' }
+        default { throw 'Invalid installation style.' }
+    }
+}
+
+function Read-ProjectPaths([string]$Prompt) {
+    $value = [string](Read-Host $Prompt)
+    if ([string]::IsNullOrWhiteSpace($value)) { return @() }
+    return @($value -split ';' | ForEach-Object Trim | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+}
+
+function Select-GlobalProjectPaths {
+    $paths = New-Object 'System.Collections.Generic.List[string]'
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    $projects = @(Get-RegisteredCodexProjects)
+
+    if ($projects.Count -gt 0) {
+        Write-Host ''
+        Write-Host 'Registered projects'
+        for ($index = 0; $index -lt $projects.Count; $index++) {
+            Write-Host ('[{0}] {1} {2}' -f ($index + 1), $projects[$index].Type, $projects[$index].Path)
+        }
+        $selection = [string](Read-Host 'Install registered projects (IDs separated by commas, blank to skip)')
+        foreach ($part in ($selection -split '[,\s]+' | Where-Object { $_ })) {
+            if ($part -notmatch '^\d+$') { continue }
+            $index = [int]$part - 1
+            if ($index -ge 0 -and $index -lt $projects.Count -and $seen.Add([string]$projects[$index].Path)) {
+                [void]$paths.Add([string]$projects[$index].Path)
+            }
+        }
+    } else {
+        Write-Host 'No registered projects.'
+    }
+
+    foreach ($path in Read-ProjectPaths 'Add Git/CVS project paths (semicolon separated, blank to skip)') {
+        if ($seen.Add($path)) { [void]$paths.Add($path) }
+    }
+    return $paths.ToArray()
 }
 
 function Assert-Command([string]$Name) {
@@ -57,25 +105,36 @@ function Test-Prerequisites([string]$InstallMode, [string]$TargetPath) {
     if ($shape.Duplicates.Count -gt 0) { throw "Bundled config.toml is invalid: $($shape.Duplicates -join ', ')" }
 }
 
-function Resolve-Targets([string]$InstallMode, [string]$RequestedPath) {
+function Resolve-Targets([string]$InstallMode, [string[]]$RequestedPath) {
+    $targets = New-Object 'System.Collections.Generic.List[object]'
     if ($InstallMode -eq 'Global') {
-        return @(
-            [pscustomobject]@{ Mode = 'Global'; Template = Join-Path $ScriptRoot 'templates\global'; Root = Join-Path $HOME '.codex' },
-            [pscustomobject]@{ Mode = 'GlobalSkills'; Template = Join-Path $ScriptRoot 'templates\user-skills'; Root = Join-Path $HOME '.agents\skills' }
-        )
+        [void]$targets.Add([pscustomobject]@{ Mode = 'Global'; Template = Join-Path $ScriptRoot 'templates\global'; Root = Join-Path $HOME '.codex' })
+        [void]$targets.Add([pscustomobject]@{ Mode = 'GlobalSkills'; Template = Join-Path $ScriptRoot 'templates\user-skills'; Root = Join-Path $HOME '.agents\skills' })
+    } elseif ($RequestedPath.Count -eq 0) {
+        $RequestedPath = @(Read-ProjectPaths "Enter $InstallMode project paths (semicolon separated)")
     }
 
-    if ([string]::IsNullOrWhiteSpace($RequestedPath)) { $RequestedPath = Read-Host "Enter the $InstallMode project root" }
-    if ([string]::IsNullOrWhiteSpace($RequestedPath)) { throw 'Project path is required.' }
-    $root = (Resolve-Path -LiteralPath $RequestedPath).Path
-    $marker = if ($InstallMode -eq 'Git') { '.git' } else { 'CVS' }
-    if (-not (Test-Path -LiteralPath (Join-Path $root $marker))) { throw "The selected directory is not a $InstallMode project root: $root" }
+    foreach ($path in @($RequestedPath | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
+        $root = (Resolve-Path -LiteralPath $path).Path
+        $mode = $InstallMode
+        if ($mode -eq 'Global') {
+            if (Test-Path -LiteralPath (Join-Path $root '.git')) { $mode = 'Git' }
+            elseif (Test-Path -LiteralPath (Join-Path $root 'CVS')) { $mode = 'CVS' }
+            else { throw "The selected directory is not a Git or CVS project root: $root" }
+        }
+        $marker = if ($mode -eq 'Git') { '.git' } else { 'CVS' }
+        if (-not (Test-Path -LiteralPath (Join-Path $root $marker))) { throw "The selected directory is not a $mode project root: $root" }
+        if (@($targets | Where-Object { [string]::Equals($_.Root, $root, [StringComparison]::OrdinalIgnoreCase) }).Count -gt 0) { continue }
 
-    return @([pscustomobject]@{
-        Mode = $InstallMode
-        Template = Join-Path $ScriptRoot ("templates\{0}-project" -f $InstallMode.ToLowerInvariant())
-        Root = $root
-    })
+        [void]$targets.Add([pscustomobject]@{
+            Mode = $mode
+            Template = Join-Path $ScriptRoot ("templates\{0}-project" -f $mode.ToLowerInvariant())
+            Root = $root
+        })
+    }
+
+    if ($targets.Count -eq 0) { throw 'Project path is required.' }
+    return $targets.ToArray()
 }
 
 function Get-Manifest([string]$Root) {

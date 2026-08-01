@@ -2,10 +2,12 @@
 param(
     [ValidateSet('Interactive', 'Global', 'Git', 'CVS')]
     [string]$Mode = 'Interactive',
-    [string]$ProjectPath,
+    [string[]]$ProjectPath,
     [switch]$SkipContext7Key,
     [switch]$SkipCcusageInstall,
-    [switch]$Force
+    [switch]$Force,
+    [ValidateSet('Merge', 'Replace')]
+    [string]$InstallStyle = 'Merge'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -15,10 +17,48 @@ $BackupBase = Join-Path $env:LOCALAPPDATA 'CodexSettingsBackup'
 . (Join-Path $ScriptRoot 'lib\install-functions.ps1')
 . (Join-Path $ScriptRoot 'lib\project-registry.ps1')
 
-if ($Mode -eq 'Interactive') { $Mode = Select-Mode }
+if ($Mode -eq 'Interactive') {
+    while ($true) {
+        try {
+            $selection = Select-Mode
+            if ($selection -eq 'Exit') { return }
+
+            switch ($selection) {
+                'Global' {
+                    $style = Select-InstallStyle
+                    $paths = Select-GlobalProjectPaths
+                    & $PSCommandPath -Mode Global -InstallStyle $style -ProjectPath $paths
+                }
+                'Git' {
+                    $style = Select-InstallStyle
+                    $paths = Read-ProjectPaths 'Enter Git project paths (semicolon separated)'
+                    & $PSCommandPath -Mode Git -InstallStyle $style -ProjectPath $paths
+                }
+                'CVS' {
+                    $style = Select-InstallStyle
+                    $paths = Read-ProjectPaths 'Enter CVS project paths (semicolon separated)'
+                    & $PSCommandPath -Mode CVS -InstallStyle $style -ProjectPath $paths
+                }
+                'Backup' { & (Join-Path $ScriptRoot 'backup.ps1') }
+                'Restore' { & (Join-Path $ScriptRoot 'restore.ps1') }
+                'Update' { & (Join-Path $ScriptRoot 'update.ps1') }
+                'Uninstall' { & (Join-Path $ScriptRoot 'uninstall.ps1') }
+            }
+        } catch {
+            Write-Host "Operation failed: $($_.Exception.Message)" -ForegroundColor Red
+        }
+
+        Write-Host ''
+        [void](Read-Host 'Press Enter to return to the installer menu')
+    }
+}
+
+if ($Force) { $InstallStyle = 'Replace' }
+$Force = $InstallStyle -eq 'Replace'
 $targets = @(Resolve-Targets $Mode $ProjectPath)
 $preflight = if ($Mode -eq 'Global') { Join-Path $HOME '.codex' } else { $targets[0].Root }
 Test-Prerequisites $Mode $preflight
+foreach ($target in $targets) { Test-DirectoryWritable -Path $target.Root }
 
 New-Item -ItemType Directory -Path $BackupBase -Force | Out-Null
 $operationLock = $null
@@ -47,6 +87,7 @@ try {
     }
 
     $registration = $null
+    $registrations = New-Object 'System.Collections.Generic.List[object]'
     $results = New-Object 'System.Collections.Generic.List[object]'
 
     try {
@@ -98,22 +139,31 @@ try {
             Write-Manifest $result $transaction $(if ($result.Mode -eq 'Global') { $external } else { $null })
         }
 
-        if ($Mode -in @('Git', 'CVS')) {
+        $projectResults = @($results | Where-Object { $_.Mode -in @('Git', 'CVS') })
+        if ($projectResults.Count -gt 0) {
             $registryPath = Get-CodexProjectRegistryPath
             Save-TransactionFile $transaction $registryPath
-            $registration = Register-CodexProject -Type $Mode -Path $targets[0].Root
+            foreach ($project in $projectResults) {
+                [void]$registrations.Add((Register-CodexProject -Type $project.Mode -Path $project.Root))
+            }
         }
 
         Complete-FileTransaction -Transaction $transaction
 
         Write-Host ''
         Write-Host 'Installation completed successfully.'
+        Write-Host "Style  : $InstallStyle"
+        Write-Host "Targets: $($results.Count)"
         foreach ($result in $results) {
             $changedCount = @($result.Files | Where-Object Changed).Count
+            $createdCount = @($result.Files | Where-Object { -not $_.ExistedBefore }).Count
+            $updatedCount = @($result.Files | Where-Object { $_.ExistedBefore -and $_.Changed }).Count
+            $unchangedCount = $result.Files.Count - $changedCount
             Write-Host "Target: $($result.Root)"
-            Write-Host "Files : $($result.Files.Count) (changed: $changedCount)"
+            Write-Host "Mode  : $($result.Mode)"
+            Write-Host "Files : $($result.Files.Count) (created: $createdCount, updated: $updatedCount, unchanged: $unchangedCount)"
         }
-        if ($null -ne $registration) { Write-Host "Registered project: $($registration.Type) $($registration.Path)" }
+        foreach ($registration in $registrations) { Write-Host "Registered project: $($registration.Type) $($registration.Path)" }
         Write-Host "Backup: $transactionRoot"
         if ($Mode -eq 'CVS') { Write-Host 'Restart Codex and use /hooks to review and trust the CVS hook.' }
         else { Write-Host 'Restart PowerShell and Codex to reload settings, commands, and MCP servers.' }
