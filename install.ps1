@@ -12,6 +12,7 @@ $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $BackupBase = Join-Path $env:LOCALAPPDATA 'CodexSettingsBackup'
 . (Join-Path $ScriptRoot 'lib\codex-settings-common.ps1')
 . (Join-Path $ScriptRoot 'lib\install-functions.ps1')
+. (Join-Path $ScriptRoot 'lib\project-registry.ps1')
 
 if ($Mode -eq 'Interactive') { $Mode = Select-Mode }
 $targets = @(Resolve-Targets $Mode $ProjectPath)
@@ -23,6 +24,7 @@ $transactionRoot = Join-Path $BackupBase ((Get-Date -Format 'yyyyMMdd-HHmmss-fff
 $transaction = New-FileTransaction $transactionRoot
 $ccusageBefore = if ($Mode -eq 'Global') { Get-CcusageState } else { $null }
 $contextState = $null
+$registration = $null
 $results = New-Object 'System.Collections.Generic.List[object]'
 
 try {
@@ -59,6 +61,13 @@ try {
     }
 
     foreach ($result in $results) { Write-Manifest $result $transaction $(if ($result.Mode -eq 'Global') { $external } else { $null }) }
+
+    if ($Mode -in @('Git', 'CVS')) {
+        $registryPath = Get-CodexProjectRegistryPath
+        Save-TransactionFile $transaction $registryPath
+        $registration = Register-CodexProject -Type $Mode -Path $targets[0].Root
+    }
+
     Save-TransactionMetadata $transaction @{
         Mode = $Mode; Status = 'Completed'; CcusageBefore = $ccusageBefore
         Context7KeyWasPresent = if ($null -eq $contextState) { $false } else { -not [string]::IsNullOrWhiteSpace([string]$contextState.UserBefore) }
@@ -68,6 +77,7 @@ try {
     Write-Host ''
     Write-Host 'Installation completed successfully.'
     foreach ($result in $results) { Write-Host "Target: $($result.Root)"; Write-Host "Files : $($result.Files.Count)" }
+    if ($null -ne $registration) { Write-Host "Registered project: $($registration.Type) $($registration.Path)" }
     Write-Host "Backup: $transactionRoot"
     if ($Mode -eq 'CVS') { Write-Host 'Restart Codex and use /hooks to review and trust the CVS hook.' }
     else { Write-Host 'Restart PowerShell and Codex to reload settings, commands, and MCP servers.' }
