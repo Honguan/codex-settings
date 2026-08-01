@@ -1,5 +1,5 @@
 # Source: https://github.com/ccusage/ccusage
-# Installed by codex-settings.
+# Managed by codex-settings. Commands intentionally use ccusage@latest.
 
 # >>> CS CODEX SESSION VIEWER >>>
 function global:cs {
@@ -9,34 +9,50 @@ function global:cs {
         [string[]]$Value
     )
 
+    $commandContext = [pscustomobject]@{ Text = $null; Raw = $null }
+
     function Invoke-CcusageJson {
-        $output = if (Get-Command ccusage -ErrorAction SilentlyContinue) {
-            & ccusage codex session --json 2>&1
-        } elseif (Get-Command npx -ErrorAction SilentlyContinue) {
-            & npx --yes 'ccusage@latest' codex session --json 2>&1
+        if (Get-Command npx -ErrorAction SilentlyContinue) {
+            $commandContext.Text = 'npx --yes ccusage@latest codex session --json'
+            $output = & npx --yes 'ccusage@latest' codex session --json 2>&1
+        } elseif (Get-Command ccusage -ErrorAction SilentlyContinue) {
+            $commandContext.Text = 'ccusage codex session --json'
+            $output = & ccusage codex session --json 2>&1
         } else {
-            throw 'ccusage and npx were not found. Install Node.js and ccusage first.'
+            throw 'Neither npx nor ccusage is available. Install Node.js and run the codex-settings global installer.'
         }
 
-        if ($LASTEXITCODE -ne 0) {
-            throw "ccusage failed with exit code $LASTEXITCODE.`n$($output | Out-String)"
+        $exitCode = $LASTEXITCODE
+        $commandContext.Raw = ($output | Out-String).Trim()
+        if ($exitCode -ne 0) {
+            $details = if ([string]::IsNullOrWhiteSpace($commandContext.Raw)) { '(no command output)' } else { $commandContext.Raw }
+            throw "ccusage exited with code $exitCode.`nCommand: $commandContext.Text`nOutput:`n$details"
         }
 
-        $text = ($output | Out-String) -replace ([char]27 + '\[[0-?]*[ -/]*[@-~]'), ''
+        $text = $commandContext.Raw -replace ([char]27 + '\[[0-?]*[ -/]*[@-~]'), ''
         $start = $text.IndexOf('{')
         $end = $text.LastIndexOf('}')
         if ($start -lt 0 -or $end -le $start) {
-            throw 'ccusage returned no valid JSON data.'
+            $preview = if ($text.Length -gt 800) { $text.Substring(0, 800) + '...' } else { $text }
+            throw "ccusage returned no JSON object.`nCommand: $commandContext.Text`nOutput preview:`n$preview"
         }
 
-        return $text.Substring($start, $end - $start + 1) | ConvertFrom-Json
+        $jsonText = $text.Substring($start, $end - $start + 1)
+        try {
+            return $jsonText | ConvertFrom-Json -ErrorAction Stop
+        } catch {
+            throw "ccusage JSON parsing failed: $($_.Exception.Message)`nCommand: $commandContext.Text"
+        }
     }
 
     function Get-Sessions($Report) {
         if ($null -ne $Report.sessions) { return @($Report.sessions) }
-        if ($null -ne $Report.codex.sessions) { return @($Report.codex.sessions) }
-        if ($null -ne $Report.data.sessions) { return @($Report.data.sessions) }
-        return @()
+        if ($null -ne $Report.codex -and $null -ne $Report.codex.sessions) { return @($Report.codex.sessions) }
+        if ($null -ne $Report.data -and $null -ne $Report.data.sessions) { return @($Report.data.sessions) }
+
+        $properties = @($Report.PSObject.Properties.Name)
+        $propertyText = if ($properties.Count -gt 0) { $properties -join ', ' } else { '(none)' }
+        throw "Unsupported ccusage JSON schema. Root properties: $propertyText"
     }
 
     function Get-Activity($Row) {
@@ -47,6 +63,7 @@ function global:cs {
     function Get-SessionId($Row) {
         $pattern = '(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
         foreach ($source in @([string]$Row.sessionFile, [string]$Row.sessionId)) {
+            if ([string]::IsNullOrWhiteSpace($source)) { continue }
             $match = [regex]::Match($source, $pattern)
             if ($match.Success) { return $match.Value }
         }
@@ -55,6 +72,7 @@ function global:cs {
     }
 
     function Format-SessionId([string]$Id) {
+        if ([string]::IsNullOrWhiteSpace($Id)) { return '' }
         if ($Id.Length -gt 17) { return $Id.Substring(0, 8) + '...' + $Id.Substring($Id.Length - 6) }
         return $Id
     }
@@ -127,15 +145,15 @@ function global:cs {
     function Show-Details([object[]]$Rows) {
         @($Rows | ForEach-Object {
             [pscustomobject][ordered]@{
-                'Session ID'  = Format-SessionId (Get-SessionId $_)
-                Models        = Get-Models $_.models
-                Input         = Format-Number $_.inputTokens
-                Output        = Format-Number $_.outputTokens
-                Reasoning     = Format-Number $_.reasoningOutputTokens
-                'Cache Read'  = Format-Number $_.cacheReadTokens
-                'Total Tokens'= Format-Number $_.totalTokens
-                'Cost (USD)'  = Format-Cost $_.costUSD
-                Time          = if ((Get-Activity $_) -eq [DateTimeOffset]::MinValue) { '' } else { (Get-Activity $_).ToLocalTime().ToString('yyyy-MM-dd HH:mm') }
+                'Session ID'   = Format-SessionId (Get-SessionId $_)
+                Models         = Get-Models $_.models
+                Input          = Format-Number $_.inputTokens
+                Output         = Format-Number $_.outputTokens
+                Reasoning      = Format-Number $_.reasoningOutputTokens
+                'Cache Read'   = Format-Number $_.cacheReadTokens
+                'Total Tokens' = Format-Number $_.totalTokens
+                'Cost (USD)'   = Format-Cost $_.costUSD
+                Time           = if ((Get-Activity $_) -eq [DateTimeOffset]::MinValue) { '' } else { (Get-Activity $_).ToLocalTime().ToString('yyyy-MM-dd HH:mm') }
             }
         }) | Format-Table -AutoSize -Wrap | Out-Host
     }
@@ -149,9 +167,12 @@ function global:cs {
             $numbers = New-Object 'System.Collections.Generic.HashSet[int]'
             foreach ($part in ($answer -split '[,\s]+')) {
                 if ($part -match '^(\d+)-(\d+)$') {
-                    $from = [Math]::Max(1, [int]$matches[1]); $to = [Math]::Min($Records.Count, [int]$matches[2])
-                    if ($from -gt $to) { $tmp = $from; $from = $to; $to = $tmp }
-                    for ($i = $from; $i -le $to; $i++) { [void]$numbers.Add($i) }
+                    $from = [int]$matches[1]
+                    $to = [int]$matches[2]
+                    if ($from -gt $to) { $temporary = $from; $from = $to; $to = $temporary }
+                    $from = [Math]::Max(1, $from)
+                    $to = [Math]::Min($Records.Count, $to)
+                    for ($number = $from; $number -le $to; $number++) { [void]$numbers.Add($number) }
                 } elseif ($part -match '^\d+$' -and [int]$part -ge 1 -and [int]$part -le $Records.Count) {
                     [void]$numbers.Add([int]$part)
                 }
@@ -164,19 +185,29 @@ function global:cs {
 
     try {
         $report = Invoke-CcusageJson
-        $sessions = @(Get-Sessions $report | Where-Object { $null -ne $_ } | Sort-Object @{Expression={ Get-Activity $_ }; Descending=$true})
-        if ($sessions.Count -eq 0) { throw 'No Codex sessions were found.' }
+        $sessions = @(Get-Sessions $report | Where-Object { $null -ne $_ } | Sort-Object @{ Expression = { Get-Activity $_ }; Descending = $true })
+        if ($sessions.Count -eq 0) {
+            $sessionRoot = Join-Path $env:USERPROFILE '.codex\sessions'
+            throw "No Codex sessions were returned. Expected local data under: $sessionRoot"
+        }
 
-        $args = @($Value)
+        $arguments = @($Value)
         $count = 10
-        if ($args.Count -eq 0 -or ($args.Count -eq 1 -and [int]::TryParse($args[0], [ref]$count))) {
+        $parsedCount = 0
+        $listMode = $arguments.Count -eq 0
+        if ($arguments.Count -eq 1 -and [int]::TryParse($arguments[0], [ref]$parsedCount)) {
+            $count = $parsedCount
+            $listMode = $true
+        }
+
+        if ($listMode) {
             if ($count -lt 1 -or $count -gt 100) { throw 'The session count must be between 1 and 100.' }
             $recent = @($sessions | Select-Object -First $count)
             $records = @(
-                for ($i = 0; $i -lt $recent.Count; $i++) {
-                    $row = $recent[$i]
+                for ($index = 0; $index -lt $recent.Count; $index++) {
+                    $row = $recent[$index]
                     [pscustomobject]@{
-                        ID = $i + 1
+                        ID = $index + 1
                         Title = Get-Title $row
                         Models = Get-Models $row.models
                         Time = if ((Get-Activity $row) -eq [DateTimeOffset]::MinValue) { '' } else { (Get-Activity $row).ToLocalTime().ToString('yyyy-MM-dd HH:mm') }
@@ -190,16 +221,20 @@ function global:cs {
 
         $matched = @($sessions | Where-Object {
             $id = Get-SessionId $_
-            foreach ($query in $args) {
+            foreach ($query in $arguments) {
+                if ([string]::IsNullOrWhiteSpace($id)) { continue }
                 if ($id -eq $query -or $id.EndsWith($query, [StringComparison]::OrdinalIgnoreCase)) { return $true }
                 if ($query -match '^(.+)\.\.\.(.+)$' -and $id.StartsWith($matches[1], [StringComparison]::OrdinalIgnoreCase) -and $id.EndsWith($matches[2], [StringComparison]::OrdinalIgnoreCase)) { return $true }
             }
             return $false
         })
-        if ($matched.Count -eq 0) { throw 'No matching Codex sessions were found.' }
+        if ($matched.Count -eq 0) { throw "No matching Codex sessions were found for: $($arguments -join ', ')" }
         Show-Details $matched
     } catch {
-        Write-Host "Query failed: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host 'cs failed.' -ForegroundColor Red
+        Write-Host "Reason : $($_.Exception.Message)" -ForegroundColor Red
+        if (-not [string]::IsNullOrWhiteSpace($commandContext.Text)) { Write-Host "Command: $($commandContext.Text)" }
+        Write-Host "Profile: $($PROFILE.CurrentUserAllHosts)"
     }
 }
 # <<< CS CODEX SESSION VIEWER <<<
@@ -214,16 +249,25 @@ function global:cdaily {
     )
 
     try {
-        if (Get-Command ccusage -ErrorAction SilentlyContinue) {
-            & ccusage codex daily --last $Days --timezone 'Asia/Taipei'
-        } elseif (Get-Command npx -ErrorAction SilentlyContinue) {
-            & npx --yes 'ccusage@latest' codex daily --last $Days --timezone 'Asia/Taipei'
+        if (Get-Command npx -ErrorAction SilentlyContinue) {
+            $commandText = "npx --yes ccusage@latest codex daily --last $Days --timezone Asia/Taipei"
+            $output = & npx --yes 'ccusage@latest' codex daily --last $Days --timezone 'Asia/Taipei' 2>&1
+        } elseif (Get-Command ccusage -ErrorAction SilentlyContinue) {
+            $commandText = "ccusage codex daily --last $Days --timezone Asia/Taipei"
+            $output = & ccusage codex daily --last $Days --timezone 'Asia/Taipei' 2>&1
         } else {
-            throw 'ccusage and npx were not found. Install Node.js and ccusage first.'
+            throw 'Neither npx nor ccusage is available. Install Node.js and run the codex-settings global installer.'
         }
-        if ($LASTEXITCODE -ne 0) { throw "ccusage failed with exit code $LASTEXITCODE." }
+
+        $exitCode = $LASTEXITCODE
+        $output | Out-Host
+        if ($exitCode -ne 0) {
+            throw "ccusage exited with code $exitCode.`nCommand: $commandText`nOutput:`n$($output | Out-String)"
+        }
     } catch {
-        Write-Host "Query failed: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host 'cdaily failed.' -ForegroundColor Red
+        Write-Host "Reason : $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "Profile: $($PROFILE.CurrentUserAllHosts)"
     }
 }
 # <<< CDAILY CODEX DAILY REPORT <<<

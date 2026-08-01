@@ -1,90 +1,127 @@
 [CmdletBinding()]
 param(
-    [switch]$SkipPackageInstall
+    [switch]$SkipPackageInstall,
+    [switch]$SkipRuntimeValidation,
+    [switch]$PassThru
 )
 
 $ErrorActionPreference = 'Stop'
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$templatePath = Join-Path $ScriptRoot 'templates\powershell\ccusage-profile.ps1'
+. (Join-Path $ScriptRoot 'lib\codex-settings-common.ps1')
 
+$templatePath = Join-Path $ScriptRoot 'templates\powershell\ccusage-profile.ps1'
 if (-not (Test-Path -LiteralPath $templatePath -PathType Leaf)) {
     throw "ccusage profile template was not found: $templatePath"
 }
 
-if (-not $SkipPackageInstall) {
-    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
-        throw 'npm was not found. Install Node.js before installing ccusage.'
-    }
-
-    & npm install --global 'ccusage@latest'
-    if ($LASTEXITCODE -ne 0) {
-        throw "ccusage installation failed with exit code $LASTEXITCODE."
-    }
+if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+    throw 'npm was not found. Install Node.js before installing ccusage.'
+}
+if (-not (Get-Command npx -ErrorAction SilentlyContinue)) {
+    throw 'npx was not found. Reinstall Node.js with npm package-runner support.'
 }
 
 $profilePath = $PROFILE.CurrentUserAllHosts
 $profileDirectory = Split-Path -Parent $profilePath
-New-Item -ItemType Directory -Path $profileDirectory -Force | Out-Null
+Test-DirectoryWritable -Path $profileDirectory
 
-$existingBytes = if (Test-Path -LiteralPath $profilePath -PathType Leaf) {
-    [IO.File]::ReadAllBytes($profilePath)
-} else {
-    [byte[]]@()
-}
-
-$encoding = New-Object Text.UTF8Encoding($false)
-if ($existingBytes.Length -ge 3 -and $existingBytes[0] -eq 0xEF -and $existingBytes[1] -eq 0xBB -and $existingBytes[2] -eq 0xBF) {
-    $encoding = New-Object Text.UTF8Encoding($true)
-} elseif ($existingBytes.Length -ge 2 -and $existingBytes[0] -eq 0xFF -and $existingBytes[1] -eq 0xFE) {
-    $encoding = [Text.Encoding]::Unicode
-} elseif ($existingBytes.Length -ge 2 -and $existingBytes[0] -eq 0xFE -and $existingBytes[1] -eq 0xFF) {
-    $encoding = [Text.Encoding]::BigEndianUnicode
-}
-
-$existingContent = if ($existingBytes.Length -gt 0) {
-    $encoding.GetString($existingBytes).TrimStart([char]0xFEFF)
-} else {
-    ''
-}
-
+$packageBefore = Get-CcusageState
+$profileState = Get-TextFileState -Path $profilePath
 $backupPath = $null
-if (Test-Path -LiteralPath $profilePath -PathType Leaf) {
-    $backupPath = "$profilePath.ccusage-backup-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+if ($profileState.Exists) {
+    $backupPath = "$profilePath.ccusage-backup-$(Get-Date -Format 'yyyyMMdd-HHmmss-fff')"
     Copy-Item -LiteralPath $profilePath -Destination $backupPath -Force
 }
 
-foreach ($markers in @(
-    @('# >>> CS CODEX SESSION VIEWER >>>', '# <<< CS CODEX SESSION VIEWER <<<'),
-    @('# >>> CDAILY CODEX DAILY REPORT >>>', '# <<< CDAILY CODEX DAILY REPORT <<<')
-)) {
-    $pattern = '(?ms)^' + [regex]::Escape($markers[0]) + '\r?\n.*?^' + [regex]::Escape($markers[1]) + '\r?\n?'
-    $existingContent = [regex]::Replace($existingContent, $pattern, '')
-}
+try {
+    if (-not $SkipPackageInstall) {
+        $installOutput = & npm install --global 'ccusage@latest' 2>&1
+        $installExitCode = $LASTEXITCODE
+        $installOutput | Out-Host
+        if ($installExitCode -ne 0) {
+            throw "ccusage@latest installation failed with npm exit code $installExitCode.`n$($installOutput | Out-String)"
+        }
+    }
 
-$managedContent = [IO.File]::ReadAllText($templatePath)
-$newContent = if ([string]::IsNullOrWhiteSpace($existingContent)) {
-    $managedContent.Trim() + "`r`n"
-} else {
-    $existingContent.TrimEnd() + "`r`n`r`n" + $managedContent.Trim() + "`r`n"
-}
+    $existingContent = Remove-CcusageProfileBlocks -Content $profileState.Content
+    $managedContent = [IO.File]::ReadAllText($templatePath).Trim()
+    $newContent = if ([string]::IsNullOrWhiteSpace($existingContent)) {
+        $managedContent + $profileState.NewLine
+    } else {
+        $existingContent.TrimEnd() + $profileState.NewLine + $profileState.NewLine + $managedContent + $profileState.NewLine
+    }
 
-$tokens = $null
-$parseErrors = $null
-[void][Management.Automation.Language.Parser]::ParseInput($newContent, [ref]$tokens, [ref]$parseErrors)
-if ($parseErrors.Count -gt 0) {
-    throw "PowerShell profile validation failed: $($parseErrors[0].Message)"
-}
+    $tokens = $null
+    $parseErrors = $null
+    [void][Management.Automation.Language.Parser]::ParseInput($newContent, [ref]$tokens, [ref]$parseErrors)
+    if ($parseErrors.Count -gt 0) {
+        $firstError = $parseErrors[0]
+        throw "PowerShell profile validation failed at line $($firstError.Extent.StartLineNumber): $($firstError.Message)"
+    }
 
-[IO.File]::WriteAllText($profilePath, $newContent, $encoding)
-Remove-Item Function:\cs, Function:\cdaily -Force -ErrorAction SilentlyContinue
-. $profilePath
+    Write-TextFileState -Path $profilePath -Content $newContent -Encoding $profileState.Encoding
+    Remove-Item Function:\cs, Function:\cdaily -Force -ErrorAction SilentlyContinue
+    . $profilePath | Out-Null
 
-if (-not (Get-Command cs -ErrorAction SilentlyContinue) -or -not (Get-Command cdaily -ErrorAction SilentlyContinue)) {
-    throw 'cs or cdaily could not be loaded from the updated profile.'
-}
+    if (-not (Get-Command cs -ErrorAction SilentlyContinue)) {
+        throw "The cs function was not loaded from: $profilePath"
+    }
+    if (-not (Get-Command cdaily -ErrorAction SilentlyContinue)) {
+        throw "The cdaily function was not loaded from: $profilePath"
+    }
 
-Write-Host 'ccusage, cs, and cdaily installed successfully.'
-Write-Host "Profile: $profilePath"
-if ($backupPath) {
-    Write-Host "Backup : $backupPath"
+    if (-not $SkipRuntimeValidation) {
+        $versionOutput = & npx --yes 'ccusage@latest' --version 2>&1
+        $versionExitCode = $LASTEXITCODE
+        if ($versionExitCode -ne 0) {
+            throw "ccusage@latest runtime validation failed with exit code $versionExitCode.`n$($versionOutput | Out-String)"
+        }
+    }
+
+    $packageAfter = Get-CcusageState
+    $result = [pscustomobject]@{
+        ProfilePath = $profilePath
+        ProfileExistedBefore = [bool]$profileState.Exists
+        ProfileBackupPath = $backupPath
+        PackageBefore = $packageBefore
+        PackageAfter = $packageAfter
+        InstalledLatest = -not $SkipPackageInstall
+    }
+
+    if ($PassThru) {
+        return $result
+    }
+
+    Write-Host 'ccusage@latest, cs, and cdaily installed successfully.'
+    Write-Host "Profile: $profilePath"
+    if ($backupPath) {
+        Write-Host "Backup : $backupPath"
+    }
+} catch {
+    $primaryError = $_.Exception.Message
+    $rollbackErrors = New-Object 'System.Collections.Generic.List[string]'
+
+    try {
+        if ($profileState.Exists) {
+            Copy-Item -LiteralPath $backupPath -Destination $profilePath -Force
+        } else {
+            Remove-Item -LiteralPath $profilePath -Force -ErrorAction SilentlyContinue
+        }
+    } catch {
+        [void]$rollbackErrors.Add("Profile rollback failed: $($_.Exception.Message)")
+    }
+
+    if (-not $SkipPackageInstall) {
+        try {
+            Restore-CcusageState -State $packageBefore
+        } catch {
+            [void]$rollbackErrors.Add("ccusage rollback failed: $($_.Exception.Message)")
+        }
+    }
+
+    $message = "ccusage setup failed: $primaryError"
+    if ($rollbackErrors.Count -gt 0) {
+        $message += "`nRollback errors:`n- " + ($rollbackErrors -join "`n- ")
+    }
+    throw $message
 }

@@ -1,6 +1,6 @@
 # Codex Settings
 
-用 Git 管理 Codex 全域設定、Git 專案模板、CVS 專案模板、MCP 與 Windows 一鍵安裝工具。
+用 Git 管理 Codex 全域設定、Git 專案模板、CVS 專案模板、MCP、ccusage，以及 Windows 一鍵安裝工具。
 
 ## 目前內容
 
@@ -13,12 +13,14 @@ codex-settings/
 ├─ restore.ps1
 ├─ update.ps1
 ├─ uninstall.ps1
+├─ lib/
+│  ├─ codex-settings-common.ps1
+│  └─ install-functions.ps1
 └─ templates/
    ├─ global/
    │  ├─ AGENTS.md
    │  ├─ config.toml
-   │  ├─ rules/default.rules        # 47 條
-   │  └─ tools/configure-pencil-mcp.ps1
+   │  └─ rules/default.rules        # 47 條
    ├─ powershell/
    │  └─ ccusage-profile.ps1        # cs、cdaily
    ├─ user-skills/
@@ -45,32 +47,145 @@ codex-settings/
 ./install.ps1 -Mode CVS -ProjectPath 'E:\CVS\MyProject'
 ```
 
-全域模式會安裝：
+全域模式需要：
 
-- `~/.codex` 全域規則與設定。
-- `~/.agents/skills` 全域技能。
-- Context7、Playwright 與 Pencil MCP。
-- [ccusage](https://github.com/ccusage/ccusage) 最新版。
-- PowerShell 指令 `cs` 與 `cdaily`。
+- PowerShell 5.1 或更新版本。
+- Codex CLI。
+- Node.js 20 或更新版本。
+- npm 與 npx。
+- 可連線到 npm registry。
 
-`cs` 預設顯示最近 10 個 Codex Session；`cs 20` 顯示最近 20 個；`cs <Session ID>` 查詢指定 Session。`cdaily` 預設統計最近 7 天；`cdaily 30` 統計最近 30 天，時區固定為 `Asia/Taipei`。
+安裝前會檢查命令、版本、目標目錄寫入權限、PowerShell Profile 寫入權限及內建 TOML 模板。
+
+## 安全合併與交易式安裝
+
+安裝器不再直接覆蓋既有設定：
+
+- `AGENTS.md` 與 `default.rules` 使用管理標記區塊合併。
+- `config.toml` 保留既有頂層鍵與 MCP 區段，只加入缺少的設定。
+- CVS `hooks.json` 保留既有 Hook，只更新本套件的 CRLF Hook。
+- 套件專屬 Skill 與 Hook 腳本只在檔案由本套件管理或內容相同時更新；不會靜默覆蓋不同的未管理檔案。
+
+全域安裝採交易式流程：
+
+1. 保存所有即將修改的檔案、PowerShell Profile、ccusage 狀態與 Context7 環境狀態。
+2. 套用設定、MCP、ccusage、`cs` 與 `cdaily`。
+3. 全部成功後才寫入新版 Manifest。
+4. 任一步驟失敗時，自動回復檔案、Profile、ccusage 與本次建立的 Context7 Key。
+
+交易備份位於：
+
+```text
+%LOCALAPPDATA%\CodexSettingsBackup
+```
+
+## ccusage、cs、cdaily
+
+來源：[ccusage/ccusage](https://github.com/ccusage/ccusage)
+
+全域安裝會執行：
+
+```powershell
+npm install --global ccusage@latest
+```
+
+`cs` 與 `cdaily` 執行時優先使用：
+
+```powershell
+npx --yes ccusage@latest
+```
+
+因此維持 `latest` 設定；全域套件則提供直接使用 `ccusage` 指令的能力。
+
+### cs
+
+```powershell
+cs
+cs 20
+cs 019fbc31-5856-73f0-91d9-978f388cc223
+cs 019fbc31...8cc223
+```
+
+失敗時會明確輸出：
+
+- 缺少 npx 或 ccusage。
+- 實際執行命令。
+- 原始 Exit Code。
+- 命令輸出或 JSON 預覽。
+- JSON 解析錯誤。
+- 不支援的 JSON 根欄位。
+- 找不到 Codex Session 資料的位置。
+- PowerShell Profile 路徑。
+
+### cdaily
+
+```powershell
+cdaily
+cdaily 30
+```
+
+預設最近 7 天，時區固定為 `Asia/Taipei`。
+
+## 完整生命週期
+
+### 備份
+
+```powershell
+./backup.ps1 -Mode Global
+```
+
+會備份：
+
+- `~/.codex`
+- `~/.agents/skills`
+- PowerShell Profile
+- ccusage 是否安裝及版本
+- Context7 Key 是否存在的狀態
+
+Context7 Key 本身不會寫入備份。
+
+### 還原
+
+```powershell
+./restore.ps1
+```
+
+會還原設定、Profile 與 ccusage 原始安裝狀態。若備份時存在 Context7 Key，但目前已不存在，會提醒重新設定，不會從備份讀取秘密。
+
+### 移除
+
+```powershell
+./uninstall.ps1 -Mode Global
+```
+
+會：
+
+- 只移除本套件管理的 AGENTS、Rules、TOML 與 Hooks 區塊。
+- 保留使用者其他設定。
+- 移除 Profile 中的 `cs`、`cdaily`。
+- 還原安裝前的 ccusage 狀態及版本。
+- 只在 Key 由本安裝器建立時移除 `CONTEXT7_API_KEY`。
+- 備份所有即將移除或更新的內容。
 
 ## 全域 MCP
 
 ### Context7
 
-使用官方遠端端點：
-
 ```toml
 [mcp_servers.context7]
 url = "https://mcp.context7.com/mcp"
+env_http_headers = { "CONTEXT7_API_KEY" = "CONTEXT7_API_KEY" }
 ```
 
-沒有 API Key 時仍可使用基本額度。API Key 不存入此倉庫。
+全域安裝時可輸入 Context7 API Key。Key 以目前 Windows 使用者環境變數 `CONTEXT7_API_KEY` 儲存，不會寫入 Git、`config.toml`、Manifest 或備份。
+
+已有使用者層 `CONTEXT7_API_KEY` 時會直接沿用。可使用以下參數略過輸入：
+
+```powershell
+./install.ps1 -Mode Global -SkipContext7Key
+```
 
 ### Playwright
-
-使用 Microsoft 官方套件：
 
 ```toml
 [mcp_servers.playwright]
@@ -80,13 +195,7 @@ args = ["-y", "@playwright/mcp@latest"]
 
 ### Pencil
 
-Pencil 的 MCP 執行檔包含 IDE 版本及平台路徑，不能安全寫死。全域安裝會執行：
-
-```text
-~/.codex/tools/configure-pencil-mcp.ps1
-```
-
-它會尋找 VS Code、Cursor 或 Pencil 桌面程式的 MCP 執行檔，找到後將正確的 `[mcp_servers.pencil]` 寫入 `~/.codex/config.toml`。沒有安裝 pen.dev 時只顯示警告，不會產生失效設定。
+本套件不安裝、不偵測、也不修改 Pencil MCP。
 
 ## CVS 更新流程
 
@@ -102,15 +211,40 @@ CVS 專案規則要求每個目標依序執行：
 
 ## CRLF Hook
 
-CVS Hook 只處理 `.codex-root` 內的普通文字檔，並增加以下保護：
+CVS Hook 保持精簡，只處理：
 
-- 拒絕專案外路徑、符號連結、`CVS` 與 `.codex` 內部檔案。
-- 排除 shell、patch、diff、憑證與金鑰格式。
-- 略過空檔、含 NUL 的二進位檔與 UTF-16 類檔案。
-- 狀態檔存放於 `%LOCALAPPDATA%`，不污染 CVS 工作副本。
-- 合併重複路徑，失敗時輸出原因並回傳非零狀態。
+- `.codex-root` 專案範圍內的普通檔案。
+- 明確允許的文字副檔名。
+- 不超過 10 MB 的檔案。
+- 非符號連結、非 `CVS`／`.codex` 內部檔案。
+- 不含 NUL 位元的文字內容。
+
+暫存清單放在 `%LOCALAPPDATA%\CodexSettings\HookState`，超過 7 天會清理。Hook 失敗會輸出實際原因並回傳非零狀態。
 
 安裝 CVS 設定後重新啟動 Codex，使用 `/hooks` 檢查並信任專案 Hook。
+
+## Git 專案提交策略
+
+Git 專案完成修改並通過相關驗證後，可自動 Stage 與 Commit 本次任務的檔案。
+
+Commit Message：
+
+```text
+fix: <short description>
+feat: <short description>
+docs: <short description>
+chore: <short description>
+```
+
+以下操作必須由使用者明確要求：
+
+- Push 或 Force Push
+- 建立或修改 Pull Request
+- Merge
+- Release
+- Tag
+- 刪除 Branch
+- 遠端 Issue 修改
 
 ## 安全範圍
 
@@ -119,11 +253,5 @@ CVS Hook 只處理 `.codex-root` 內的普通文字檔，並增加以下保護�
 - `auth.json`
 - API Key、Token、密碼
 - Session、歷史紀錄與日誌
-- Pencil、Context7 或其他 MCP 的登入資訊
+- Context7 或其他 MCP 的登入資訊
 - 本機私有設定
-
-安裝前的檔案備份預設放在：
-
-```text
-%LOCALAPPDATA%\CodexSettingsBackup
-```

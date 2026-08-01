@@ -2,221 +2,89 @@
 param(
     [ValidateSet('Interactive', 'Global', 'Git', 'CVS')]
     [string]$Mode = 'Interactive',
-
-    [string]$ProjectPath
+    [string]$ProjectPath,
+    [switch]$SkipContext7Key,
+    [switch]$SkipCcusageInstall
 )
 
 $ErrorActionPreference = 'Stop'
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $BackupBase = Join-Path $env:LOCALAPPDATA 'CodexSettingsBackup'
+. (Join-Path $ScriptRoot 'lib\codex-settings-common.ps1')
+. (Join-Path $ScriptRoot 'lib\install-functions.ps1')
 
-function Get-RelativeTemplatePath {
-    param(
-        [Parameter(Mandatory = $true)][string]$TemplateRoot,
-        [Parameter(Mandatory = $true)][string]$FullName
-    )
+if ($Mode -eq 'Interactive') { $Mode = Select-Mode }
+$targets = @(Resolve-Targets $Mode $ProjectPath)
+$preflight = if ($Mode -eq 'Global') { Join-Path $HOME '.codex' } else { $targets[0].Root }
+Test-Prerequisites $Mode $preflight
 
-    return $FullName.Substring($TemplateRoot.Length).TrimStart([char[]]'\\/')
-}
+New-Item -ItemType Directory -Path $BackupBase -Force | Out-Null
+$transactionRoot = Join-Path $BackupBase ((Get-Date -Format 'yyyyMMdd-HHmmss-fff') + "-$($Mode.ToLowerInvariant())-transaction")
+$transaction = New-FileTransaction $transactionRoot
+$ccusageBefore = if ($Mode -eq 'Global') { Get-CcusageState } else { $null }
+$contextState = $null
+$results = New-Object 'System.Collections.Generic.List[object]'
 
-function Invoke-RepositoryScript {
-    param([Parameter(Mandatory = $true)][string]$Name)
+try {
+    foreach ($target in $targets) { [void]$results.Add((Install-Target $target $transaction)) }
+    $external = $null
 
-    $path = Join-Path $ScriptRoot $Name
-    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-        throw "Required script is missing: $path"
-    }
+    if ($Mode -eq 'Global') {
+        $global = @($results | Where-Object Mode -eq 'Global' | Select-Object -First 1)[0]
+        $contextState = Set-Context7Key -Skip:$SkipContext7Key -PreviousManifest $global.Previous
+        $profilePath = $PROFILE.CurrentUserAllHosts
+        Save-TransactionFile $transaction $profilePath
+        $ccusage = & (Join-Path $ScriptRoot 'install-ccusage.ps1') -SkipPackageInstall:$SkipCcusageInstall -PassThru
 
-    & $path
-    exit $LASTEXITCODE
-}
+        $original = $ccusageBefore
+        $installedByPackage = (-not [bool]$ccusageBefore.Installed) -and (-not $SkipCcusageInstall)
+        if ($null -ne $global.Previous -and $null -ne $global.Previous.External -and $null -ne $global.Previous.External.Ccusage) {
+            $old = $global.Previous.External.Ccusage
+            $original = [pscustomobject]@{ Installed = [bool]$old.WasInstalledBefore; Version = [string]$old.PreviousVersion }
+            $installedByPackage = [bool]$old.InstalledByPackage
+        }
 
-function Select-InteractiveMode {
-    Write-Host ''
-    Write-Host 'Codex Settings Installer'
-    Write-Host '========================'
-    Write-Host '[1] Install global settings, MCP, ccusage, cs, and cdaily'
-    Write-Host '[2] Install Git project settings'
-    Write-Host '[3] Install CVS project settings'
-    Write-Host '[4] Backup current settings'
-    Write-Host '[5] Restore a backup'
-    Write-Host '[6] Update this settings repository'
-    Write-Host '[7] Uninstall managed settings'
-    Write-Host '[0] Exit'
-    Write-Host ''
-
-    $choice = Read-Host 'Select'
-    switch ($choice) {
-        '1' { return 'Global' }
-        '2' { return 'Git' }
-        '3' { return 'CVS' }
-        '4' { Invoke-RepositoryScript -Name 'backup.ps1' }
-        '5' { Invoke-RepositoryScript -Name 'restore.ps1' }
-        '6' { Invoke-RepositoryScript -Name 'update.ps1' }
-        '7' { Invoke-RepositoryScript -Name 'uninstall.ps1' }
-        '0' { exit 0 }
-        default { throw "Invalid selection: $choice" }
-    }
-}
-
-function Resolve-InstallTargets {
-    param(
-        [Parameter(Mandatory = $true)][string]$InstallMode,
-        [string]$RequestedProjectPath
-    )
-
-    if ($InstallMode -eq 'Global') {
-        return @(
-            [pscustomobject]@{
-                InstallMode = 'Global'
-                TemplateRoot = Join-Path $ScriptRoot 'templates\global'
-                TargetRoot = Join-Path $HOME '.codex'
-            },
-            [pscustomobject]@{
-                InstallMode = 'GlobalSkills'
-                TemplateRoot = Join-Path $ScriptRoot 'templates\user-skills'
-                TargetRoot = Join-Path $HOME '.agents\skills'
+        $external = [ordered]@{
+            PowerShellProfile = [ordered]@{ Path = $profilePath; ExistedBefore = [bool]$ccusage.ProfileExistedBefore }
+            Ccusage = [ordered]@{
+                Managed = $true; InstalledByPackage = $installedByPackage
+                WasInstalledBefore = [bool]$original.Installed; PreviousVersion = [string]$original.Version
+                CurrentVersion = [string]$ccusage.PackageAfter.Version; UsesLatest = $true
             }
-        )
-    }
-
-    if ([string]::IsNullOrWhiteSpace($RequestedProjectPath)) {
-        $RequestedProjectPath = Read-Host "Enter the $InstallMode project root"
-    }
-
-    if ([string]::IsNullOrWhiteSpace($RequestedProjectPath)) {
-        throw 'Project path is required.'
-    }
-
-    $resolvedProjectPath = (Resolve-Path -LiteralPath $RequestedProjectPath).Path
-    if (-not (Test-Path -LiteralPath $resolvedProjectPath -PathType Container)) {
-        throw "Project directory does not exist: $resolvedProjectPath"
-    }
-
-    if ($InstallMode -eq 'Git' -and -not (Test-Path -LiteralPath (Join-Path $resolvedProjectPath '.git'))) {
-        Write-Warning 'No .git marker was found at the selected project root.'
-    }
-
-    if ($InstallMode -eq 'CVS' -and -not (Test-Path -LiteralPath (Join-Path $resolvedProjectPath 'CVS'))) {
-        Write-Warning 'No CVS directory was found at the selected project root.'
-    }
-
-    return @(
-        [pscustomobject]@{
-            InstallMode = $InstallMode
-            TemplateRoot = Join-Path $ScriptRoot ("templates\{0}-project" -f $InstallMode.ToLowerInvariant())
-            TargetRoot = $resolvedProjectPath
+            Context7 = [ordered]@{
+                EnvironmentVariable = 'CONTEXT7_API_KEY'; CreatedByInstaller = [bool]$contextState.CreatedByInstaller
+                SecretStoredInRepository = $false
+            }
         }
-    )
-}
-
-function Install-Template {
-    param(
-        [Parameter(Mandatory = $true)][string]$InstallMode,
-        [Parameter(Mandatory = $true)][string]$TemplateRoot,
-        [Parameter(Mandatory = $true)][string]$TargetRoot
-    )
-
-    if (-not (Test-Path -LiteralPath $TemplateRoot -PathType Container)) {
-        throw "Template directory does not exist: $TemplateRoot"
     }
 
-    New-Item -ItemType Directory -Path $TargetRoot -Force | Out-Null
-    New-Item -ItemType Directory -Path $BackupBase -Force | Out-Null
-
-    $stamp = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
-    $backupRoot = Join-Path $BackupBase ("$stamp-$($InstallMode.ToLowerInvariant())")
-    $backupFilesRoot = Join-Path $backupRoot 'files'
-    New-Item -ItemType Directory -Path $backupFilesRoot -Force | Out-Null
-
-    $manifestEntries = @()
-    $backedUpCount = 0
-    $installedCount = 0
-
-    $templateFiles = Get-ChildItem -LiteralPath $TemplateRoot -Recurse -File
-    foreach ($sourceFile in $templateFiles) {
-        $relativePath = Get-RelativeTemplatePath -TemplateRoot $TemplateRoot -FullName $sourceFile.FullName
-        $destinationPath = Join-Path $TargetRoot $relativePath
-        $destinationDirectory = Split-Path -Parent $destinationPath
-
-        if (Test-Path -LiteralPath $destinationPath -PathType Leaf) {
-            $backupPath = Join-Path $backupFilesRoot $relativePath
-            New-Item -ItemType Directory -Path (Split-Path -Parent $backupPath) -Force | Out-Null
-            Copy-Item -LiteralPath $destinationPath -Destination $backupPath -Force
-            $backedUpCount++
-        }
-
-        New-Item -ItemType Directory -Path $destinationDirectory -Force | Out-Null
-        Copy-Item -LiteralPath $sourceFile.FullName -Destination $destinationPath -Force
-
-        $manifestEntries += [pscustomobject]@{
-            Path = $relativePath
-            Sha256 = (Get-FileHash -LiteralPath $destinationPath -Algorithm SHA256).Hash
-        }
-        $installedCount++
+    foreach ($result in $results) { Write-Manifest $result $transaction $(if ($result.Mode -eq 'Global') { $external } else { $null }) }
+    Save-TransactionMetadata $transaction @{
+        Mode = $Mode; Status = 'Completed'; CcusageBefore = $ccusageBefore
+        Context7KeyWasPresent = if ($null -eq $contextState) { $false } else { -not [string]::IsNullOrWhiteSpace([string]$contextState.UserBefore) }
+        Context7KeyCreatedNow = if ($null -eq $contextState) { $false } else { [bool]$contextState.CreatedNow }
     }
-
-    $manifestPath = Join-Path $TargetRoot '.codex-settings-manifest.json'
-    $manifest = [pscustomobject]@{
-        Version = 1
-        Mode = $InstallMode
-        InstalledAt = (Get-Date).ToString('o')
-        TargetRoot = $TargetRoot
-        Files = $manifestEntries
-    }
-    $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
-
-    $backupMetadata = [pscustomobject]@{
-        Version = 1
-        CreatedAt = (Get-Date).ToString('o')
-        Mode = $InstallMode
-        TargetRoot = $TargetRoot
-        FilesRoot = $backupFilesRoot
-        BackedUpFiles = $backedUpCount
-    }
-    $backupMetadata | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $backupRoot 'backup-meta.json') -Encoding UTF8
 
     Write-Host ''
-    Write-Host "Installed files : $installedCount"
-    Write-Host "Backed up files : $backedUpCount"
-    Write-Host "Target          : $TargetRoot"
-    Write-Host "Backup          : $backupRoot"
-}
-
-if ($Mode -eq 'Interactive') {
-    $Mode = Select-InteractiveMode
-}
-
-$targets = @(Resolve-InstallTargets -InstallMode $Mode -RequestedProjectPath $ProjectPath)
-foreach ($target in $targets) {
-    Install-Template `
-        -InstallMode $target.InstallMode `
-        -TemplateRoot $target.TemplateRoot `
-        -TargetRoot $target.TargetRoot
-}
-
-if ($Mode -eq 'Global') {
-    $pencilConfigurator = Join-Path $HOME '.codex\tools\configure-pencil-mcp.ps1'
-    if (Test-Path -LiteralPath $pencilConfigurator -PathType Leaf) {
-        & $pencilConfigurator
-
-        $globalRoot = Join-Path $HOME '.codex'
-        $manifestPath = Join-Path $globalRoot '.codex-settings-manifest.json'
-        $configPath = Join-Path $globalRoot 'config.toml'
-        if ((Test-Path -LiteralPath $manifestPath -PathType Leaf) -and
-            (Test-Path -LiteralPath $configPath -PathType Leaf)) {
-            $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-            foreach ($entry in $manifest.Files) {
-                if ([string]$entry.Path -eq 'config.toml') {
-                    $entry.Sha256 = (Get-FileHash -LiteralPath $configPath -Algorithm SHA256).Hash
-                }
-            }
-            $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
-        }
+    Write-Host 'Installation completed successfully.'
+    foreach ($result in $results) { Write-Host "Target: $($result.Root)"; Write-Host "Files : $($result.Files.Count)" }
+    Write-Host "Backup: $transactionRoot"
+    if ($Mode -eq 'CVS') { Write-Host 'Restart Codex and use /hooks to review and trust the CVS hook.' }
+    else { Write-Host 'Restart PowerShell and Codex to reload settings, commands, and MCP servers.' }
+} catch {
+    $reason = $_.Exception.Message
+    $rollbackErrors = New-Object 'System.Collections.Generic.List[string]'
+    try { Undo-FileTransaction $transaction } catch { [void]$rollbackErrors.Add("File rollback failed: $($_.Exception.Message)") }
+    if ($Mode -eq 'Global' -and $null -ne $ccusageBefore) {
+        try { Restore-CcusageState $ccusageBefore } catch { [void]$rollbackErrors.Add("ccusage rollback failed: $($_.Exception.Message)") }
     }
-
-    & (Join-Path $ScriptRoot 'install-ccusage.ps1')
+    if ($null -ne $contextState -and [bool]$contextState.CreatedNow) {
+        try {
+            [Environment]::SetEnvironmentVariable('CONTEXT7_API_KEY', $contextState.UserBefore, 'User')
+            [Environment]::SetEnvironmentVariable('CONTEXT7_API_KEY', $contextState.ProcessBefore, 'Process')
+        } catch { [void]$rollbackErrors.Add("Context7 rollback failed: $($_.Exception.Message)") }
+    }
+    $message = "Installation failed and rollback was attempted.`nReason: $reason"
+    if ($rollbackErrors.Count -gt 0) { $message += "`nRollback errors:`n- " + ($rollbackErrors -join "`n- ") }
+    throw $message
 }
-
-Write-Host ''
-Write-Host 'Restart Codex so it reloads AGENTS.md, config, rules, skills, and MCP servers.'
