@@ -58,6 +58,60 @@ codex-settings/
 
 安裝前會檢查命令、版本、目標目錄寫入權限、PowerShell Profile 寫入權限及內建 TOML 模板。
 
+## 明確模型設定
+
+全域 `config.toml` 使用完整模型名稱，不使用含糊的 `gpt-5.6`：
+
+| 用途 | 模型 | 推理強度 |
+|---|---|---|
+| 主要對話與預設執行 | `gpt-5.6-terra` | `high` |
+| 一般審查與驗證 | `gpt-5.6-terra` | 由主要設定使用 `high` |
+
+設定內容：
+
+```toml
+model = "gpt-5.6-terra"
+model_reasoning_effort = "high"
+review_model = "gpt-5.6-terra"
+```
+
+Terra 負責一般調查、規劃、驗證與重新規劃；Sol 不作為日常 Review Model，而是模型路由無法解決核心邏輯時的最後唯讀顧問。
+
+## 與 codex-model-router 相容性
+
+搭配 [Honguan/codex-model-router](https://github.com/Honguan/codex-model-router) 時，建議責任分工如下：
+
+| 設定擁有者 | 負責內容 |
+|---|---|
+| `codex-settings` | 全域主模型、審查模型、AGENTS、Rules、MCP、Hook、ccusage、PowerShell Profile |
+| `codex-model-router` | `terra.toml`、`luna.toml`、`sol.toml`、`model-router` Skill、`implementation-planning` Skill |
+
+模型路由使用的完整名稱：
+
+| Agent | 模型 | 推理強度 | 沙盒 |
+|---|---|---|---|
+| Terra | `gpt-5.6-terra` | `high` | `read-only` |
+| Luna | `gpt-5.6-luna` | `xhigh` | `workspace-write` |
+| Sol | `gpt-5.6-sol` | `medium` | `read-only` |
+
+建議安裝順序：
+
+```powershell
+./install.ps1 -Mode Global
+npx codex-model-router install --global
+npx codex-model-router doctor --global
+```
+
+不要在此組合中使用：
+
+```powershell
+npx codex-model-router install --global --set-default
+```
+
+原因是主模型已由 `codex-settings` 明確管理。Router 的一般安裝不修改主模型、AGENTS、Rules、Hooks、MCP、Shell Profile 或環境變數，因此沒有直接檔案衝突。
+
+若先安裝 Router，`codex-settings` 的安全合併會保留既有頂層模型設定；若先安裝 `codex-settings`，Router 一般安裝只新增自己的 Agents 與 Skills。`request-execution-optimizer` 已明確讓程式代理路由與 `implementation-planning` 由 Router 接管，不會重複建立平行計畫。
+
 Git 或 CVS 專案安裝成功後會自動登記到：
 
 ```text
