@@ -16,156 +16,132 @@ function Copy-DirectoryContent {
         [Parameter(Mandatory = $true)][string]$Destination
     )
 
-    if (-not (Test-Path -LiteralPath $Source -PathType Container)) {
-        return 0
-    }
-
+    if (-not (Test-Path -LiteralPath $Source -PathType Container)) { return 0 }
     New-Item -ItemType Directory -Path $Destination -Force | Out-Null
     $items = @(Get-ChildItem -LiteralPath $Source -Force)
     foreach ($item in $items) {
         Copy-Item -LiteralPath $item.FullName -Destination (Join-Path $Destination $item.Name) -Recurse -Force
     }
-
     return $items.Count
 }
 
-if ([string]::IsNullOrWhiteSpace($BackupPath)) {
-    $candidates = @(Get-ChildItem -LiteralPath $BackupRoot -Directory -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 10)
-    if ($candidates.Count -eq 0) {
-        throw "No backups were found under: $BackupRoot"
+$operationLock = $null
+try {
+    $operationLock = Enter-CodexSettingsLock
+    New-Item -ItemType Directory -Path $BackupRoot -Force | Out-Null
+    $recovered = @(Repair-PendingTransactions -BackupRoot $BackupRoot)
+    foreach ($path in $recovered) { Write-Warning "Recovered interrupted transaction: $path" }
+
+    if ([string]::IsNullOrWhiteSpace($BackupPath)) {
+        $candidates = @(Get-ChildItem -LiteralPath $BackupRoot -Directory -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 10)
+        if ($candidates.Count -eq 0) { throw "No backups were found under: $BackupRoot" }
+
+        Write-Host ''
+        Write-Host 'Available backups'
+        Write-Host '================='
+        for ($index = 0; $index -lt $candidates.Count; $index++) {
+            Write-Host ("[{0}] {1}" -f ($index + 1), $candidates[$index].FullName)
+        }
+        Write-Host '[0] Exit'
+        Write-Host ''
+
+        $selection = [int](Read-Host 'Select')
+        if ($selection -eq 0) { exit 0 }
+        if ($selection -lt 1 -or $selection -gt $candidates.Count) { throw 'Invalid selection.' }
+        $BackupPath = $candidates[$selection - 1].FullName
+    }
+
+    $BackupPath = (Resolve-Path -LiteralPath $BackupPath).Path
+    $metadataPath = Join-Path $BackupPath 'backup-meta.json'
+    if (-not (Test-Path -LiteralPath $metadataPath -PathType Leaf)) { throw "Backup metadata is missing: $metadataPath" }
+    $metadata = Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json -ErrorAction Stop
+
+    if (-not $Force) {
+        Write-Host ''
+        Write-Host "Backup : $BackupPath"
+        Write-Host "Created: $($metadata.CreatedAt)"
+        Write-Host "Mode   : $($metadata.Mode)"
+        $confirmation = Read-Host 'Restore this backup? [y/N]'
+        if ($confirmation -notin @('y', 'Y', 'yes', 'YES')) {
+            Write-Host 'Restore cancelled.'
+            exit 0
+        }
+    }
+
+    $restoredCount = 0
+    $warnings = New-Object 'System.Collections.Generic.List[string]'
+
+    if ($metadata.PSObject.Properties.Name -contains 'Files' -and $null -ne $metadata.Files) {
+        $entries = @($metadata.Files)
+        for ($index = $entries.Count - 1; $index -ge 0; $index--) {
+            $entry = $entries[$index]
+            $targetPath = [string]$entry.Path
+            if ([bool]$entry.Existed) {
+                $backupFile = [string]$entry.BackupPath
+                if (-not (Test-Path -LiteralPath $backupFile -PathType Leaf)) { throw "Transaction backup file is missing: $backupFile" }
+                Copy-FileAtomic -Source $backupFile -Destination $targetPath
+                $restoredCount++
+            } else {
+                Remove-Item -LiteralPath $targetPath -Force -ErrorAction SilentlyContinue
+            }
+        }
+        Restore-ExternalTransactionState -Metadata $metadata
+    } elseif ($metadata.PSObject.Properties.Name -contains 'FilesRoot') {
+        $restoredCount += Copy-DirectoryContent -Source ([string]$metadata.FilesRoot) -Destination ([string]$metadata.TargetRoot)
+        [void]$warnings.Add('Legacy uninstall backup restored managed files only; older metadata did not record all external state.')
+    } else {
+        $globalCodex = Join-Path $BackupPath 'global\.codex'
+        $globalAgents = Join-Path $BackupPath 'global\.agents'
+        $project = Join-Path $BackupPath 'project'
+
+        $restoredCount += Copy-DirectoryContent -Source $globalCodex -Destination (Join-Path $HOME '.codex')
+        $restoredCount += Copy-DirectoryContent -Source $globalAgents -Destination (Join-Path $HOME '.agents')
+        if (Test-Path -LiteralPath $project -PathType Container) {
+            $projectRoot = [string]$metadata.ProjectRoot
+            if ([string]::IsNullOrWhiteSpace($projectRoot)) { throw 'ProjectRoot is missing from backup metadata.' }
+            $restoredCount += Copy-DirectoryContent -Source $project -Destination $projectRoot
+        }
+    }
+
+    if ($metadata.PSObject.Properties.Name -contains 'Global' -and $null -ne $metadata.Global) {
+        $registryMetadata = $metadata.Global.ProjectRegistry
+        if ($null -ne $registryMetadata) {
+            $registryPath = [string]$registryMetadata.Path
+            if ([string]::IsNullOrWhiteSpace($registryPath)) { $registryPath = Get-CodexProjectRegistryPath }
+            if ([bool]$registryMetadata.Existed) {
+                $registryBackup = Join-Path $BackupPath ([string]$registryMetadata.BackupRelativePath)
+                if (-not (Test-Path -LiteralPath $registryBackup -PathType Leaf)) { throw "Project registry backup is missing: $registryBackup" }
+                Copy-FileAtomic -Source $registryBackup -Destination $registryPath
+                $restoredCount++
+            } else {
+                Remove-Item -LiteralPath $registryPath -Force -ErrorAction SilentlyContinue
+            }
+        }
+
+        $profileMetadata = $metadata.Global.PowerShellProfile
+        if ($null -ne $profileMetadata) {
+            $profilePath = [string]$profileMetadata.Path
+            if ([bool]$profileMetadata.Existed) {
+                $profileBackup = Join-Path $BackupPath ([string]$profileMetadata.BackupRelativePath)
+                if (-not (Test-Path -LiteralPath $profileBackup -PathType Leaf)) { throw "PowerShell profile backup is missing: $profileBackup" }
+                Copy-FileAtomic -Source $profileBackup -Destination $profilePath
+                $restoredCount++
+            } else {
+                Remove-Item -LiteralPath $profilePath -Force -ErrorAction SilentlyContinue
+            }
+        }
+
+        if ($null -ne $metadata.Global.Ccusage) { Restore-CcusageState -State $metadata.Global.Ccusage }
+        if ($null -ne $metadata.Global.Context7 -and [bool]$metadata.Global.Context7.KeyPresent -and
+            [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable('CONTEXT7_API_KEY', 'User'))) {
+            [void]$warnings.Add('The manual backup detected a Context7 key but did not copy it. Set CONTEXT7_API_KEY again manually.')
+        }
     }
 
     Write-Host ''
-    Write-Host 'Available backups'
-    Write-Host '================='
-    for ($index = 0; $index -lt $candidates.Count; $index++) {
-        Write-Host ("[{0}] {1}" -f ($index + 1), $candidates[$index].FullName)
-    }
-    Write-Host '[0] Exit'
-    Write-Host ''
-
-    $selection = [int](Read-Host 'Select')
-    if ($selection -eq 0) { exit 0 }
-    if ($selection -lt 1 -or $selection -gt $candidates.Count) { throw 'Invalid selection.' }
-    $BackupPath = $candidates[$selection - 1].FullName
+    Write-Host "Restored items : $restoredCount"
+    foreach ($warning in $warnings) { Write-Warning $warning }
+    Write-Host 'Restart PowerShell and Codex to reload the restored settings.'
+} finally {
+    Exit-CodexSettingsLock -Lock $operationLock
 }
-
-$BackupPath = (Resolve-Path -LiteralPath $BackupPath).Path
-$metadataPath = Join-Path $BackupPath 'backup-meta.json'
-if (-not (Test-Path -LiteralPath $metadataPath -PathType Leaf)) {
-    throw "Backup metadata is missing: $metadataPath"
-}
-$metadata = Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json -ErrorAction Stop
-
-if (-not $Force) {
-    Write-Host ''
-    Write-Host "Backup : $BackupPath"
-    Write-Host "Created: $($metadata.CreatedAt)"
-    Write-Host "Mode   : $($metadata.Mode)"
-    $confirmation = Read-Host 'Restore this backup? [y/N]'
-    if ($confirmation -notin @('y', 'Y', 'yes', 'YES')) {
-        Write-Host 'Restore cancelled.'
-        exit 0
-    }
-}
-
-$restoredCount = 0
-$warnings = New-Object 'System.Collections.Generic.List[string]'
-
-if ($metadata.PSObject.Properties.Name -contains 'Files' -and $null -ne $metadata.Files) {
-    foreach ($entry in @($metadata.Files)) {
-        $targetPath = [string]$entry.Path
-        if ([bool]$entry.Existed) {
-            $backupFile = [string]$entry.BackupPath
-            if (-not (Test-Path -LiteralPath $backupFile -PathType Leaf)) {
-                throw "Transaction backup file is missing: $backupFile"
-            }
-            New-Item -ItemType Directory -Path (Split-Path -Parent $targetPath) -Force | Out-Null
-            Copy-Item -LiteralPath $backupFile -Destination $targetPath -Force
-            $restoredCount++
-        } else {
-            Remove-Item -LiteralPath $targetPath -Force -ErrorAction SilentlyContinue
-        }
-    }
-
-    if ($metadata.PSObject.Properties.Name -contains 'CcusageBefore' -and $null -ne $metadata.CcusageBefore) {
-        Restore-CcusageState -State $metadata.CcusageBefore
-    }
-
-    if ($metadata.PSObject.Properties.Name -contains 'Context7KeyCreatedNow' -and [bool]$metadata.Context7KeyCreatedNow -and
-        -not [bool]$metadata.Context7KeyWasPresent) {
-        [Environment]::SetEnvironmentVariable('CONTEXT7_API_KEY', $null, 'User')
-        [Environment]::SetEnvironmentVariable('CONTEXT7_API_KEY', $null, 'Process')
-    } elseif ($metadata.PSObject.Properties.Name -contains 'Context7KeyWasPresent' -and [bool]$metadata.Context7KeyWasPresent -and
-        [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable('CONTEXT7_API_KEY', 'User'))) {
-        [void]$warnings.Add('This transaction backup detected a Context7 key, but the secret was not copied. Set CONTEXT7_API_KEY again manually.')
-    }
-} elseif ($metadata.PSObject.Properties.Name -contains 'FilesRoot') {
-    $restoredCount += Copy-DirectoryContent -Source ([string]$metadata.FilesRoot) -Destination ([string]$metadata.TargetRoot)
-} else {
-    $globalCodex = Join-Path $BackupPath 'global\.codex'
-    $globalAgents = Join-Path $BackupPath 'global\.agents'
-    $project = Join-Path $BackupPath 'project'
-
-    $restoredCount += Copy-DirectoryContent -Source $globalCodex -Destination (Join-Path $HOME '.codex')
-    $restoredCount += Copy-DirectoryContent -Source $globalAgents -Destination (Join-Path $HOME '.agents')
-
-    if (Test-Path -LiteralPath $project -PathType Container) {
-        $projectRoot = [string]$metadata.ProjectRoot
-        if ([string]::IsNullOrWhiteSpace($projectRoot)) {
-            throw 'ProjectRoot is missing from backup metadata.'
-        }
-        $restoredCount += Copy-DirectoryContent -Source $project -Destination $projectRoot
-    }
-}
-
-if ($metadata.PSObject.Properties.Name -contains 'Global' -and $null -ne $metadata.Global) {
-    $registryMetadata = $metadata.Global.ProjectRegistry
-    if ($null -ne $registryMetadata) {
-        $registryPath = [string]$registryMetadata.Path
-        if ([string]::IsNullOrWhiteSpace($registryPath)) { $registryPath = Get-CodexProjectRegistryPath }
-        if ([bool]$registryMetadata.Existed) {
-            $registryBackup = Join-Path $BackupPath ([string]$registryMetadata.BackupRelativePath)
-            if (-not (Test-Path -LiteralPath $registryBackup -PathType Leaf)) {
-                throw "Project registry backup is missing: $registryBackup"
-            }
-            New-Item -ItemType Directory -Path (Split-Path -Parent $registryPath) -Force | Out-Null
-            Copy-Item -LiteralPath $registryBackup -Destination $registryPath -Force
-            $restoredCount++
-        } else {
-            Remove-Item -LiteralPath $registryPath -Force -ErrorAction SilentlyContinue
-        }
-    }
-
-    $profileMetadata = $metadata.Global.PowerShellProfile
-    if ($null -ne $profileMetadata) {
-        $profilePath = [string]$profileMetadata.Path
-        if ([bool]$profileMetadata.Existed) {
-            $profileBackup = Join-Path $BackupPath ([string]$profileMetadata.BackupRelativePath)
-            if (-not (Test-Path -LiteralPath $profileBackup -PathType Leaf)) {
-                throw "PowerShell profile backup is missing: $profileBackup"
-            }
-            New-Item -ItemType Directory -Path (Split-Path -Parent $profilePath) -Force | Out-Null
-            Copy-Item -LiteralPath $profileBackup -Destination $profilePath -Force
-            $restoredCount++
-        } else {
-            Remove-Item -LiteralPath $profilePath -Force -ErrorAction SilentlyContinue
-        }
-    }
-
-    if ($null -ne $metadata.Global.Ccusage) {
-        Restore-CcusageState -State $metadata.Global.Ccusage
-    }
-
-    if ($null -ne $metadata.Global.Context7 -and [bool]$metadata.Global.Context7.KeyPresent -and
-        [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable('CONTEXT7_API_KEY', 'User'))) {
-        [void]$warnings.Add('The backup had a Context7 key, but secrets are not backed up. Set CONTEXT7_API_KEY again manually.')
-    }
-}
-
-Write-Host ''
-Write-Host "Restored items : $restoredCount"
-foreach ($warning in $warnings) {
-    Write-Warning $warning
-}
-Write-Host 'Restart PowerShell and Codex to reload the restored settings.'
