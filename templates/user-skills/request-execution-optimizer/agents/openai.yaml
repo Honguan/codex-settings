@@ -1,0 +1,7 @@
+interface:
+  display_name: "請求執行最佳化"
+  short_description: "將請求整理為最小可驗證契約並直接執行"
+  default_prompt: "請套用請求執行最佳化，保留所有限制並直接完成任務。"
+
+policy:
+  allow_implicit_invocation: true
