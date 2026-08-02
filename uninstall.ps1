@@ -241,7 +241,8 @@ try {
     if ($Mode -eq 'Global') {
         $targets = @(
             [pscustomobject]@{ Root = Join-Path $HOME '.codex'; Label = 'global'; Unregister = $false },
-            [pscustomobject]@{ Root = Join-Path $HOME '.agents\skills'; Label = 'global-skills'; Unregister = $false }
+            [pscustomobject]@{ Root = Join-Path $HOME '.codex\skills'; Label = 'global-skills'; Unregister = $false },
+            [pscustomobject]@{ Root = Join-Path $HOME '.agents\skills'; Label = 'legacy-global-skills'; Unregister = $false }
         )
     } else {
         if ([string]::IsNullOrWhiteSpace($ProjectPath)) { $ProjectPath = Read-Host 'Enter the project root' }

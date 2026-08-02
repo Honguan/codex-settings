@@ -1,6 +1,7 @@
 # Primary interactive and default model. This matches codex-model-router Terra.
 model = "gpt-5.6-terra"
 model_reasoning_effort = "high"
+personality = "pragmatic"
 approval_policy = "on-request"
 sandbox_mode = "workspace-write"
 

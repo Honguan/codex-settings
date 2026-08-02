@@ -37,6 +37,14 @@ function Select-InstallStyle {
     }
 }
 
+function Select-OptionalGlobalSkill {
+    Write-Host ''
+    Write-Host 'Optional global skill'
+    Write-Host 'request-execution-optimizer is not installed by default.'
+    $selection = Read-Host 'Install request-execution-optimizer? [y/N]'
+    return $selection -in @('y', 'Y', 'yes', 'YES')
+}
+
 function Read-ProjectPaths([string]$Prompt) {
     $value = [string](Read-Host $Prompt)
     if ([string]::IsNullOrWhiteSpace($value)) { return @() }
@@ -105,11 +113,15 @@ function Test-Prerequisites([string]$InstallMode, [string]$TargetPath) {
     if ($shape.Duplicates.Count -gt 0) { throw "Bundled config.toml is invalid: $($shape.Duplicates -join ', ')" }
 }
 
-function Resolve-Targets([string]$InstallMode, [string[]]$RequestedPath) {
+function Resolve-Targets([string]$InstallMode, [string[]]$RequestedPath, [switch]$InstallRequestExecutionOptimizer) {
     $targets = New-Object 'System.Collections.Generic.List[object]'
     if ($InstallMode -eq 'Global') {
         [void]$targets.Add([pscustomobject]@{ Mode = 'Global'; Template = Join-Path $ScriptRoot 'templates\global'; Root = Join-Path $HOME '.codex' })
-        [void]$targets.Add([pscustomobject]@{ Mode = 'GlobalSkills'; Template = Join-Path $ScriptRoot 'templates\user-skills'; Root = Join-Path $HOME '.agents\skills' })
+        $skillsRoot = Join-Path $HOME '.codex\skills'
+        $skillManifest = Join-Path $skillsRoot '.codex-settings-manifest.json'
+        if ($InstallRequestExecutionOptimizer -or (Test-Path -LiteralPath $skillManifest -PathType Leaf)) {
+            [void]$targets.Add([pscustomobject]@{ Mode = 'GlobalSkills'; Template = Join-Path $ScriptRoot 'templates\user-skills'; Root = $skillsRoot })
+        }
     } elseif ($RequestedPath.Count -eq 0) {
         $RequestedPath = @(Read-ProjectPaths "Enter $InstallMode project paths (semicolon separated)")
     }

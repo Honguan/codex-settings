@@ -5,6 +5,7 @@ param(
     [string[]]$ProjectPath,
     [switch]$SkipContext7Key,
     [switch]$SkipCcusageInstall,
+    [switch]$InstallRequestExecutionOptimizer,
     [switch]$Force,
     [ValidateSet('Merge', 'Replace')]
     [string]$InstallStyle = 'Merge'
@@ -26,8 +27,9 @@ if ($Mode -eq 'Interactive') {
             switch ($selection) {
                 'Global' {
                     $style = Select-InstallStyle
+                    $installRequestExecutionOptimizer = Select-OptionalGlobalSkill
                     $paths = Select-GlobalProjectPaths
-                    & $PSCommandPath -Mode Global -InstallStyle $style -ProjectPath $paths
+                    & $PSCommandPath -Mode Global -InstallStyle $style -ProjectPath $paths -InstallRequestExecutionOptimizer:$installRequestExecutionOptimizer
                 }
                 'Git' {
                     $style = Select-InstallStyle
@@ -55,7 +57,7 @@ if ($Mode -eq 'Interactive') {
 
 if ($Force) { $InstallStyle = 'Replace' }
 $Force = $InstallStyle -eq 'Replace'
-$targets = @(Resolve-Targets $Mode $ProjectPath)
+$targets = @(Resolve-Targets $Mode $ProjectPath -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer)
 $preflight = if ($Mode -eq 'Global') { Join-Path $HOME '.codex' } else { $targets[0].Root }
 Test-Prerequisites $Mode $preflight
 foreach ($target in $targets) { Test-DirectoryWritable -Path $target.Root }

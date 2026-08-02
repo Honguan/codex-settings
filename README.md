@@ -31,6 +31,9 @@ Windows 上的 Codex 全域、Git 專案與 CVS 專案設定管理工具。
 # 全域設定、MCP、ccusage、cs、cdaily
 ./install.ps1 -Mode Global
 
+# 另外選用安裝 request-execution-optimizer 全域技能
+./install.ps1 -Mode Global -InstallRequestExecutionOptimizer
+
 # Git 專案
 ./install.ps1 -Mode Git -ProjectPath 'E:\Git\MyProject'
 
@@ -161,6 +164,7 @@ Git／CVS 專案安裝成功後會登記到：
 - codex-settings Manifest
 - codex-model-router 狀態與設定備份檔
 - `~/.agents/skills`
+- `~/.codex/skills`
 - 已登記專案清單
 - PowerShell 7 Profile
 - ccusage 安裝狀態

@@ -67,7 +67,7 @@ if ($Mode -eq 'Global' -or $Mode -eq 'All') {
     $globalTarget = Join-Path $backupRoot 'global\.codex'
 
     foreach ($name in @(
-        'AGENTS.md', 'AGENTS.override.md', 'config.toml', 'rules', 'agents', 'hooks.json', 'hooks', 'tools',
+        'AGENTS.md', 'AGENTS.override.md', 'config.toml', 'rules', 'agents', 'skills', 'hooks.json', 'hooks', 'tools',
         '.codex-settings-manifest.json', 'model-router-state.json', 'config.toml.codex-model-router.bak'
     )) {
         $itemCount += Copy-ExistingItem -Source (Join-Path $codexHome $name) -Destination (Join-Path $globalTarget $name)
@@ -90,7 +90,7 @@ if ($Mode -eq 'Global' -or $Mode -eq 'All') {
     $ccusage = Get-CcusageState
     $metadata.Global = [ordered]@{
         BackedUpCodexItems = @(
-            'AGENTS.md', 'AGENTS.override.md', 'config.toml', 'rules', 'agents', 'hooks.json', 'hooks', 'tools',
+            'AGENTS.md', 'AGENTS.override.md', 'config.toml', 'rules', 'agents', 'skills', 'hooks.json', 'hooks', 'tools',
             '.codex-settings-manifest.json', 'model-router-state.json', 'config.toml.codex-model-router.bak'
         )
         ProjectRegistry = [ordered]@{
