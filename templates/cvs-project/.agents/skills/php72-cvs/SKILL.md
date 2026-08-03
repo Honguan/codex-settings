@@ -13,6 +13,7 @@ description: Use for focused maintenance of legacy PHP 7.2 and MySQL 8.x codebas
 6. Do not use Git or GitHub CLI.
 7. Prefer CVS read-only commands before any write operation.
 8. Never run or propose `cvs add`; leave new-file registration to the user.
-9. Make the smallest change that satisfies the request.
-10. Run only validation relevant to the modified code.
-11. Report modified files, implemented logic, checks, and unresolved limitations.
+9. Never run or propose manual CRLF conversion commands; the CVS PostToolUse Hook is the single line-ending normalizer.
+10. Make the smallest change that satisfies the request.
+11. Run only validation relevant to the modified code.
+12. Report modified files, implemented logic, checks, and unresolved limitations.

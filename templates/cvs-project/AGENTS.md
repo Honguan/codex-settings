@@ -20,6 +20,8 @@ These rules supplement the global rules.
 - Never run an unscoped `cvs update` from the repository root.
 - Never run, propose, schedule, or mark `cvs add` as completed.
 - Leave new files untracked and report CVS addition as a user-managed follow-up.
+- CRLF normalization is owned exclusively by `.codex/hooks/crlf-updated-files.ps1`.
+- Never run or propose a manual line-ending conversion command; rely on the PostToolUse Hook after edits.
 - Begin with read-only inspection and use the smallest target required by the request.
 
 ## CVS Update

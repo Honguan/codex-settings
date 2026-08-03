@@ -122,24 +122,22 @@ try {
         }
     }
 
-    if ($Flush -and (Test-Path -LiteralPath $stateFile -PathType Leaf)) {
-        foreach ($line in [IO.File]::ReadAllLines($stateFile)) { Add-Target $line }
-    }
-
     $convertedCount = 0
-    foreach ($target in $targets) {
-        if (Convert-ToCrlf -Path $target) { $convertedCount++ }
-    }
-
-    if (-not $Flush -and $targets.Count -gt 0) {
-        $allTargets = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
-        if (Test-Path -LiteralPath $stateFile -PathType Leaf) {
-            foreach ($line in [IO.File]::ReadAllLines($stateFile)) {
-                if (-not [string]::IsNullOrWhiteSpace($line)) { [void]$allTargets.Add($line) }
-            }
+    if (-not $Flush) {
+        foreach ($target in $targets) {
+            if (Convert-ToCrlf -Path $target) { $convertedCount++ }
         }
-        foreach ($target in $targets) { [void]$allTargets.Add($target) }
-        [IO.File]::WriteAllLines($stateFile, @($allTargets))
+
+        if ($targets.Count -gt 0) {
+            $allTargets = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+            if (Test-Path -LiteralPath $stateFile -PathType Leaf) {
+                foreach ($line in [IO.File]::ReadAllLines($stateFile)) {
+                    if (-not [string]::IsNullOrWhiteSpace($line)) { [void]$allTargets.Add($line) }
+                }
+            }
+            foreach ($target in $targets) { [void]$allTargets.Add($target) }
+            [IO.File]::WriteAllLines($stateFile, @($allTargets))
+        }
     }
 
     if ($Flush) {
