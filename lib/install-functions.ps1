@@ -182,6 +182,34 @@ function Get-Strategy([string]$ModeName, [string]$RelativePath) {
     return [pscustomobject]@{ Name = 'replace'; Start = $null; End = $null }
 }
 
+function Update-GitIgnore([string]$Root, $Transaction, [string[]]$ManagedPaths) {
+    $ignorePath = Join-Path $Root '.gitignore'
+    $state = Get-TextFileState $ignorePath
+    $paths = New-Object 'System.Collections.Generic.List[string]'
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($managedPath in @($ManagedPaths)) {
+        if ([string]::IsNullOrWhiteSpace($managedPath)) { continue }
+        $rule = '/' + $managedPath.Replace('\', '/').TrimStart('/')
+        if ($rule -ne '/.gitignore' -and $seen.Add($rule)) { [void]$paths.Add($rule) }
+    }
+    if ($paths.Count -eq 0) { return }
+
+    $existingRules = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($line in ($state.Content -split "`r?`n")) { [void]$existingRules.Add($line.Trim()) }
+    $missingRules = @($paths | Where-Object { -not $existingRules.Contains($_) })
+    if ($missingRules.Count -eq 0) { return }
+
+    Save-TransactionFile -Transaction $Transaction -Path $ignorePath
+    $header = '# Files managed locally by codex-settings'
+    $addition = if ($existingRules.Contains($header)) { $missingRules -join $state.NewLine } else { $header + $state.NewLine + ($missingRules -join $state.NewLine) }
+    $content = if ([string]::IsNullOrWhiteSpace($state.Content)) {
+        $addition + $state.NewLine
+    } else {
+        $state.Content.TrimEnd() + $state.NewLine + $state.NewLine + $addition + $state.NewLine
+    }
+    Write-TextFileState -Path $ignorePath -Content $content -Encoding $state.Encoding
+}
+
 function Install-Target($Target, $Transaction, [switch]$Force) {
     if (-not (Test-Path -LiteralPath $Target.Template -PathType Container)) { throw "Template missing: $($Target.Template)" }
     New-Item -ItemType Directory -Path $Target.Root -Force | Out-Null
@@ -243,6 +271,11 @@ function Install-Target($Target, $Transaction, [switch]$Force) {
                 Remove-Item $obsolete -Force
             }
         }
+    }
+
+    if ($Target.Mode -eq 'Git') {
+        $managedPaths = @($entries | ForEach-Object Path) + '.codex-settings-manifest.json'
+        Update-GitIgnore -Root $Target.Root -Transaction $Transaction -ManagedPaths $managedPaths
     }
 
     return [pscustomobject]@{ Mode = $Target.Mode; Root = $Target.Root; Previous = $previous; Files = $entries.ToArray() }

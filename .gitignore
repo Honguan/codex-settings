@@ -26,3 +26,8 @@ tmp/
 Thumbs.db
 
 manual-backup
+
+# Files managed locally by codex-settings
+/.codex-settings-manifest.json
+/.codex/rules/default.rules
+/AGENTS.md

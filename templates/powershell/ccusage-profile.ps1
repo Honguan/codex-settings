@@ -81,8 +81,8 @@ function global:cs {
         if ($null -eq $Models) { return '' }
         if ($Models -is [string]) { return $Models }
         $names = @($Models.PSObject.Properties | ForEach-Object Name)
-        if ($names.Count -gt 0) { return $names -join ', ' }
-        return @($Models) -join ', '
+        if ($names.Count -gt 0) { return $names -join [Environment]::NewLine }
+        return @($Models) -join [Environment]::NewLine
     }
 
     function Get-SessionPath($Row) {
@@ -137,49 +137,88 @@ function global:cs {
         catch { return '0' }
     }
 
+    function Format-TokenCount($Number) {
+        try {
+            $value = [double]$Number
+            $units = @(
+                [pscustomobject]@{ Limit = 1000000000; Divisor = 1000000000; Suffix = 'B' },
+                [pscustomobject]@{ Limit = 1000000; Divisor = 1000000; Suffix = 'M' },
+                [pscustomobject]@{ Limit = 1000; Divisor = 1000; Suffix = 'K' }
+            )
+            foreach ($unit in $units) {
+                if ([Math]::Abs($value) -lt $unit.Limit) { continue }
+                $scaled = $value / $unit.Divisor
+                $decimals = if ([Math]::Abs($scaled) -ge 100) { 0 } elseif ([Math]::Abs($scaled) -ge 10) { 1 } else { 2 }
+                $text = $scaled.ToString("F$decimals", [Globalization.CultureInfo]::InvariantCulture).TrimEnd('0').TrimEnd('.')
+                return "$text$($unit.Suffix)"
+            }
+            return ([long][Math]::Round($value)).ToString([Globalization.CultureInfo]::InvariantCulture)
+        } catch { return '0' }
+    }
+
     function Format-Cost($Cost) {
         try { return '$' + ([double]$Cost).ToString('N2', [Globalization.CultureInfo]::InvariantCulture) }
         catch { return '$0.00' }
     }
 
+    function Get-TableWidth([string]$Header, [object[]]$Rows, [string]$Property) {
+        $width = $Header.Length
+        foreach ($row in @($Rows)) {
+            foreach ($line in [regex]::Split([string]$row.PSObject.Properties[$Property].Value, "`r?`n")) {
+                $width = [Math]::Max($width, $line.Length)
+            }
+        }
+        return $width
+    }
+
+    function New-TableBorder([string]$Left, [string]$Middle, [string]$Right, [int[]]$Widths) {
+        $segments = @($Widths | ForEach-Object { (('-' * ($_ + 2)) -join '') })
+        return $Left + ($segments -join $Middle) + $Right
+    }
+
+    function Write-TableRow([object[]]$Values, [int[]]$Widths) {
+        $lineGroups = New-Object 'System.Collections.Generic.List[object]'
+        $height = 1
+        foreach ($value in $Values) {
+            $lines = @([regex]::Split([string]$value, "`r?`n"))
+            [void]$lineGroups.Add($lines)
+            $height = [Math]::Max($height, $lines.Count)
+        }
+        for ($lineIndex = 0; $lineIndex -lt $height; $lineIndex++) {
+            $cells = New-Object 'System.Collections.Generic.List[string]'
+            for ($column = 0; $column -lt $Widths.Count; $column++) {
+                $lines = @($lineGroups[$column])
+                $text = if ($lineIndex -lt $lines.Count) { [string]$lines[$lineIndex] } else { '' }
+                [void]$cells.Add($text.PadRight($Widths[$column]))
+            }
+            Write-Host ('| ' + ($cells -join ' | ') + ' |')
+        }
+    }
+
     function Show-Details([object[]]$Rows) {
-        @($Rows | ForEach-Object {
+        $tableRows = @($Rows | ForEach-Object {
             [pscustomobject][ordered]@{
                 'Session ID'   = Format-SessionId (Get-SessionId $_)
                 Models         = Get-Models $_.models
-                Input          = Format-Number $_.inputTokens
-                Output         = Format-Number $_.outputTokens
-                Reasoning      = Format-Number $_.reasoningOutputTokens
-                'Cache Read'   = Format-Number $_.cacheReadTokens
-                'Total Tokens' = Format-Number $_.totalTokens
-                'Cost (USD)'   = Format-Cost $_.costUSD
-                Time           = if ((Get-Activity $_) -eq [DateTimeOffset]::MinValue) { '' } else { (Get-Activity $_).ToLocalTime().ToString('yyyy-MM-dd HH:mm') }
+                In             = Format-TokenCount $_.inputTokens
+                Out            = Format-TokenCount $_.outputTokens
+                Think          = Format-TokenCount $_.reasoningOutputTokens
+                Cache          = Format-TokenCount $_.cacheReadTokens
+                Total          = Format-TokenCount $_.totalTokens
+                Cost           = Format-Cost $_.costUSD
+                Time           = if ((Get-Activity $_) -eq [DateTimeOffset]::MinValue) { '' } else { (Get-Activity $_).ToLocalTime().ToString('MM-dd HH:mm') }
             }
-        }) | Format-Table -AutoSize | Out-Host
-    }
+        })
+        $columns = @('Session ID', 'Models', 'In', 'Out', 'Think', 'Cache', 'Total', 'Cost', 'Time')
+        $widths = @($columns | ForEach-Object { Get-TableWidth -Header $_ -Rows $tableRows -Property $_ })
 
-    function Select-Rows([object[]]$Records) {
-        $Records | Select-Object ID, Title, Models, Time | Format-Table -AutoSize -Wrap | Out-Host
-        Write-Host 'Select: 1,3,5-7 or 1 3 5-7. Press Enter to select all.'
-        while ($true) {
-            $answer = ([string](Read-Host 'Enter ID numbers')).Trim()
-            if (-not $answer) { return @($Records.Row) }
-            $numbers = New-Object 'System.Collections.Generic.HashSet[int]'
-            foreach ($part in ($answer -split '[,\s]+')) {
-                if ($part -match '^(\d+)-(\d+)$') {
-                    $from = [int]$matches[1]
-                    $to = [int]$matches[2]
-                    if ($from -gt $to) { $temporary = $from; $from = $to; $to = $temporary }
-                    $from = [Math]::Max(1, $from)
-                    $to = [Math]::Min($Records.Count, $to)
-                    for ($number = $from; $number -le $to; $number++) { [void]$numbers.Add($number) }
-                } elseif ($part -match '^\d+$' -and [int]$part -ge 1 -and [int]$part -le $Records.Count) {
-                    [void]$numbers.Add([int]$part)
-                }
-            }
-            $selected = @($Records | Where-Object { $numbers.Contains([int]$_.ID) } | ForEach-Object Row)
-            if ($selected.Count -gt 0) { return $selected }
-            Write-Host 'No valid IDs. Please try again.' -ForegroundColor Yellow
+        Write-Host (New-TableBorder '+' '+' '+' $widths)
+        Write-TableRow -Values $columns -Widths $widths
+        Write-Host (New-TableBorder '+' '+' '+' $widths)
+        foreach ($row in $tableRows) {
+            $values = @($columns | ForEach-Object { $row.PSObject.Properties[$_].Value })
+            Write-TableRow -Values $values -Widths $widths
+            Write-Host (New-TableBorder '+' '+' '+' $widths)
         }
     }
 
