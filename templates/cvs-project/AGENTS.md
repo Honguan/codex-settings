@@ -18,6 +18,8 @@ These rules supplement the global rules.
 - Never expose or place CVS credentials in commands, logs, prompts, environment variables, sandbox files, or repository files.
 - Always specify an explicit CVS file or directory target.
 - Never run an unscoped `cvs update` from the repository root.
+- Never run, propose, schedule, or mark `cvs add` as completed.
+- Leave new files untracked and report CVS addition as a user-managed follow-up.
 - Begin with read-only inspection and use the smallest target required by the request.
 
 ## CVS Update
@@ -66,8 +68,9 @@ Stop immediately when the preview or result contains `C`, an error, an unexpecte
 
 ## Final Response
 
-- Output English only.
+- Use Traditional Chinese only unless the user explicitly requests another language.
+- Keep technical names, commands, file paths, code, and CVS status values in their original form.
 - Do not output unchanged code, analysis, diffs, command logs, or unrelated explanations.
-- List each modified file as: `Updated <absolute Windows path>:1`.
-- End with: `Note: <clear summary within 50 characters>`.
-- If no files were modified, output: `No files modified.`
+- List each modified file as a Markdown link using the file name as the label and the absolute Windows path as the target, for example: `[dbGameLevel.php](e:/CVS/Marathon/db/dbGameLevel.php)`。不要加上 `Updated` 前綴或行號。
+- End with: `備註：<50 字內摘要>`。
+- If no files were modified, output: `未修改檔案。`

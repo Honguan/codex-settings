@@ -37,19 +37,26 @@ prefix_rule(
 
 # 6. Confirm working-copy mutations.
 prefix_rule(
+    pattern = [["cvs", "cvs.exe"], ["add"]],
+    decision = "forbidden",
+    justification = "New-file CVS registration is completed by the user, not Codex.",
+)
+
+# 7. Confirm working-copy mutations.
+prefix_rule(
     pattern = [["cvs", "cvs.exe"], ["update", "checkout", "co", "release"]],
     decision = "prompt",
     justification = "Confirm operations that can change the CVS working copy.",
 )
 
-# 7. Confirm repository mutations.
+# 8. Confirm repository mutations except cvs add.
 prefix_rule(
-    pattern = [["cvs", "cvs.exe"], ["commit", "ci", "add", "remove", "rm", "tag", "rtag", "import"]],
+    pattern = [["cvs", "cvs.exe"], ["commit", "ci", "remove", "rm", "tag", "rtag", "import"]],
     decision = "prompt",
     justification = "Confirm operations that can change the CVS repository.",
 )
 
-# 8. Confirm CVS watch-state mutations.
+# 9. Confirm CVS watch-state mutations.
 prefix_rule(
     pattern = [["cvs", "cvs.exe"], ["watch", "edit", "unedit"]],
     decision = "prompt",

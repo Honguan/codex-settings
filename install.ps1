@@ -6,6 +6,7 @@ param(
     [switch]$SkipContext7Key,
     [switch]$SkipCcusageInstall,
     [switch]$InstallRequestExecutionOptimizer,
+    [switch]$EnableDefaultModeRequestUserInput,
     [switch]$Force,
     [ValidateSet('Merge', 'Replace')]
     [string]$InstallStyle = 'Merge'
@@ -28,8 +29,9 @@ if ($Mode -eq 'Interactive') {
                 'Global' {
                     $style = Select-InstallStyle
                     $installRequestExecutionOptimizer = Select-OptionalGlobalSkill
+                    $enableDefaultModeRequestUserInput = Select-OptionalDefaultModeRequestUserInput
                     $paths = Select-GlobalProjectPaths
-                    & $PSCommandPath -Mode Global -InstallStyle $style -ProjectPath $paths -InstallRequestExecutionOptimizer:$installRequestExecutionOptimizer
+                    & $PSCommandPath -Mode Global -InstallStyle $style -ProjectPath $paths -InstallRequestExecutionOptimizer:$installRequestExecutionOptimizer -EnableDefaultModeRequestUserInput:$enableDefaultModeRequestUserInput
                 }
                 'Git' {
                     $style = Select-InstallStyle
@@ -57,7 +59,7 @@ if ($Mode -eq 'Interactive') {
 
 if ($Force) { $InstallStyle = 'Replace' }
 $Force = $InstallStyle -eq 'Replace'
-$targets = @(Resolve-Targets $Mode $ProjectPath -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer)
+$targets = @(Resolve-Targets $Mode $ProjectPath -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput)
 $preflight = if ($Mode -eq 'Global') { Join-Path $HOME '.codex' } else { $targets[0].Root }
 Test-Prerequisites $Mode $preflight
 foreach ($target in $targets) { Test-DirectoryWritable -Path $target.Root }

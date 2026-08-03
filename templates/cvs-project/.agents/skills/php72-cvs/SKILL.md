@@ -12,6 +12,7 @@ description: Use for focused maintenance of legacy PHP 7.2 and MySQL 8.x codebas
 5. Inspect existing SQL, bindings, indexes, and execution plans before changing query logic.
 6. Do not use Git or GitHub CLI.
 7. Prefer CVS read-only commands before any write operation.
-8. Make the smallest change that satisfies the request.
-9. Run only validation relevant to the modified code.
-10. Report modified files, implemented logic, checks, and unresolved limitations.
+8. Never run or propose `cvs add`; leave new-file registration to the user.
+9. Make the smallest change that satisfies the request.
+10. Run only validation relevant to the modified code.
+11. Report modified files, implemented logic, checks, and unresolved limitations.

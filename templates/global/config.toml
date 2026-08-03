@@ -2,6 +2,7 @@
 model = "gpt-5.6-terra"
 model_reasoning_effort = "high"
 personality = "pragmatic"
+sandbox_mode = "workspace-write"
 
 # /review uses the current session model by default, so no separate
 # review_model override is needed while Terra is the primary model.
@@ -29,3 +30,6 @@ args = ["-y", "@playwright/mcp@latest"]
 enabled = true
 startup_timeout_sec = 60
 tool_timeout_sec = 120
+
+[windows]
+sandbox = "elevated"

@@ -45,6 +45,14 @@ function Select-OptionalGlobalSkill {
     return $selection -in @('y', 'Y', 'yes', 'YES')
 }
 
+function Select-OptionalDefaultModeRequestUserInput {
+    Write-Host ''
+    Write-Host 'Optional default mode request_user_input feature'
+    Write-Host 'This enables [features] default_mode_request_user_input = true in config.toml.'
+    $selection = Read-Host 'Enable default mode request_user_input? [y/N]'
+    return $selection -in @('y', 'Y', 'yes', 'YES')
+}
+
 function Read-ProjectPaths([string]$Prompt) {
     $value = [string](Read-Host $Prompt)
     if ([string]::IsNullOrWhiteSpace($value)) { return @() }
@@ -113,10 +121,10 @@ function Test-Prerequisites([string]$InstallMode, [string]$TargetPath) {
     if ($shape.Duplicates.Count -gt 0) { throw "Bundled config.toml is invalid: $($shape.Duplicates -join ', ')" }
 }
 
-function Resolve-Targets([string]$InstallMode, [string[]]$RequestedPath, [switch]$InstallRequestExecutionOptimizer) {
+function Resolve-Targets([string]$InstallMode, [string[]]$RequestedPath, [switch]$InstallRequestExecutionOptimizer, [switch]$EnableDefaultModeRequestUserInput) {
     $targets = New-Object 'System.Collections.Generic.List[object]'
     if ($InstallMode -eq 'Global') {
-        [void]$targets.Add([pscustomobject]@{ Mode = 'Global'; Template = Join-Path $ScriptRoot 'templates\global'; Root = Join-Path $HOME '.codex' })
+        [void]$targets.Add([pscustomobject]@{ Mode = 'Global'; Template = Join-Path $ScriptRoot 'templates\global'; Root = Join-Path $HOME '.codex'; EnableDefaultModeRequestUserInput = [bool]$EnableDefaultModeRequestUserInput })
         $skillsRoot = Join-Path $HOME '.codex\skills'
         $skillManifest = Join-Path $skillsRoot '.codex-settings-manifest.json'
         if ($InstallRequestExecutionOptimizer -or (Test-Path -LiteralPath $skillManifest -PathType Leaf)) {
@@ -210,6 +218,25 @@ function Update-GitIgnore([string]$Root, $Transaction, [string[]]$ManagedPaths) 
     Write-TextFileState -Path $ignorePath -Content $content -Encoding $state.Encoding
 }
 
+function Add-DefaultModeRequestUserInputFeature([string]$Content, [string]$NewLine) {
+    $lines = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($line in ($Content -split '\r?\n')) { [void]$lines.Add($line) }
+    $featureIndex = -1
+    for ($index = 0; $index -lt $lines.Count; $index++) {
+        if ($lines[$index].Trim() -eq '[features]') { $featureIndex = $index; break }
+    }
+    if ($featureIndex -ge 0) {
+        for ($index = $featureIndex + 1; $index -lt $lines.Count; $index++) {
+            $trimmed = $lines[$index].Trim()
+            if ($trimmed -match '^\[') { break }
+            if ($trimmed -match '^default_mode_request_user_input\s*=') { return $Content }
+        }
+        [void]$lines.Insert($featureIndex + 1, 'default_mode_request_user_input = true')
+        return ($lines -join $NewLine)
+    }
+    return $Content.TrimEnd() + $NewLine + $NewLine + '[features]' + $NewLine + 'default_mode_request_user_input = true'
+}
+
 function Install-Target($Target, $Transaction, [switch]$Force) {
     if (-not (Test-Path -LiteralPath $Target.Template -PathType Container)) { throw "Template missing: $($Target.Template)" }
     New-Item -ItemType Directory -Path $Target.Root -Force | Out-Null
@@ -227,24 +254,29 @@ function Install-Target($Target, $Transaction, [switch]$Force) {
         $strategy = Get-Strategy $Target.Mode $relative
         $beforeHash = if ($state.Exists) { (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash } else { $null }
         Save-TransactionFile -Transaction $Transaction -Path $destination
+        $template = [IO.File]::ReadAllText($source.FullName)
+        $isOptionalFeatureConfig = $Target.Mode -eq 'Global' -and $relative -eq 'config.toml' -and [bool]$Target.EnableDefaultModeRequestUserInput
+        if ($isOptionalFeatureConfig) { $template = Add-DefaultModeRequestUserInputFeature -Content $template -NewLine $state.NewLine }
 
         if ($Force -and $state.Exists) {
-            Copy-FileAtomic -Source $source.FullName -Destination $destination
+            if ($isOptionalFeatureConfig) { Write-TextFileState -Path $destination -Content $template -Encoding $state.Encoding }
+            else { Copy-FileAtomic -Source $source.FullName -Destination $destination }
         } elseif ($strategy.Name -eq 'replace') {
             if ($state.Exists -and -not $owned) {
                 $sourceHash = (Get-FileHash $source.FullName -Algorithm SHA256).Hash
                 $destinationHash = (Get-FileHash $destination -Algorithm SHA256).Hash
                 if ($sourceHash -ne $destinationHash) { throw "Refusing to overwrite an unmanaged file: $destination" }
             }
-            Copy-FileAtomic -Source $source.FullName -Destination $destination
+            if ($isOptionalFeatureConfig) { Write-TextFileState -Path $destination -Content $template -Encoding $state.Encoding }
+            else { Copy-FileAtomic -Source $source.FullName -Destination $destination }
         } else {
             $existing = if ($owned -and $null -ne $previous -and [int]$previous.Version -lt 2) { '' } else { $state.Content }
-            $template = [IO.File]::ReadAllText($source.FullName)
             switch ($strategy.Name) {
                 'managed-block' { $merged = Merge-ManagedBlock $existing $template $strategy.Start $strategy.End $state.NewLine }
                 'managed-toml' { $merged = Merge-TomlTemplate $existing $template $strategy.Start $strategy.End $state.NewLine }
                 'managed-hooks' { $merged = Merge-HooksJson $existing $template }
             }
+            if ($isOptionalFeatureConfig) { $merged = Add-DefaultModeRequestUserInputFeature -Content $merged -NewLine $state.NewLine }
             Write-TextFileState $destination $merged $state.Encoding
         }
 

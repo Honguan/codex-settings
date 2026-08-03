@@ -34,6 +34,9 @@ Windows 上的 Codex 全域、Git 專案與 CVS 專案設定管理工具。
 # 另外選用安裝 request-execution-optimizer 全域技能
 ./install.ps1 -Mode Global -InstallRequestExecutionOptimizer
 
+# 選用啟用 request_user_input 預設模式
+./install.ps1 -Mode Global -EnableDefaultModeRequestUserInput
+
 # Git 專案
 ./install.ps1 -Mode Git -ProjectPath 'E:\Git\MyProject'
 
@@ -42,6 +45,13 @@ Windows 上的 Codex 全域、Git 專案與 CVS 專案設定管理工具。
 ```
 
 也可雙擊 `Install.cmd`。若系統沒有 PowerShell 7，全域安裝會停止並顯示實際版本。
+
+互動式全域安裝也會詢問是否加入：
+
+```toml
+[features]
+default_mode_request_user_input = true
+```
 
 ## 模型設定
 

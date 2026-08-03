@@ -328,3 +328,10 @@ prefix_rule(
     decision = "allow",
     justification = "Allow GitHub CLI list, view, and status queries only.",
 )
+
+# 48. Read-only file and path inspection.
+prefix_rule(
+    pattern = [["rg", "rg.exe", "Get-Content", "get-content", "Get-ChildItem", "get-childitem", "Select-String", "select-string", "Get-Item", "get-item", "Resolve-Path", "resolve-path", "Get-FileHash", "get-filehash", "findstr", "findstr.exe", "fc", "fc.exe", "tree", "tree.com"]],
+    decision = "allow",
+    justification = "Allow read-only text search, file inspection, path resolution, hashing, and directory listing.",
+)
