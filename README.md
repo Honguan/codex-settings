@@ -7,7 +7,7 @@ Windows 上的 Codex 全域、Git 專案與 CVS 專案設定管理工具。
 - 全域 47 條、Git 13 條、CVS 8 條權限規則。
 - 安全合併、備份、還原、移除與中斷回復。
 - Context7、Playwright MCP。
-- `ccusage@latest`、`cs`、`cdaily`。
+- `ccusage@latest`、`ccsessions`、`cdaily`。
 - Git／CVS 專案登記與批次更新。
 - CVS CRLF Hook。
 
@@ -21,14 +21,14 @@ Windows 上的 Codex 全域、Git 專案與 CVS 專案設定管理工具。
 - Node.js 20 或更新版本
 - npm、npx
 
-`cs`、`cdaily` 只安裝到執行安裝器的 PowerShell 7 `CurrentUserAllHosts` Profile。
+`ccsessions`、`cdaily` 會安裝到執行安裝器的 PowerShell 7 `CurrentUserAllHosts` 與 `CurrentUserCurrentHost` Profile，避免被主機專屬 Profile 中的同名命令覆蓋。
 
 **PowerShell 7 已測試通過。**
 
 ## 快速安裝
 
 ```powershell
-# 全域設定、MCP、ccusage、cs、cdaily
+# 全域設定、MCP、ccusage、ccsessions、cdaily
 ./install.ps1 -Mode Global
 
 # 另外選用安裝 request-execution-optimizer 全域技能
@@ -135,7 +135,7 @@ Git／CVS 專案安裝成功後會登記到：
 會：
 
 1. `git pull --ff-only` 更新本設定倉庫。
-2. 更新全域設定、MCP、ccusage、`cs`、`cdaily`。
+2. 更新全域設定、MCP、ccusage、`ccsessions`、`cdaily`。
 3. 更新所有已登記 Git／CVS 專案的 Codex 設定。
 4. 個別顯示成功或失敗原因。
 
@@ -198,7 +198,7 @@ Context7 Key 僅以 Windows 使用者 DPAPI 加密後保存於本機解除安裝
 
 `-Force` 會移除內容已被使用者修改的受管理檔案，只應在確定不需保留時使用。
 
-## ccusage、cs、cdaily
+## ccusage、ccsessions、cdaily
 
 來源：<https://github.com/ccusage/ccusage>
 
@@ -211,14 +211,14 @@ npm install --global ccusage@latest
 使用方式：
 
 ```powershell
-cs
-cs 20
-cs <Session ID>
+ccsessions
+ccsessions --compact
+ccsessions --since 2026-08-01
 cdaily
 cdaily 30
 ```
 
-`cs` 失敗時會顯示命令、Exit Code、原始輸出、JSON 解析錯誤及 Profile 路徑。
+`ccsessions` 直接輸出 `ccusage codex session` 的原生報表格式，並可傳入其支援的選項，例如 `--compact`、`--since`、`--no-cost`。
 
 ## MCP
 

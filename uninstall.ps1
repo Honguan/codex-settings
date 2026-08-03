@@ -151,7 +151,7 @@ function Uninstall-ManagedTarget {
                         if (-not [string]::IsNullOrWhiteSpace($newContent)) { $newContent = $newContent.TrimEnd() + $state.NewLine }
                         Write-TextFileState -Path $profilePath -Content $newContent -Encoding $state.Encoding
                     }
-                    $externalResults.PowerShellProfile = 'removed managed cs/cdaily blocks'
+                    $externalResults.PowerShellProfile = 'removed managed ccsessions/cdaily blocks'
                 }
             }
 
@@ -226,7 +226,7 @@ try {
         Write-Host ''
         Write-Host 'Uninstall Managed Codex Settings'
         Write-Host '================================'
-        Write-Host '[1] Global settings, cs, cdaily, and managed ccusage state'
+        Write-Host '[1] Global settings, ccsessions, cdaily, and managed ccusage state'
         Write-Host '[2] Project settings'
         Write-Host '[0] Exit'
         Write-Host ''

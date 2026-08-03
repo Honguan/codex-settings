@@ -2,7 +2,7 @@ function Select-Mode {
     Write-Host ''
     Write-Host 'Codex Settings Installer'
     Write-Host '========================'
-    Write-Host '[1] Install global settings, MCP, ccusage, cs, and cdaily'
+    Write-Host '[1] Install global settings, MCP, ccusage, ccsessions, and cdaily'
     Write-Host '[2] Install Git project settings'
     Write-Host '[3] Install CVS project settings'
     Write-Host '[4] Backup current settings'
@@ -89,7 +89,7 @@ function Test-Prerequisites([string]$InstallMode, [string]$TargetPath) {
         throw "PowerShell 5.1 or newer is required. Current: $($PSVersionTable.PSVersion)"
     }
     if ($InstallMode -eq 'Global' -and $PSVersionTable.PSVersion.Major -lt 7) {
-        throw "PowerShell 7 or newer is required to install ccusage, cs, and cdaily. Current: $($PSVersionTable.PSVersion)"
+        throw "PowerShell 7 or newer is required to install ccusage, ccsessions, and cdaily. Current: $($PSVersionTable.PSVersion)"
     }
 
     Test-DirectoryWritable -Path $TargetPath

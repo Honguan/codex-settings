@@ -10,7 +10,7 @@ $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $ScriptRoot 'lib\codex-settings-common.ps1')
 
 if ($PSVersionTable.PSVersion.Major -lt 7) {
-    throw "PowerShell 7 or newer is required to install cs and cdaily. Current: $($PSVersionTable.PSVersion)"
+    throw "PowerShell 7 or newer is required to install ccsessions and cdaily. Current: $($PSVersionTable.PSVersion)"
 }
 
 $templatePath = Join-Path $ScriptRoot 'templates\powershell\ccusage-profile.ps1'
@@ -25,16 +25,21 @@ if (-not (Get-Command npx -ErrorAction SilentlyContinue)) {
     throw 'npx was not found. Reinstall Node.js with npm package-runner support.'
 }
 
-$profilePath = $PROFILE.CurrentUserAllHosts
-$profileDirectory = Split-Path -Parent $profilePath
-Test-DirectoryWritable -Path $profileDirectory
-
 $packageBefore = Get-CcusageState
-$profileState = Get-TextFileState -Path $profilePath
-$backupPath = $null
-if ($profileState.Exists) {
-    $backupPath = "$profilePath.ccusage-backup-$(Get-Date -Format 'yyyyMMdd-HHmmss-fff')"
-    Copy-FileAtomic -Source $profilePath -Destination $backupPath
+$profilePaths = @($PROFILE.CurrentUserAllHosts, $PROFILE.CurrentUserCurrentHost) | Select-Object -Unique
+$profileTargets = foreach ($profilePath in $profilePaths) {
+    Test-DirectoryWritable -Path (Split-Path -Parent $profilePath)
+    $profileState = Get-TextFileState -Path $profilePath
+    $backupPath = $null
+    if ($profileState.Exists) {
+        $backupPath = "$profilePath.ccusage-backup-$(Get-Date -Format 'yyyyMMdd-HHmmss-fff')"
+        Copy-FileAtomic -Source $profilePath -Destination $backupPath
+    }
+    [pscustomobject]@{
+        Path = $profilePath
+        State = $profileState
+        BackupPath = $backupPath
+    }
 }
 
 try {
@@ -47,31 +52,34 @@ try {
         }
     }
 
-    $existingContent = Remove-CcusageProfileBlocks -Content $profileState.Content
     $managedContent = [IO.File]::ReadAllText($templatePath).Trim()
-    $newContent = if ([string]::IsNullOrWhiteSpace($existingContent)) {
-        $managedContent + $profileState.NewLine
-    } else {
-        $existingContent.TrimEnd() + $profileState.NewLine + $profileState.NewLine + $managedContent + $profileState.NewLine
+    foreach ($profileTarget in $profileTargets) {
+        $existingContent = Remove-CcusageProfileBlocks -Content $profileTarget.State.Content
+        $newContent = if ([string]::IsNullOrWhiteSpace($existingContent)) {
+            $managedContent + $profileTarget.State.NewLine
+        } else {
+            $existingContent.TrimEnd() + $profileTarget.State.NewLine + $profileTarget.State.NewLine + $managedContent + $profileTarget.State.NewLine
+        }
+
+        $tokens = $null
+        $parseErrors = $null
+        [void][Management.Automation.Language.Parser]::ParseInput($newContent, [ref]$tokens, [ref]$parseErrors)
+        if ($parseErrors.Count -gt 0) {
+            $firstError = $parseErrors[0]
+            throw "PowerShell profile validation failed for $($profileTarget.Path) at line $($firstError.Extent.StartLineNumber): $($firstError.Message)"
+        }
+
+        Write-TextFileState -Path $profileTarget.Path -Content $newContent -Encoding $profileTarget.State.Encoding
     }
 
-    $tokens = $null
-    $parseErrors = $null
-    [void][Management.Automation.Language.Parser]::ParseInput($newContent, [ref]$tokens, [ref]$parseErrors)
-    if ($parseErrors.Count -gt 0) {
-        $firstError = $parseErrors[0]
-        throw "PowerShell profile validation failed at line $($firstError.Extent.StartLineNumber): $($firstError.Message)"
-    }
+    Remove-Item Function:\ccsessions, Function:\cdaily -Force -ErrorAction SilentlyContinue
+    . $templatePath | Out-Null
 
-    Write-TextFileState -Path $profilePath -Content $newContent -Encoding $profileState.Encoding
-    Remove-Item Function:\cs, Function:\cdaily -Force -ErrorAction SilentlyContinue
-    . $profilePath | Out-Null
-
-    if (-not (Get-Command cs -ErrorAction SilentlyContinue)) {
-        throw "The cs function was not loaded from: $profilePath"
+    if (-not (Get-Command ccsessions -ErrorAction SilentlyContinue)) {
+        throw "The ccsessions function was not loaded from template: $templatePath"
     }
     if (-not (Get-Command cdaily -ErrorAction SilentlyContinue)) {
-        throw "The cdaily function was not loaded from: $profilePath"
+        throw "The cdaily function was not loaded from template: $templatePath"
     }
 
     if (-not $SkipRuntimeValidation) {
@@ -83,10 +91,13 @@ try {
     }
 
     $packageAfter = Get-CcusageState
+    $allHostsTarget = $profileTargets | Where-Object { $_.Path -eq $PROFILE.CurrentUserAllHosts } | Select-Object -First 1
     $result = [pscustomobject]@{
-        ProfilePath = $profilePath
-        ProfileExistedBefore = [bool]$profileState.Exists
-        ProfileBackupPath = $backupPath
+        ProfilePath = $allHostsTarget.Path
+        ProfileExistedBefore = [bool]$allHostsTarget.State.Exists
+        ProfileBackupPath = $allHostsTarget.BackupPath
+        ProfilePaths = @($profileTargets.Path)
+        ProfileBackupPaths = @($profileTargets.BackupPath | Where-Object { $null -ne $_ })
         PackageBefore = $packageBefore
         PackageAfter = $packageAfter
         InstalledLatest = -not $SkipPackageInstall
@@ -95,19 +106,23 @@ try {
 
     if ($PassThru) { return $result }
 
-    Write-Host 'ccusage@latest, cs, and cdaily installed successfully.'
+    Write-Host 'ccusage@latest, ccsessions, and cdaily installed successfully.'
     Write-Host "PowerShell: $($PSVersionTable.PSVersion)"
-    Write-Host "Profile   : $profilePath"
-    if ($backupPath) { Write-Host "Backup    : $backupPath" }
+    foreach ($profileTarget in $profileTargets) { Write-Host "Profile   : $($profileTarget.Path)" }
+    foreach ($profileTarget in $profileTargets) {
+        if ($profileTarget.BackupPath) { Write-Host "Backup    : $($profileTarget.BackupPath)" }
+    }
 } catch {
     $primaryError = $_.Exception.Message
     $rollbackErrors = New-Object 'System.Collections.Generic.List[string]'
 
     try {
-        if ($profileState.Exists) {
-            Copy-FileAtomic -Source $backupPath -Destination $profilePath
-        } else {
-            Remove-Item -LiteralPath $profilePath -Force -ErrorAction SilentlyContinue
+        foreach ($profileTarget in $profileTargets) {
+            if ($profileTarget.State.Exists) {
+                Copy-FileAtomic -Source $profileTarget.BackupPath -Destination $profileTarget.Path
+            } else {
+                Remove-Item -LiteralPath $profileTarget.Path -Force -ErrorAction SilentlyContinue
+            }
         }
     } catch {
         [void]$rollbackErrors.Add("Profile rollback failed: $($_.Exception.Message)")

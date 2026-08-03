@@ -2,7 +2,8 @@
 # Managed by codex-settings. Commands intentionally use ccusage@latest.
 
 # >>> CS CODEX SESSION VIEWER >>>
-function global:cs {
+Remove-Item -LiteralPath Alias:\ccsessions -Force -ErrorAction SilentlyContinue
+function global:ccsessions {
     [CmdletBinding()]
     param(
         [Parameter(Position = 0, ValueFromRemainingArguments = $true)]
@@ -223,6 +224,25 @@ function global:cs {
     }
 
     try {
+        $arguments = @($Value | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        $argumentText = if ($arguments.Count -eq 0) { '' } else { ' ' + ($arguments -join ' ') }
+        if (Get-Command npx -ErrorAction SilentlyContinue) {
+            $commandContext.Text = "npx --yes ccusage@latest codex session$argumentText"
+            $output = & npx --yes 'ccusage@latest' codex session @arguments 2>&1
+        } elseif (Get-Command ccusage -ErrorAction SilentlyContinue) {
+            $commandContext.Text = "ccusage codex session$argumentText"
+            $output = & ccusage codex session @arguments 2>&1
+        } else {
+            throw 'Neither npx nor ccusage is available. Install Node.js and run the codex-settings global installer.'
+        }
+
+        $exitCode = $LASTEXITCODE
+        $output | Out-Host
+        if ($exitCode -ne 0) {
+            throw "ccusage exited with code $exitCode.`nCommand: $($commandContext.Text)"
+        }
+        return
+
         $report = Invoke-CcusageJson
         $sessions = @(Get-Sessions $report | Where-Object { $null -ne $_ } | Sort-Object @{ Expression = { Get-Activity $_ }; Descending = $true })
         if ($sessions.Count -eq 0) {
@@ -258,7 +278,7 @@ function global:cs {
         if ($matched.Count -eq 0) { throw "No matching Codex sessions were found for: $($arguments -join ', ')" }
         Show-Details $matched
     } catch {
-        Write-Host 'cs failed.' -ForegroundColor Red
+        Write-Host 'ccsessions failed.' -ForegroundColor Red
         Write-Host "Reason : $($_.Exception.Message)" -ForegroundColor Red
         if (-not [string]::IsNullOrWhiteSpace($commandContext.Text)) { Write-Host "Command: $($commandContext.Text)" }
         Write-Host "Profile: $($PROFILE.CurrentUserAllHosts)"
