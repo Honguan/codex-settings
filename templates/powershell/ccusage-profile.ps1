@@ -173,11 +173,11 @@ function global:ccsessions {
     }
 
     function New-TableBorder([string]$Left, [string]$Middle, [string]$Right, [int[]]$Widths) {
-        $segments = @($Widths | ForEach-Object { (('-' * ($_ + 2)) -join '') })
+        $segments = @($Widths | ForEach-Object { '─' * ($_ + 2) })
         return $Left + ($segments -join $Middle) + $Right
     }
 
-    function Write-TableRow([object[]]$Values, [int[]]$Widths) {
+    function Write-TableRow([object[]]$Values, [int[]]$Widths, [int[]]$RightAlignedColumns = @()) {
         $lineGroups = New-Object 'System.Collections.Generic.List[object]'
         $height = 1
         foreach ($value in $Values) {
@@ -190,10 +190,35 @@ function global:ccsessions {
             for ($column = 0; $column -lt $Widths.Count; $column++) {
                 $lines = @($lineGroups[$column])
                 $text = if ($lineIndex -lt $lines.Count) { [string]$lines[$lineIndex] } else { '' }
-                [void]$cells.Add($text.PadRight($Widths[$column]))
+                if ($RightAlignedColumns -contains $column) {
+                    [void]$cells.Add($text.PadLeft($Widths[$column]))
+                } else {
+                    [void]$cells.Add($text.PadRight($Widths[$column]))
+                }
             }
-            Write-Host ('| ' + ($cells -join ' | ') + ' |')
+            Write-Host ('│ ' + ($cells -join ' │ ') + ' │')
         }
+    }
+
+    function Write-ReportTitle([string]$Title) {
+        $innerWidth = [Math]::Max(44, $Title.Length + 2)
+        $leftPadding = [Math]::Floor(($innerWidth - $Title.Length) / 2)
+        $rightPadding = $innerWidth - $Title.Length - $leftPadding
+        Write-Host ('╭' + ('─' * $innerWidth) + '╮')
+        Write-Host ('│' + (' ' * $innerWidth) + '│')
+        Write-Host ('│' + (' ' * $leftPadding) + $Title + (' ' * $rightPadding) + '│')
+        Write-Host ('│' + (' ' * $innerWidth) + '│')
+        Write-Host ('╰' + ('─' * $innerWidth) + '╯')
+    }
+
+    function Get-SessionTotals([object[]]$Rows) {
+        $totals = [ordered]@{}
+        foreach ($field in @('inputTokens', 'outputTokens', 'reasoningOutputTokens', 'cacheReadTokens', 'totalTokens', 'costUSD')) {
+            $sum = 0.0
+            foreach ($row in @($Rows)) { $sum += [double]$row.$field }
+            $totals[$field] = $sum
+        }
+        return [pscustomobject]$totals
     }
 
     function Show-Details([object[]]$Rows) {
@@ -210,39 +235,37 @@ function global:ccsessions {
                 Time           = if ((Get-Activity $_) -eq [DateTimeOffset]::MinValue) { '' } else { (Get-Activity $_).ToLocalTime().ToString('MM-dd HH:mm') }
             }
         })
+        $totals = Get-SessionTotals $Rows
+        $tableRows += [pscustomobject][ordered]@{
+            'Session ID' = 'Total'
+            Models       = ''
+            In           = Format-TokenCount $totals.inputTokens
+            Out          = Format-TokenCount $totals.outputTokens
+            Think        = Format-TokenCount $totals.reasoningOutputTokens
+            Cache        = Format-TokenCount $totals.cacheReadTokens
+            Total        = Format-TokenCount $totals.totalTokens
+            Cost         = Format-Cost $totals.costUSD
+            Time         = ''
+        }
         $columns = @('Session ID', 'Models', 'In', 'Out', 'Think', 'Cache', 'Total', 'Cost', 'Time')
         $widths = @($columns | ForEach-Object { Get-TableWidth -Header $_ -Rows $tableRows -Property $_ })
+        $rightAlignedColumns = @(2, 3, 4, 5, 6, 7, 8)
 
-        Write-Host (New-TableBorder '+' '+' '+' $widths)
-        Write-TableRow -Values $columns -Widths $widths
-        Write-Host (New-TableBorder '+' '+' '+' $widths)
-        foreach ($row in $tableRows) {
+        Write-ReportTitle 'Codex Token Usage Report - Session'
+        Write-Host ''
+        Write-Host (New-TableBorder '╭' '┬' '╮' $widths)
+        Write-TableRow -Values $columns -Widths $widths -RightAlignedColumns $rightAlignedColumns
+        Write-Host (New-TableBorder '├' '┼' '┤' $widths)
+        for ($index = 0; $index -lt $tableRows.Count; $index++) {
+            $row = $tableRows[$index]
             $values = @($columns | ForEach-Object { $row.PSObject.Properties[$_].Value })
-            Write-TableRow -Values $values -Widths $widths
-            Write-Host (New-TableBorder '+' '+' '+' $widths)
+            Write-TableRow -Values $values -Widths $widths -RightAlignedColumns $rightAlignedColumns
+            if ($index -lt ($tableRows.Count - 1)) { Write-Host (New-TableBorder '├' '┼' '┤' $widths) }
         }
+        Write-Host (New-TableBorder '╰' '┴' '╯' $widths)
     }
 
     try {
-        $arguments = @($Value | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-        $argumentText = if ($arguments.Count -eq 0) { '' } else { ' ' + ($arguments -join ' ') }
-        if (Get-Command npx -ErrorAction SilentlyContinue) {
-            $commandContext.Text = "npx --yes ccusage@latest codex session$argumentText"
-            $output = & npx --yes 'ccusage@latest' codex session @arguments 2>&1
-        } elseif (Get-Command ccusage -ErrorAction SilentlyContinue) {
-            $commandContext.Text = "ccusage codex session$argumentText"
-            $output = & ccusage codex session @arguments 2>&1
-        } else {
-            throw 'Neither npx nor ccusage is available. Install Node.js and run the codex-settings global installer.'
-        }
-
-        $exitCode = $LASTEXITCODE
-        $output | Out-Host
-        if ($exitCode -ne 0) {
-            throw "ccusage exited with code $exitCode.`nCommand: $($commandContext.Text)"
-        }
-        return
-
         $report = Invoke-CcusageJson
         $sessions = @(Get-Sessions $report | Where-Object { $null -ne $_ } | Sort-Object @{ Expression = { Get-Activity $_ }; Descending = $true })
         if ($sessions.Count -eq 0) {
@@ -295,22 +318,150 @@ function global:cdaily {
         [int]$Days = 7
     )
 
+    function Format-DailyTokenCount($Number) {
+        try {
+            $value = [double]$Number
+            $units = @(
+                [pscustomobject]@{ Limit = 1000000000; Divisor = 1000000000; Suffix = 'B' },
+                [pscustomobject]@{ Limit = 1000000; Divisor = 1000000; Suffix = 'M' },
+                [pscustomobject]@{ Limit = 1000; Divisor = 1000; Suffix = 'K' }
+            )
+            foreach ($unit in $units) {
+                if ([Math]::Abs($value) -lt $unit.Limit) { continue }
+                $scaled = $value / $unit.Divisor
+                $decimals = if ([Math]::Abs($scaled) -ge 100) { 0 } elseif ([Math]::Abs($scaled) -ge 10) { 1 } else { 2 }
+                $text = $scaled.ToString("F$decimals", [Globalization.CultureInfo]::InvariantCulture).TrimEnd('0').TrimEnd('.')
+                return "$text$($unit.Suffix)"
+            }
+            return ([long][Math]::Round($value)).ToString([Globalization.CultureInfo]::InvariantCulture)
+        } catch { return '0' }
+    }
+
+    function Format-DailyCost($Cost) {
+        try { return '$' + ([double]$Cost).ToString('N2', [Globalization.CultureInfo]::InvariantCulture) }
+        catch { return '$0.00' }
+    }
+
+    function Get-DailyModels($Models) {
+        if ($null -eq $Models) { return '' }
+        $names = @($Models.PSObject.Properties | ForEach-Object Name)
+        if ($names.Count -gt 0) { return $names | ForEach-Object { "- $_" } | Join-String -Separator ([Environment]::NewLine) }
+        return [string]$Models
+    }
+
+    function Get-DailyTableWidth([string]$Header, [object[]]$Rows, [string]$Property) {
+        $width = $Header.Length
+        foreach ($row in @($Rows)) {
+            foreach ($line in [regex]::Split([string]$row.PSObject.Properties[$Property].Value, "`r?`n")) {
+                $width = [Math]::Max($width, $line.Length)
+            }
+        }
+        return $width
+    }
+
+    function New-DailyTableBorder([string]$Left, [string]$Middle, [string]$Right, [int[]]$Widths) {
+        $segments = @($Widths | ForEach-Object { '─' * ($_ + 2) })
+        return $Left + ($segments -join $Middle) + $Right
+    }
+
+    function Write-DailyTableRow([object[]]$Values, [int[]]$Widths, [int[]]$RightAlignedColumns = @()) {
+        $lineGroups = New-Object 'System.Collections.Generic.List[object]'
+        $height = 1
+        foreach ($value in $Values) {
+            $lines = @([regex]::Split([string]$value, "`r?`n"))
+            [void]$lineGroups.Add($lines)
+            $height = [Math]::Max($height, $lines.Count)
+        }
+        for ($lineIndex = 0; $lineIndex -lt $height; $lineIndex++) {
+            $cells = New-Object 'System.Collections.Generic.List[string]'
+            for ($column = 0; $column -lt $Widths.Count; $column++) {
+                $lines = @($lineGroups[$column])
+                $text = if ($lineIndex -lt $lines.Count) { [string]$lines[$lineIndex] } else { '' }
+                if ($RightAlignedColumns -contains $column) {
+                    [void]$cells.Add($text.PadLeft($Widths[$column]))
+                } else {
+                    [void]$cells.Add($text.PadRight($Widths[$column]))
+                }
+            }
+            Write-Host ('│ ' + ($cells -join ' │ ') + ' │')
+        }
+    }
+
+    function Show-DailyDetails([object[]]$DailyRows, $Totals) {
+        $tableRows = @($DailyRows | ForEach-Object {
+            [pscustomobject][ordered]@{
+                Date      = [string]$_.date
+                Models    = Get-DailyModels $_.models
+                Input     = Format-DailyTokenCount $_.inputTokens
+                Output    = Format-DailyTokenCount $_.outputTokens
+                Reasoning = Format-DailyTokenCount $_.reasoningOutputTokens
+                'Cache Read' = Format-DailyTokenCount $_.cacheReadTokens
+                'Total Tokens' = Format-DailyTokenCount $_.totalTokens
+                'Cost (USD)' = Format-DailyCost $_.costUSD
+            }
+        })
+        if ($null -ne $Totals) {
+            $tableRows += [pscustomobject][ordered]@{
+                Date      = 'Total'
+                Models    = ''
+                Input     = Format-DailyTokenCount $Totals.inputTokens
+                Output    = Format-DailyTokenCount $Totals.outputTokens
+                Reasoning = Format-DailyTokenCount $Totals.reasoningOutputTokens
+                'Cache Read' = Format-DailyTokenCount $Totals.cacheReadTokens
+                'Total Tokens' = Format-DailyTokenCount $Totals.totalTokens
+                'Cost (USD)' = Format-DailyCost $Totals.costUSD
+            }
+        }
+
+        $columns = @('Date', 'Models', 'Input', 'Output', 'Reasoning', 'Cache Read', 'Total Tokens', 'Cost (USD)')
+        $widths = @($columns | ForEach-Object { Get-DailyTableWidth -Header $_ -Rows $tableRows -Property $_ })
+        $rightAlignedColumns = @(2, 3, 4, 5, 6, 7)
+        $title = 'Codex Token Usage Report - Daily'
+        $innerWidth = [Math]::Max(44, $title.Length + 2)
+        $leftPadding = [Math]::Floor(($innerWidth - $title.Length) / 2)
+        $rightPadding = $innerWidth - $title.Length - $leftPadding
+        Write-Host ('╭' + ('─' * $innerWidth) + '╮')
+        Write-Host ('│' + (' ' * $innerWidth) + '│')
+        Write-Host ('│' + (' ' * $leftPadding) + $title + (' ' * $rightPadding) + '│')
+        Write-Host ('│' + (' ' * $innerWidth) + '│')
+        Write-Host ('╰' + ('─' * $innerWidth) + '╯')
+        Write-Host ''
+        Write-Host (New-DailyTableBorder '╭' '┬' '╮' $widths)
+        Write-DailyTableRow -Values $columns -Widths $widths -RightAlignedColumns $rightAlignedColumns
+        Write-Host (New-DailyTableBorder '├' '┼' '┤' $widths)
+        for ($index = 0; $index -lt $tableRows.Count; $index++) {
+            $row = $tableRows[$index]
+            $values = @($columns | ForEach-Object { $row.PSObject.Properties[$_].Value })
+            Write-DailyTableRow -Values $values -Widths $widths -RightAlignedColumns $rightAlignedColumns
+            if ($index -lt ($tableRows.Count - 1)) { Write-Host (New-DailyTableBorder '├' '┼' '┤' $widths) }
+        }
+        Write-Host (New-DailyTableBorder '╰' '┴' '╯' $widths)
+    }
+
     try {
+        $commandText = $null
         if (Get-Command npx -ErrorAction SilentlyContinue) {
             $commandText = "npx --yes ccusage@latest codex daily --last $Days --timezone Asia/Taipei"
-            $output = & npx --yes 'ccusage@latest' codex daily --last $Days --timezone 'Asia/Taipei' 2>&1
+            $output = & npx --yes 'ccusage@latest' codex daily --last $Days --timezone 'Asia/Taipei' --json 2>&1
         } elseif (Get-Command ccusage -ErrorAction SilentlyContinue) {
             $commandText = "ccusage codex daily --last $Days --timezone Asia/Taipei"
-            $output = & ccusage codex daily --last $Days --timezone 'Asia/Taipei' 2>&1
+            $output = & ccusage codex daily --last $Days --timezone 'Asia/Taipei' --json 2>&1
         } else {
             throw 'Neither npx nor ccusage is available. Install Node.js and run the codex-settings global installer.'
         }
 
         $exitCode = $LASTEXITCODE
-        $output | Out-Host
         if ($exitCode -ne 0) {
-            throw "ccusage exited with code $exitCode.`nCommand: $commandText`nOutput:`n$($output | Out-String)"
+            throw "ccusage exited with code $exitCode.`nCommand: $commandText"
         }
+        $text = ($output | Out-String).Trim() -replace ([char]27 + '\\[[0-?]*[ -/]*[@-~]'), ''
+        $start = $text.IndexOf('{')
+        $end = $text.LastIndexOf('}')
+        if ($start -lt 0 -or $end -le $start) { throw "ccusage returned no JSON object.`nCommand: $commandText" }
+        $report = $text.Substring($start, $end - $start + 1) | ConvertFrom-Json -ErrorAction Stop
+        $dailyRows = if ($null -ne $report.daily) { @($report.daily) } elseif ($null -ne $report.data.daily) { @($report.data.daily) } else { @() }
+        if ($dailyRows.Count -eq 0) { throw 'No daily Codex usage rows were returned.' }
+        Show-DailyDetails -DailyRows $dailyRows -Totals $report.totals
     } catch {
         Write-Host 'cdaily failed.' -ForegroundColor Red
         Write-Host "Reason : $($_.Exception.Message)" -ForegroundColor Red

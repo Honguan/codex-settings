@@ -212,13 +212,13 @@ npm install --global ccusage@latest
 
 ```powershell
 ccsessions
-ccsessions --compact
-ccsessions --since 2026-08-01
+ccsessions 20
+ccsessions <Session ID>
 cdaily
 cdaily 30
 ```
 
-`ccsessions` 直接輸出 `ccusage codex session` 的原生報表格式，並可傳入其支援的選項，例如 `--compact`、`--since`、`--no-cost`。
+`ccsessions` 保留自訂的 Session ID、Models、Token、Total、Cost、Time 資訊與數量／ID 篩選功能；`ccsessions` 與 `cdaily` 的 Token 欄位使用 `K`、`M`、`B` 計數符號，表格框線採用 `ccusage` 的報表風格。
 
 ## MCP
 
