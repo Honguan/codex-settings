@@ -46,27 +46,10 @@ Stop immediately when the preview or result contains `C`, an error, an unexpecte
 
 ## PHP 7.2 Workflow
 
-- Start from the requested file, function, method, class, or line range.
-- Read only direct callers, callees, inheritance, and required dependencies.
-- Detect the file encoding and line endings before editing.
-- Preserve PHP 7.2 syntax compatibility and the existing application architecture.
-- Inspect existing SQL, bindings, indexes, and execution plans before changing query logic.
-- Prefer CVS read-only commands before any write operation.
-- Never run or propose `cvs add`; leave new-file registration to the user.
-- Never run or propose manual CRLF conversion commands; the CVS PostToolUse Hook is the single line-ending normalizer.
-- Make the smallest change that satisfies the request.
-- Run only validation relevant to the modified code.
-- Report modified files, implemented logic, checks, and unresolved limitations.
+- Preserve PHP 7.2 syntax compatibility.
 
 ## Database Changes
 
 - Inspect the existing query, indexes, execution plan, and direct callers before changing SQL.
 - Do not change schemas, indexes, transaction behavior, or migration logic unless requested.
 - Keep SQL compatible with MySQL 8.x and the existing PHP database layer.
-
-## Final Response
-
-- Use Traditional Chinese only unless the user explicitly requests another language.
-- Keep technical names, commands, file paths, and CVS status values in their original form.
-- List each modified file as a Markdown link using the file name as the label and the absolute Windows path as the target.
-- End with: `備註：<50 字內摘要>`.

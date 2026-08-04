@@ -117,7 +117,7 @@ if ($Mode -eq 'Global' -or $Mode -eq 'All') {
 
 if ($Mode -eq 'Project' -or $Mode -eq 'All') {
     $projectTarget = Join-Path $backupRoot 'project'
-    foreach ($name in @('AGENTS.md', 'agent.md', 'AGENTS.override.md', '.codex-root', '.codex', '.agents\skills', '.codex-settings-manifest.json')) {
+    foreach ($name in @('AGENTS.md', 'AGENTS.override.md', '.codex-root', '.codex', '.agents\skills', '.codex-settings-manifest.json')) {
         $itemCount += Copy-ExistingItem -Source (Join-Path $ProjectPath $name) -Destination (Join-Path $projectTarget $name)
     }
 }
