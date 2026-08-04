@@ -44,23 +44,19 @@ Stop immediately when the preview or result contains `C`, an error, an unexpecte
 - Do not include unrelated, generated, temporary, cache, log, backup, vendor, or build files.
 - If a commit fails or reports an uncertain state, report the actual error and stop.
 
-## Code Changes
+## PHP 7.2 Workflow
 
-- Modify only code directly related to the request.
-- Preserve existing architecture, coding style, naming, structure, and backward compatibility.
-- Maintain PHP 7.2 compatibility.
-- Prefer minimal changes and do not refactor unless requested.
-- Do not introduce frameworks, libraries, design patterns, or unrelated security logic.
-
-## File Handling
-
-- Use existing context first.
-- Read only required files and sections.
-- Start from the specified file, function, class, method, or line range.
-- Follow direct dependencies only and expand incrementally.
-- Detect and preserve the original encoding, BOM state, and CRLF/LF line endings.
-- Files may contain Traditional Chinese, Simplified Chinese, English, Japanese, or Korean.
-- For files larger than 1000 lines, inspect only the relevant section first.
+- Start from the requested file, function, method, class, or line range.
+- Read only direct callers, callees, inheritance, and required dependencies.
+- Detect the file encoding and line endings before editing.
+- Preserve PHP 7.2 syntax compatibility and the existing application architecture.
+- Inspect existing SQL, bindings, indexes, and execution plans before changing query logic.
+- Prefer CVS read-only commands before any write operation.
+- Never run or propose `cvs add`; leave new-file registration to the user.
+- Never run or propose manual CRLF conversion commands; the CVS PostToolUse Hook is the single line-ending normalizer.
+- Make the smallest change that satisfies the request.
+- Run only validation relevant to the modified code.
+- Report modified files, implemented logic, checks, and unresolved limitations.
 
 ## Database Changes
 
@@ -71,8 +67,6 @@ Stop immediately when the preview or result contains `C`, an error, an unexpecte
 ## Final Response
 
 - Use Traditional Chinese only unless the user explicitly requests another language.
-- Keep technical names, commands, file paths, code, and CVS status values in their original form.
-- Do not output unchanged code, analysis, diffs, command logs, or unrelated explanations.
-- List each modified file as a Markdown link using the file name as the label and the absolute Windows path as the target, for example: `[dbGameLevel.php](e:/CVS/Marathon/db/dbGameLevel.php)`。不要加上 `Updated` 前綴或行號。
-- End with: `備註：<50 字內摘要>`。
-- If no files were modified, output: `未修改檔案。`
+- Keep technical names, commands, file paths, and CVS status values in their original form.
+- List each modified file as a Markdown link using the file name as the label and the absolute Windows path as the target.
+- End with: `備註：<50 字內摘要>`.
