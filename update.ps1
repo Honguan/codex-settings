@@ -2,6 +2,7 @@
 param(
     [switch]$SkipRepositoryPull,
     [switch]$SkipGlobal,
+    [switch]$SkipRegisteredProjects,
     [switch]$SkipCcusageInstall
 )
 
@@ -74,7 +75,8 @@ if (-not $SkipGlobal) {
     }
 }
 
-$projects = @(Get-RegisteredCodexProjects)
+$projects = if ($SkipRegisteredProjects) { @() } else { @(Get-RegisteredCodexProjects) }
+if ($SkipRegisteredProjects) { Write-Host '已略過已登記專案更新。' }
 foreach ($project in $projects) {
     $type = [string]$project.Type
     $path = [string]$project.Path
@@ -103,7 +105,7 @@ if ($results.Count -eq 0) {
     exit 0
 }
 
-$results | Select-Object Scope, Status, Target | Format-Table -AutoSize -Wrap | Out-Host
+$results | Select-Object @{ Name = '範圍'; Expression = { $_.Scope } }, @{ Name = '狀態'; Expression = { $_.Status } }, @{ Name = '目標'; Expression = { $_.Target } } | Format-Table -AutoSize -Wrap | Out-Host
 $failures = @($results | Where-Object Status -eq '失敗')
 if ($failures.Count -gt 0) {
     Write-Host ''

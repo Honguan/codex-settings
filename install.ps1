@@ -5,6 +5,9 @@ param(
     [string[]]$ProjectPath,
     [switch]$SkipContext7Key,
     [switch]$SkipCcusageInstall,
+    [switch]$SkipRepositoryPull,
+    [switch]$SkipGlobal,
+    [switch]$SkipRegisteredProjects,
     [switch]$InstallRequestExecutionOptimizer,
     [switch]$EnableDefaultModeRequestUserInput,
     [switch]$Force,
@@ -57,7 +60,11 @@ if ($Mode -eq 'Interactive') {
 if ($Mode -in @('Backup', 'Restore', 'Update', 'Uninstall')) {
     $actionScript = Join-Path $ScriptRoot ("{0}.ps1" -f $Mode.ToLowerInvariant())
     if (-not (Test-Path -LiteralPath $actionScript -PathType Leaf)) { throw "管理功能不存在：$actionScript" }
-    & $actionScript
+    if ($Mode -eq 'Update') {
+        & $actionScript -SkipRepositoryPull:$SkipRepositoryPull -SkipGlobal:$SkipGlobal -SkipRegisteredProjects:$SkipRegisteredProjects -SkipCcusageInstall:$SkipCcusageInstall
+    } else {
+        & $actionScript
+    }
     return
 }
 

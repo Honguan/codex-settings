@@ -161,6 +161,22 @@ Git／CVS 專案安裝成功後會登記到：
 & .\Install.cmd -Mode Update
 ```
 
+更新預設套用全域設定與全部已登記專案。需要縮小範圍時，仍只需使用同一入口：
+
+```powershell
+# 略過設定儲存庫同步、僅套用目前版本
+& .\Install.cmd -Mode Update -SkipRepositoryPull
+
+# 僅更新已登記專案
+& .\Install.cmd -Mode Update -SkipGlobal
+
+# 僅更新全域設定
+& .\Install.cmd -Mode Update -SkipRegisteredProjects
+
+# 略過 ccusage 套件安裝（仍同步指令）
+& .\Install.cmd -Mode Update -SkipCcusageInstall
+```
+
 會：
 
 1. `git pull --ff-only` 更新本設定倉庫。
