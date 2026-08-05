@@ -331,7 +331,11 @@ function Merge-HooksJson {
     if ($null -eq $existing.hooks) { $existing | Add-Member -NotePropertyName hooks -NotePropertyValue ([pscustomobject]@{}) -Force }
     foreach ($property in @($existing.hooks.PSObject.Properties)) {
         $filtered = @($property.Value | Where-Object { ($_ | ConvertTo-Json -Depth 20 -Compress) -notmatch 'crlf-updated-files\.ps1' })
-        $existing.hooks | Add-Member -NotePropertyName $property.Name -NotePropertyValue $filtered -Force
+        if ($filtered.Count -eq 0) {
+            $existing.hooks.PSObject.Properties.Remove($property.Name)
+        } else {
+            $existing.hooks | Add-Member -NotePropertyName $property.Name -NotePropertyValue $filtered -Force
+        }
     }
     $template = $TemplateContent | ConvertFrom-Json -ErrorAction Stop
     foreach ($property in @($template.hooks.PSObject.Properties)) {
@@ -350,7 +354,11 @@ function Remove-ManagedHooksJson {
     if ($null -eq $object.hooks) { return $Content }
     foreach ($property in @($object.hooks.PSObject.Properties)) {
         $filtered = @($property.Value | Where-Object { ($_ | ConvertTo-Json -Depth 20 -Compress) -notmatch 'crlf-updated-files\.ps1' })
-        $object.hooks | Add-Member -NotePropertyName $property.Name -NotePropertyValue $filtered -Force
+        if ($filtered.Count -eq 0) {
+            $object.hooks.PSObject.Properties.Remove($property.Name)
+        } else {
+            $object.hooks | Add-Member -NotePropertyName $property.Name -NotePropertyValue $filtered -Force
+        }
     }
     return ($object | ConvertTo-Json -Depth 30)
 }

@@ -272,5 +272,6 @@ Pencil 不安裝、不偵測、不修改。
 
 CVS Hook 只處理專案內、白名單文字副檔名且不超過 10 MB 的檔案，並保留原始位元內容，只轉換換行為 CRLF。
 CRLF 正規化只由 CVS Hook 執行，Codex 不得另行執行手動換行轉換命令。
+CRLF Hook 僅在檔案更新後即時執行；不再安裝會與子代理競爭的 `Stop -Flush` Hook。既有 CVS 專案執行更新時會移除舊的 Stop Hook。
 
 安裝 CVS 設定後重新啟動 Codex，使用 `/hooks` 檢查並信任 Hook。
