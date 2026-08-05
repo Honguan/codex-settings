@@ -111,7 +111,7 @@ function Uninstall-ManagedTarget {
                     }
                 } catch {
                     if (-not $ForceRemoval) {
-                        Write-Warning "Skipped invalid hooks file: $managedPath - $($_.Exception.Message)"
+                        Write-Warning "已略過無效的 Hook 檔案：$managedPath - $($_.Exception.Message)"
                         [void]$remainingEntries.Add($entry)
                         $skippedCount++
                         continue
@@ -125,7 +125,7 @@ function Uninstall-ManagedTarget {
             $currentHash = (Get-FileHash -LiteralPath $managedPath -Algorithm SHA256).Hash
             $installedHash = [string]$entry.Sha256
             if (-not $ForceRemoval -and $currentHash -ne $installedHash) {
-                Write-Warning "Skipped modified file: $managedPath"
+                Write-Warning "已略過使用者修改過的檔案：$managedPath"
                 [void]$remainingEntries.Add($entry)
                 $skippedCount++
                 continue
@@ -228,21 +228,21 @@ try {
     $operationLock = Enter-CodexSettingsLock
     New-Item -ItemType Directory -Path $BackupBase -Force | Out-Null
     $recovered = @(Repair-PendingTransactions -BackupRoot $BackupBase)
-    foreach ($path in $recovered) { Write-Warning "Recovered interrupted transaction: $path" }
+    foreach ($path in $recovered) { Write-Warning "已回復中斷的交易：$path" }
 
     if ($Mode -eq 'Interactive') {
         Write-Host ''
-        Write-Host 'Uninstall Managed Codex Settings'
-        Write-Host '================================'
-        Write-Host '[1] Global settings, ccsessions, cdaily, and managed ccusage state'
-        Write-Host '[2] Project settings'
-        Write-Host '[0] Exit'
+        Write-Host '移除受管理的 Codex 設定'
+        Write-Host '========================'
+        Write-Host '[1] 全域設定、ccsessions、cdaily 與受管理的 ccusage 狀態'
+        Write-Host '[2] 專案設定'
+        Write-Host '[0] 結束'
         Write-Host ''
-        switch (Read-Host 'Select') {
+        switch (Read-Host '請選擇') {
             '1' { $Mode = 'Global' }
             '2' { $Mode = 'Project' }
             '0' { exit 0 }
-            default { throw 'Invalid selection.' }
+            default { throw '選項無效。' }
         }
     }
 
@@ -253,20 +253,20 @@ try {
             [pscustomobject]@{ Root = Join-Path $HOME '.agents\skills'; Label = 'legacy-global-skills'; Unregister = $false }
         )
     } else {
-        if ([string]::IsNullOrWhiteSpace($ProjectPath)) { $ProjectPath = Read-Host 'Enter the project root' }
+        if ([string]::IsNullOrWhiteSpace($ProjectPath)) { $ProjectPath = Read-Host '輸入專案根目錄' }
         $targets = @([pscustomobject]@{ Root = (Resolve-Path -LiteralPath $ProjectPath).Path; Label = 'project'; Unregister = $true })
     }
 
     $availableTargets = @($targets | Where-Object { Test-Path -LiteralPath (Join-Path $_.Root '.codex-settings-manifest.json') -PathType Leaf })
-    if ($availableTargets.Count -eq 0) { throw 'No managed settings manifests were found for the selected scope.' }
+    if ($availableTargets.Count -eq 0) { throw '所選範圍找不到受管理設定的資訊檔。' }
 
     if (-not $Force) {
         Write-Host ''
-        Write-Host 'Managed targets:'
+        Write-Host '受管理目標：'
         foreach ($target in $availableTargets) { Write-Host "- $($target.Root)" }
-        $confirmation = Read-Host 'Remove settings installed by this package? [y/N]'
+        $confirmation = Read-Host '要移除此安裝包設定的內容嗎？[y/N]'
         if ($confirmation -notin @('y', 'Y', 'yes', 'YES')) {
-            Write-Host 'Uninstall cancelled.'
+            Write-Host '已取消移除。'
             exit 0
         }
     }
@@ -279,15 +279,15 @@ try {
 
     Write-Host ''
     foreach ($result in $results) {
-        Write-Host "Target        : $($result.Target)"
-        Write-Host "Removed files : $($result.Removed)"
-        Write-Host "Updated files : $($result.Updated)"
-        Write-Host "Skipped files : $($result.Skipped)"
-        Write-Host "Backup        : $($result.Backup)"
+        Write-Host "目標：$($result.Target)"
+        Write-Host "已移除檔案：$($result.Removed)"
+        Write-Host "已更新檔案：$($result.Updated)"
+        Write-Host "已略過檔案：$($result.Skipped)"
+        Write-Host "備份：$($result.Backup)"
         if ($result.External.Count -gt 0) {
             foreach ($key in $result.External.Keys) { Write-Host ("{0,-14}: {1}" -f $key, $result.External[$key]) }
         }
-        if ($result.ProjectUnregistered) { Write-Host "Unregistered  : $($result.Target)" }
+        if ($result.ProjectUnregistered) { Write-Host "已取消登記：$($result.Target)" }
         Write-Host ''
     }
 } finally {

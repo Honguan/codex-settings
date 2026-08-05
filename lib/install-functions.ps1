@@ -14,7 +14,7 @@ function Select-Mode {
     Write-Host '[7] 移除受管理設定'
     Write-Host '[0] 結束'
 
-    switch (Read-Host 'Select') {
+    switch (Read-Host '請選擇') {
         '1' { return 'Global' }
         '2' { return 'Git' }
         '3' { return 'CVS' }
@@ -23,7 +23,7 @@ function Select-Mode {
         '6' { return 'Restore' }
         '7' { return 'Uninstall' }
         '0' { return 'Exit' }
-        default { throw 'Invalid selection.' }
+        default { throw '選項無效。' }
     }
 }
 
@@ -33,11 +33,11 @@ function Select-InstallStyle {
     Write-Host '[1] 安全合併（預設、建議）：保留未受管理的既有內容'
     Write-Host '[2] 完整覆蓋：以範本取代目標檔案'
 
-    switch (Read-Host 'Select [1]') {
+    switch (Read-Host '請選擇 [1]') {
         '' { return 'Merge' }
         '1' { return 'Merge' }
         '2' { return 'Replace' }
-        default { throw 'Invalid installation style.' }
+        default { throw '安裝方式無效。' }
     }
 }
 
@@ -70,38 +70,44 @@ function Select-GlobalProjectPaths {
 
     if ($projects.Count -gt 0) {
         Write-Host ''
-        Write-Host 'Registered projects'
+        Write-Host '已登記專案'
         for ($index = 0; $index -lt $projects.Count; $index++) {
             Write-Host ('[{0}] {1} {2}' -f ($index + 1), $projects[$index].Type, $projects[$index].Path)
         }
-        $selection = [string](Read-Host 'Install registered projects (IDs separated by commas, blank to skip)')
-        foreach ($part in ($selection -split '[,\s]+' | Where-Object { $_ })) {
-            if ($part -notmatch '^\d+$') { continue }
-            $index = [int]$part - 1
-            if ($index -ge 0 -and $index -lt $projects.Count -and $seen.Add([string]$projects[$index].Path)) {
-                [void]$paths.Add([string]$projects[$index].Path)
+        $selection = [string](Read-Host '選擇要更新的專案 ID（以逗號分隔；直接按 Enter 全部更新）')
+        if ([string]::IsNullOrWhiteSpace($selection)) {
+            foreach ($project in $projects) {
+                if ($seen.Add([string]$project.Path)) { [void]$paths.Add([string]$project.Path) }
+            }
+        } else {
+            foreach ($part in ($selection -split '[,\s]+' | Where-Object { $_ })) {
+                if ($part -notmatch '^\d+$') { continue }
+                $index = [int]$part - 1
+                if ($index -ge 0 -and $index -lt $projects.Count -and $seen.Add([string]$projects[$index].Path)) {
+                    [void]$paths.Add([string]$projects[$index].Path)
+                }
             }
         }
     } else {
         Write-Host '尚未登記任何專案。'
     }
 
-    foreach ($path in Read-ProjectPaths 'Add Git/CVS project paths (semicolon separated, blank to skip)') {
+    foreach ($path in Read-ProjectPaths '新增 Git／CVS 專案路徑（以分號分隔；直接按 Enter 略過）') {
         if ($seen.Add($path)) { [void]$paths.Add($path) }
     }
     return $paths.ToArray()
 }
 
 function Assert-Command([string]$Name) {
-    if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) { throw "$Name was not found in PATH." }
+    if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) { throw "在 PATH 中找不到 $Name。" }
 }
 
 function Test-Prerequisites([string]$InstallMode, [string]$TargetPath) {
     if ($PSVersionTable.PSVersion -lt [version]'5.1') {
-        throw "PowerShell 5.1 or newer is required. Current: $($PSVersionTable.PSVersion)"
+        throw "需要 PowerShell 5.1 或更新版本；目前版本：$($PSVersionTable.PSVersion)"
     }
     if ($InstallMode -eq 'Global' -and $PSVersionTable.PSVersion.Major -lt 7) {
-        throw "PowerShell 7 or newer is required to install ccusage, ccsessions, and cdaily. Current: $($PSVersionTable.PSVersion)"
+        throw "安裝 ccusage、ccsessions 與 cdaily 需要 PowerShell 7 或更新版本；目前版本：$($PSVersionTable.PSVersion)"
     }
 
     Test-DirectoryWritable -Path $TargetPath
@@ -110,15 +116,15 @@ function Test-Prerequisites([string]$InstallMode, [string]$TargetPath) {
     foreach ($name in @('codex', 'node', 'npm', 'npx')) { Assert-Command $name }
     $nodeVersion = (& node --version 2>&1 | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or $nodeVersion -notmatch '^v?(\d+)') {
-        throw "Unable to determine Node.js version. Output: $nodeVersion"
+        throw "無法取得 Node.js 版本。輸出：$nodeVersion"
     }
-    if ([int]$matches[1] -lt 20) { throw "Node.js 20 or newer is required. Current: $nodeVersion" }
+    if ([int]$matches[1] -lt 20) { throw "需要 Node.js 20 或更新版本；目前版本：$nodeVersion" }
 
     Test-DirectoryWritable -Path (Split-Path -Parent $PROFILE.CurrentUserAllHosts)
 
     $configTemplate = Join-Path $ScriptRoot 'templates\global\config.toml'
     $shape = Get-TomlShape -Content ([IO.File]::ReadAllText($configTemplate))
-    if ($shape.Duplicates.Count -gt 0) { throw "Bundled config.toml is invalid: $($shape.Duplicates -join ', ')" }
+    if ($shape.Duplicates.Count -gt 0) { throw "內建 config.toml 無效：$($shape.Duplicates -join ', ')" }
 }
 
 function Resolve-Targets([string]$InstallMode, [string[]]$RequestedPath, [switch]$InstallRequestExecutionOptimizer, [switch]$EnableDefaultModeRequestUserInput) {
@@ -140,10 +146,10 @@ function Resolve-Targets([string]$InstallMode, [string[]]$RequestedPath, [switch
         if ($mode -eq 'Global') {
             if (Test-Path -LiteralPath (Join-Path $root '.git')) { $mode = 'Git' }
             elseif (Test-Path -LiteralPath (Join-Path $root 'CVS')) { $mode = 'CVS' }
-            else { throw "The selected directory is not a Git or CVS project root: $root" }
+            else { throw "所選目錄不是 Git 或 CVS 專案根目錄：$root" }
         }
         $marker = if ($mode -eq 'Git') { '.git' } else { 'CVS' }
-        if (-not (Test-Path -LiteralPath (Join-Path $root $marker))) { throw "The selected directory is not a $mode project root: $root" }
+        if (-not (Test-Path -LiteralPath (Join-Path $root $marker))) { throw "所選目錄不是 $mode 專案根目錄：$root" }
         if (@($targets | Where-Object { [string]::Equals($_.Root, $root, [StringComparison]::OrdinalIgnoreCase) }).Count -gt 0) { continue }
 
         [void]$targets.Add([pscustomobject]@{
@@ -153,7 +159,7 @@ function Resolve-Targets([string]$InstallMode, [string[]]$RequestedPath, [switch
         })
     }
 
-    if ($targets.Count -eq 0) { throw 'Project path is required.' }
+    if ($targets.Count -eq 0) { throw '需要提供專案路徑。' }
     return $targets.ToArray()
 }
 
@@ -161,7 +167,7 @@ function Get-Manifest([string]$Root) {
     $path = Join-Path $Root '.codex-settings-manifest.json'
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $null }
     try { return Get-Content -LiteralPath $path -Raw | ConvertFrom-Json -ErrorAction Stop }
-    catch { throw "Invalid managed manifest: $path`n$($_.Exception.Message)" }
+    catch { throw "受管理設定資訊檔無效：$path`n$($_.Exception.Message)" }
 }
 
 function Get-ManifestEntry($Manifest, [string]$Path) {
@@ -297,7 +303,7 @@ function Assert-CrlfHookInstallation([string]$Mode, [string]$Root) {
 }
 
 function Install-Target($Target, $Transaction, [switch]$Force) {
-    if (-not (Test-Path -LiteralPath $Target.Template -PathType Container)) { throw "Template missing: $($Target.Template)" }
+    if (-not (Test-Path -LiteralPath $Target.Template -PathType Container)) { throw "找不到範本：$($Target.Template)" }
     New-Item -ItemType Directory -Path $Target.Root -Force | Out-Null
     if ($Target.Mode -eq 'Global') { Remove-GlobalCrlfHooks -Root $Target.Root -Transaction $Transaction }
     $previous = Get-Manifest $Target.Root
@@ -325,7 +331,7 @@ function Install-Target($Target, $Transaction, [switch]$Force) {
             if ($state.Exists -and -not $owned) {
                 $sourceHash = (Get-FileHash $source.FullName -Algorithm SHA256).Hash
                 $destinationHash = (Get-FileHash $destination -Algorithm SHA256).Hash
-                if ($sourceHash -ne $destinationHash) { throw "Refusing to overwrite an unmanaged file: $destination" }
+                if ($sourceHash -ne $destinationHash) { throw "拒絕覆寫未受管理的檔案：$destination" }
             }
             if ($isOptionalFeatureConfig) { Write-TextFileState -Path $destination -Content $template -Encoding $state.Encoding }
             else { Copy-FileAtomic -Source $source.FullName -Destination $destination }
@@ -384,8 +390,8 @@ function Set-Context7Key([switch]$Skip, $PreviousManifest) {
 
     if ([string]::IsNullOrWhiteSpace($userBefore) -and -not $Skip) {
         Write-Host ''
-        Write-Host 'Context7 API key is optional but recommended for higher limits.'
-        $secure = Read-Host 'Enter Context7 API key, or press Enter to skip' -AsSecureString
+        Write-Host 'Context7 API Key 為選填；設定後可提高使用額度。'
+        $secure = Read-Host '輸入 Context7 API Key，或直接按 Enter 略過' -AsSecureString
         $pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
         try { $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer) }
         finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer) }
@@ -396,7 +402,7 @@ function Set-Context7Key([switch]$Skip, $PreviousManifest) {
         }
     } elseif (-not [string]::IsNullOrWhiteSpace($userBefore)) {
         [Environment]::SetEnvironmentVariable($name, $userBefore, 'Process')
-        Write-Host 'Using existing CONTEXT7_API_KEY.'
+        Write-Host '使用既有的 CONTEXT7_API_KEY。'
     }
 
     $managedBefore = $false

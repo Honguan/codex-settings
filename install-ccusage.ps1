@@ -11,12 +11,12 @@ $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $ScriptRoot 'lib\codex-settings-common.ps1')
 
 if ($PSVersionTable.PSVersion.Major -lt 7) {
-    throw "PowerShell 7 or newer is required to install ccsessions and cdaily. Current: $($PSVersionTable.PSVersion)"
+    throw "安裝 ccsessions 與 cdaily 需要 PowerShell 7 或更新版本；目前版本：$($PSVersionTable.PSVersion)"
 }
 
 $templatePath = Join-Path $ScriptRoot 'templates\powershell\ccusage-profile.ps1'
 if (-not (Test-Path -LiteralPath $templatePath -PathType Leaf)) {
-    throw "ccusage profile template was not found: $templatePath"
+    throw "找不到 ccusage Profile 範本：$templatePath"
 }
 
 $packageBefore = if ($null -ne $PackageState) { $PackageState } else { Get-CcusageState }
@@ -39,7 +39,7 @@ try {
         $installExitCode = $LASTEXITCODE
         $installOutput | Out-Host
         if ($installExitCode -ne 0) {
-            throw "ccusage@latest installation failed with npm exit code $installExitCode.`n$($installOutput | Out-String)"
+            throw "ccusage@latest 安裝失敗，npm 結束代碼：$installExitCode。`n$($installOutput | Out-String)"
         }
         $packageInstalledNow = $true
     }
@@ -59,7 +59,7 @@ try {
             [void][Management.Automation.Language.Parser]::ParseInput($newContent, [ref]$tokens, [ref]$parseErrors)
             if ($parseErrors.Count -gt 0) {
                 $firstError = $parseErrors[0]
-                throw "PowerShell profile validation failed for $($profileTarget.Path) at line $($firstError.Extent.StartLineNumber): $($firstError.Message)"
+                throw "PowerShell Profile 驗證失敗：$($profileTarget.Path)，第 $($firstError.Extent.StartLineNumber) 行：$($firstError.Message)"
             }
 
             if ($profileTarget.State.Exists) {
@@ -75,17 +75,17 @@ try {
     . $templatePath | Out-Null
 
     if (-not (Get-Command ccsessions -ErrorAction SilentlyContinue)) {
-        throw "The ccsessions function was not loaded from template: $templatePath"
+        throw "無法從範本載入 ccsessions 函式：$templatePath"
     }
     if (-not (Get-Command cdaily -ErrorAction SilentlyContinue)) {
-        throw "The cdaily function was not loaded from template: $templatePath"
+        throw "無法從範本載入 cdaily 函式：$templatePath"
     }
 
     if ($packageInstalledNow -and -not $SkipRuntimeValidation) {
         $versionOutput = & npx --yes 'ccusage@latest' --version 2>&1
         $versionExitCode = $LASTEXITCODE
         if ($versionExitCode -ne 0) {
-            throw "ccusage@latest runtime validation failed with exit code $versionExitCode.`n$($versionOutput | Out-String)"
+            throw "ccusage@latest 執行驗證失敗，結束代碼：$versionExitCode。`n$($versionOutput | Out-String)"
         }
     }
 
@@ -116,10 +116,10 @@ try {
     elseif ([bool]$packageBefore.Installed) { Write-Host "偵測到 ccusage $($packageBefore.Version)；略過套件重複安裝。" }
     else { Write-Host '已略過 ccusage 套件安裝。' }
     Write-Host (if (@($profileTargets | Where-Object Changed).Count -gt 0) { '已更新 ccsessions、cdaily 指令。' } else { 'ccsessions、cdaily 指令已是最新內容，未改寫 Profile。' })
-    Write-Host "PowerShell: $($PSVersionTable.PSVersion)"
-    foreach ($profileTarget in $profileTargets) { Write-Host "Profile   : $($profileTarget.Path)" }
+    Write-Host "PowerShell 版本：$($PSVersionTable.PSVersion)"
+    foreach ($profileTarget in $profileTargets) { Write-Host "設定檔：$($profileTarget.Path)" }
     foreach ($profileTarget in $profileTargets) {
-        if ($profileTarget.BackupPath) { Write-Host "Backup    : $($profileTarget.BackupPath)" }
+        if ($profileTarget.BackupPath) { Write-Host "備份：$($profileTarget.BackupPath)" }
     }
 } catch {
     $primaryError = $_.Exception.Message

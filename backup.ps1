@@ -25,25 +25,25 @@ function Copy-ExistingItem {
 
 if ($Mode -eq 'Interactive') {
     Write-Host ''
-    Write-Host 'Backup Codex Settings'
-    Write-Host '====================='
-    Write-Host '[1] Global managed settings, registry, profile, and ccusage state'
-    Write-Host '[2] Project settings'
-    Write-Host '[3] Global and project settings'
-    Write-Host '[0] Exit'
+    Write-Host '備份 Codex 設定'
+    Write-Host '==============='
+    Write-Host '[1] 全域受管理設定、專案清單、Profile 與 ccusage 狀態'
+    Write-Host '[2] 專案設定'
+    Write-Host '[3] 全域與專案設定'
+    Write-Host '[0] 結束'
     Write-Host ''
 
-    switch (Read-Host 'Select') {
+    switch (Read-Host '請選擇') {
         '1' { $Mode = 'Global' }
         '2' { $Mode = 'Project' }
         '3' { $Mode = 'All' }
         '0' { exit 0 }
-        default { throw 'Invalid selection.' }
+        default { throw '選項無效。' }
     }
 }
 
 if (($Mode -eq 'Project' -or $Mode -eq 'All') -and [string]::IsNullOrWhiteSpace($ProjectPath)) {
-    $ProjectPath = Read-Host 'Enter the project root'
+    $ProjectPath = Read-Host '輸入專案根目錄'
 }
 if ($Mode -eq 'Project' -or $Mode -eq 'All') {
     $ProjectPath = (Resolve-Path -LiteralPath $ProjectPath).Path
@@ -131,8 +131,8 @@ $metadata.ItemCount = $itemCount
 Write-JsonFileAtomic -Path (Join-Path $backupRoot 'backup-meta.json') -Value $metadata -Depth 12
 
 Write-Host ''
-Write-Host "Backed up items : $itemCount"
-Write-Host "Backup path     : $backupRoot"
+Write-Host "已備份項目：$itemCount"
+Write-Host "備份位置：$backupRoot"
 if ($null -ne $metadata.Global -and $metadata.Global.Context7.KeyPresent) {
-    Write-Host 'Context7 key    : detected but intentionally not copied by manual backup'
+    Write-Host 'Context7 Key：已偵測到，但手動備份不會複製。'
 }

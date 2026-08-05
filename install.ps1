@@ -35,22 +35,22 @@ if ($Mode -eq 'Interactive') {
                 }
                 'Git' {
                     $style = Select-InstallStyle
-                    $paths = Read-ProjectPaths 'Enter Git project paths (semicolon separated)'
+                    $paths = Read-ProjectPaths '輸入 Git 專案路徑（以分號分隔）'
                     & $PSCommandPath -Mode Git -InstallStyle $style -ProjectPath $paths
                 }
                 'CVS' {
                     $style = Select-InstallStyle
-                    $paths = Read-ProjectPaths 'Enter CVS project paths (semicolon separated)'
+                    $paths = Read-ProjectPaths '輸入 CVS 專案路徑（以分號分隔）'
                     & $PSCommandPath -Mode CVS -InstallStyle $style -ProjectPath $paths
                 }
                 default { & $PSCommandPath -Mode $selection }
             }
         } catch {
-            Write-Host "Operation failed: $($_.Exception.Message)" -ForegroundColor Red
+            Write-Host "作業失敗：$($_.Exception.Message)" -ForegroundColor Red
         }
 
         Write-Host ''
-        [void](Read-Host 'Press Enter to return to the installer menu')
+        [void](Read-Host '按 Enter 返回安裝器選單')
     }
 }
 
@@ -77,7 +77,7 @@ $contextState = $null
 try {
     $operationLock = Enter-CodexSettingsLock
     $recovered = @(Repair-PendingTransactions -BackupRoot $BackupBase)
-    foreach ($path in $recovered) { Write-Warning "Recovered interrupted transaction: $path" }
+    foreach ($path in $recovered) { Write-Warning "已回復中斷的交易：$path" }
 
     $transactionRoot = Join-Path $BackupBase ((Get-Date -Format 'yyyyMMdd-HHmmss-fff') + "-$($Mode.ToLowerInvariant())-transaction")
     $transaction = New-FileTransaction -Root $transactionRoot -Mode "Install-$Mode"

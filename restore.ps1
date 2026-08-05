@@ -30,40 +30,40 @@ try {
     $operationLock = Enter-CodexSettingsLock
     New-Item -ItemType Directory -Path $BackupRoot -Force | Out-Null
     $recovered = @(Repair-PendingTransactions -BackupRoot $BackupRoot)
-    foreach ($path in $recovered) { Write-Warning "Recovered interrupted transaction: $path" }
+    foreach ($path in $recovered) { Write-Warning "已回復中斷的交易：$path" }
 
     if ([string]::IsNullOrWhiteSpace($BackupPath)) {
         $candidates = @(Get-ChildItem -LiteralPath $BackupRoot -Directory -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 10)
-        if ($candidates.Count -eq 0) { throw "No backups were found under: $BackupRoot" }
+        if ($candidates.Count -eq 0) { throw "找不到備份：$BackupRoot" }
 
         Write-Host ''
-        Write-Host 'Available backups'
-        Write-Host '================='
+        Write-Host '可用備份'
+        Write-Host '========'
         for ($index = 0; $index -lt $candidates.Count; $index++) {
             Write-Host ("[{0}] {1}" -f ($index + 1), $candidates[$index].FullName)
         }
-        Write-Host '[0] Exit'
+        Write-Host '[0] 結束'
         Write-Host ''
 
-        $selection = [int](Read-Host 'Select')
+        $selection = [int](Read-Host '請選擇')
         if ($selection -eq 0) { exit 0 }
-        if ($selection -lt 1 -or $selection -gt $candidates.Count) { throw 'Invalid selection.' }
+        if ($selection -lt 1 -or $selection -gt $candidates.Count) { throw '選項無效。' }
         $BackupPath = $candidates[$selection - 1].FullName
     }
 
     $BackupPath = (Resolve-Path -LiteralPath $BackupPath).Path
     $metadataPath = Join-Path $BackupPath 'backup-meta.json'
-    if (-not (Test-Path -LiteralPath $metadataPath -PathType Leaf)) { throw "Backup metadata is missing: $metadataPath" }
+    if (-not (Test-Path -LiteralPath $metadataPath -PathType Leaf)) { throw "找不到備份中繼資料：$metadataPath" }
     $metadata = Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json -ErrorAction Stop
 
     if (-not $Force) {
         Write-Host ''
-        Write-Host "Backup : $BackupPath"
-        Write-Host "Created: $($metadata.CreatedAt)"
-        Write-Host "Mode   : $($metadata.Mode)"
-        $confirmation = Read-Host 'Restore this backup? [y/N]'
+        Write-Host "備份：$BackupPath"
+        Write-Host "建立時間：$($metadata.CreatedAt)"
+        Write-Host "類型：$($metadata.Mode)"
+        $confirmation = Read-Host '要還原此備份嗎？[y/N]'
         if ($confirmation -notin @('y', 'Y', 'yes', 'YES')) {
-            Write-Host 'Restore cancelled.'
+            Write-Host '已取消還原。'
             exit 0
         }
     }
@@ -78,7 +78,7 @@ try {
             $targetPath = [string]$entry.Path
             if ([bool]$entry.Existed) {
                 $backupFile = [string]$entry.BackupPath
-                if (-not (Test-Path -LiteralPath $backupFile -PathType Leaf)) { throw "Transaction backup file is missing: $backupFile" }
+                if (-not (Test-Path -LiteralPath $backupFile -PathType Leaf)) { throw "找不到交易備份檔：$backupFile" }
                 Copy-FileAtomic -Source $backupFile -Destination $targetPath
                 $restoredCount++
             } else {
@@ -88,7 +88,7 @@ try {
         Restore-ExternalTransactionState -Metadata $metadata
     } elseif ($metadata.PSObject.Properties.Name -contains 'FilesRoot') {
         $restoredCount += Copy-DirectoryContent -Source ([string]$metadata.FilesRoot) -Destination ([string]$metadata.TargetRoot)
-        [void]$warnings.Add('Legacy uninstall backup restored managed files only; older metadata did not record all external state.')
+        [void]$warnings.Add('舊版移除備份僅還原受管理檔案；舊版中繼資料未記錄所有外部狀態。')
     } else {
         $globalCodex = Join-Path $BackupPath 'global\.codex'
         $globalAgents = Join-Path $BackupPath 'global\.agents'
@@ -98,7 +98,7 @@ try {
         $restoredCount += Copy-DirectoryContent -Source $globalAgents -Destination (Join-Path $HOME '.agents')
         if (Test-Path -LiteralPath $project -PathType Container) {
             $projectRoot = [string]$metadata.ProjectRoot
-            if ([string]::IsNullOrWhiteSpace($projectRoot)) { throw 'ProjectRoot is missing from backup metadata.' }
+            if ([string]::IsNullOrWhiteSpace($projectRoot)) { throw '備份中繼資料缺少 ProjectRoot。' }
             $restoredCount += Copy-DirectoryContent -Source $project -Destination $projectRoot
         }
     }
@@ -110,7 +110,7 @@ try {
             if ([string]::IsNullOrWhiteSpace($registryPath)) { $registryPath = Get-CodexProjectRegistryPath }
             if ([bool]$registryMetadata.Existed) {
                 $registryBackup = Join-Path $BackupPath ([string]$registryMetadata.BackupRelativePath)
-                if (-not (Test-Path -LiteralPath $registryBackup -PathType Leaf)) { throw "Project registry backup is missing: $registryBackup" }
+                if (-not (Test-Path -LiteralPath $registryBackup -PathType Leaf)) { throw "找不到專案清單備份：$registryBackup" }
                 Copy-FileAtomic -Source $registryBackup -Destination $registryPath
                 $restoredCount++
             } else {
@@ -128,7 +128,7 @@ try {
             if ([string]::IsNullOrWhiteSpace($profilePath)) { continue }
             if ([bool]$profileMetadata.Existed) {
                 $profileBackup = Join-Path $BackupPath ([string]$profileMetadata.BackupRelativePath)
-                if (-not (Test-Path -LiteralPath $profileBackup -PathType Leaf)) { throw "PowerShell profile backup is missing: $profileBackup" }
+                if (-not (Test-Path -LiteralPath $profileBackup -PathType Leaf)) { throw "找不到 PowerShell Profile 備份：$profileBackup" }
                 Copy-FileAtomic -Source $profileBackup -Destination $profilePath
                 $restoredCount++
             } else {
@@ -139,14 +139,14 @@ try {
         if ($null -ne $metadata.Global.Ccusage) { Restore-CcusageState -State $metadata.Global.Ccusage }
         if ($null -ne $metadata.Global.Context7 -and [bool]$metadata.Global.Context7.KeyPresent -and
             [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable('CONTEXT7_API_KEY', 'User'))) {
-            [void]$warnings.Add('The manual backup detected a Context7 key but did not copy it. Set CONTEXT7_API_KEY again manually.')
+            [void]$warnings.Add('手動備份偵測到 Context7 Key，但未複製。請手動重新設定 CONTEXT7_API_KEY。')
         }
     }
 
     Write-Host ''
-    Write-Host "Restored items : $restoredCount"
+    Write-Host "已還原項目：$restoredCount"
     foreach ($warning in $warnings) { Write-Warning $warning }
-    Write-Host 'Restart PowerShell and Codex to reload the restored settings.'
+    Write-Host '請重新啟動 PowerShell 與 Codex，以載入還原後的設定。'
 } finally {
     Exit-CodexSettingsLock -Lock $operationLock
 }

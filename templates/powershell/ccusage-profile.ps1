@@ -301,10 +301,10 @@ function global:ccsessions {
         if ($matched.Count -eq 0) { throw "No matching Codex sessions were found for: $($arguments -join ', ')" }
         Show-Details $matched
     } catch {
-        Write-Host 'ccsessions failed.' -ForegroundColor Red
-        Write-Host "Reason : $($_.Exception.Message)" -ForegroundColor Red
-        if (-not [string]::IsNullOrWhiteSpace($commandContext.Text)) { Write-Host "Command: $($commandContext.Text)" }
-        Write-Host "Profile: $($PROFILE.CurrentUserAllHosts)"
+        Write-Host 'ccsessions 執行失敗。' -ForegroundColor Red
+        Write-Host "原因：$($_.Exception.Message)" -ForegroundColor Red
+        if (-not [string]::IsNullOrWhiteSpace($commandContext.Text)) { Write-Host "指令：$($commandContext.Text)" }
+        Write-Host "設定檔：$($PROFILE.CurrentUserAllHosts)"
     }
 }
 # <<< CS CODEX SESSION VIEWER <<<
@@ -463,9 +463,9 @@ function global:cdaily {
         if ($dailyRows.Count -eq 0) { throw 'No daily Codex usage rows were returned.' }
         Show-DailyDetails -DailyRows $dailyRows -Totals $report.totals
     } catch {
-        Write-Host 'cdaily failed.' -ForegroundColor Red
-        Write-Host "Reason : $($_.Exception.Message)" -ForegroundColor Red
-        Write-Host "Profile: $($PROFILE.CurrentUserAllHosts)"
+        Write-Host 'cdaily 執行失敗。' -ForegroundColor Red
+        Write-Host "原因：$($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "設定檔：$($PROFILE.CurrentUserAllHosts)"
     }
 }
 # <<< CDAILY CODEX DAILY REPORT <<<
