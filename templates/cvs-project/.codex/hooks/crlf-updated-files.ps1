@@ -30,11 +30,6 @@ $stateBase = if ($env:LOCALAPPDATA) {
     Join-Path ([IO.Path]::GetTempPath()) 'CodexSettings-HookState'
 }
 
-New-Item -ItemType Directory -Path $stateBase -Force | Out-Null
-Get-ChildItem -LiteralPath $stateBase -File -ErrorAction SilentlyContinue |
-    Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-7) } |
-    Remove-Item -Force -ErrorAction SilentlyContinue
-
 $sha = [Security.Cryptography.SHA256]::Create()
 try {
     $rootHash = ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($projectRoot)))).Replace('-', '').Substring(0, 16)
@@ -42,6 +37,21 @@ try {
     $sha.Dispose()
 }
 $stateFile = Join-Path $stateBase ("crlf-$rootHash.txt")
+
+# Stop hooks can be invoked repeatedly by the main agent and child agents.
+# Flush is intentionally idempotent and must never fail when another process
+# already removed the shared state file.  It does not need to create the state
+# directory or read hook input.
+if ($Flush) {
+    try { Remove-Item -LiteralPath $stateFile -Force -ErrorAction SilentlyContinue } catch { }
+    exit 0
+}
+
+New-Item -ItemType Directory -Path $stateBase -Force | Out-Null
+Get-ChildItem -LiteralPath $stateBase -File -ErrorAction SilentlyContinue |
+    Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-7) } |
+    Remove-Item -Force -ErrorAction SilentlyContinue
+
 $targets = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
 $inputText = [Console]::In.ReadToEnd()
 
@@ -138,10 +148,6 @@ try {
             foreach ($target in $targets) { [void]$allTargets.Add($target) }
             [IO.File]::WriteAllLines($stateFile, @($allTargets))
         }
-    }
-
-    if ($Flush) {
-        Remove-Item -LiteralPath $stateFile -Force -ErrorAction SilentlyContinue
     }
 
     if ($convertedCount -gt 0) {
