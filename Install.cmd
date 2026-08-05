@@ -11,5 +11,5 @@ if %errorlevel%==0 (
 
 set EXIT_CODE=%errorlevel%
 echo.
-pause
+if "%~1"=="" pause
 exit /b %EXIT_CODE%

@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('Interactive', 'Global', 'Git', 'CVS')]
+    [ValidateSet('Interactive', 'Global', 'Git', 'CVS', 'Backup', 'Restore', 'Update', 'Uninstall')]
     [string]$Mode = 'Interactive',
     [string[]]$ProjectPath,
     [switch]$SkipContext7Key,
@@ -43,10 +43,7 @@ if ($Mode -eq 'Interactive') {
                     $paths = Read-ProjectPaths 'Enter CVS project paths (semicolon separated)'
                     & $PSCommandPath -Mode CVS -InstallStyle $style -ProjectPath $paths
                 }
-                'Backup' { & (Join-Path $ScriptRoot 'backup.ps1') }
-                'Restore' { & (Join-Path $ScriptRoot 'restore.ps1') }
-                'Update' { & (Join-Path $ScriptRoot 'update.ps1') }
-                'Uninstall' { & (Join-Path $ScriptRoot 'uninstall.ps1') }
+                default { & $PSCommandPath -Mode $selection }
             }
         } catch {
             Write-Host "Operation failed: $($_.Exception.Message)" -ForegroundColor Red
@@ -55,6 +52,13 @@ if ($Mode -eq 'Interactive') {
         Write-Host ''
         [void](Read-Host 'Press Enter to return to the installer menu')
     }
+}
+
+if ($Mode -in @('Backup', 'Restore', 'Update', 'Uninstall')) {
+    $actionScript = Join-Path $ScriptRoot ("{0}.ps1" -f $Mode.ToLowerInvariant())
+    if (-not (Test-Path -LiteralPath $actionScript -PathType Leaf)) { throw "管理功能不存在：$actionScript" }
+    & $actionScript
+    return
 }
 
 if ($Force) { $InstallStyle = 'Replace' }
@@ -105,12 +109,12 @@ try {
                 Context7KeyCreatedNow = [bool]$contextState.CreatedNow
             }
 
-            $profilePath = $PROFILE.CurrentUserAllHosts
-            Save-TransactionFile $transaction $profilePath
-            $ccusage = & (Join-Path $ScriptRoot 'install-ccusage.ps1') -SkipPackageInstall:$SkipCcusageInstall -PassThru
+            $profilePaths = @($PROFILE.CurrentUserAllHosts, $PROFILE.CurrentUserCurrentHost) | Select-Object -Unique
+            foreach ($profilePath in $profilePaths) { Save-TransactionFile $transaction $profilePath }
+            $ccusage = & (Join-Path $ScriptRoot 'install-ccusage.ps1') -SkipPackageInstall:$SkipCcusageInstall -PackageState $ccusageBefore -PassThru
 
             $original = $ccusageBefore
-            $installedByPackage = (-not [bool]$ccusageBefore.Installed) -and (-not $SkipCcusageInstall)
+            $installedByPackage = [bool]$ccusage.PackageInstalledNow
             if ($null -ne $global.Previous -and $null -ne $global.Previous.External -and $null -ne $global.Previous.External.Ccusage) {
                 $old = $global.Previous.External.Ccusage
                 $original = [pscustomobject]@{ Installed = [bool]$old.WasInstalledBefore; Version = [string]$old.PreviousVersion }
@@ -118,18 +122,14 @@ try {
             }
 
             $external = [ordered]@{
-                PowerShellProfile = [ordered]@{
-                    Path = $profilePath
-                    ExistedBefore = [bool]$ccusage.ProfileExistedBefore
-                    PowerShellMajor = $PSVersionTable.PSVersion.Major
-                }
+                PowerShellProfiles = @($ccusage.ProfileStates)
                 Ccusage = [ordered]@{
-                    Managed = $true
+                    Managed = $installedByPackage
                     InstalledByPackage = $installedByPackage
                     WasInstalledBefore = [bool]$original.Installed
                     PreviousVersion = [string]$original.Version
                     CurrentVersion = [string]$ccusage.PackageAfter.Version
-                    UsesLatest = $true
+                    PackageInstalledNow = [bool]$ccusage.PackageInstalledNow
                 }
                 Context7 = [ordered]@{
                     EnvironmentVariable = 'CONTEXT7_API_KEY'
@@ -155,22 +155,27 @@ try {
         Complete-FileTransaction -Transaction $transaction
 
         Write-Host ''
-        Write-Host 'Installation completed successfully.'
-        Write-Host "Style  : $InstallStyle"
-        Write-Host "Targets: $($results.Count)"
+        Write-Host '安裝完成。'
+        Write-Host "方式：$InstallStyle"
+        Write-Host "目標：$($results.Count)"
         foreach ($result in $results) {
             $changedCount = @($result.Files | Where-Object Changed).Count
             $createdCount = @($result.Files | Where-Object { -not $_.ExistedBefore }).Count
             $updatedCount = @($result.Files | Where-Object { $_.ExistedBefore -and $_.Changed }).Count
             $unchangedCount = $result.Files.Count - $changedCount
-            Write-Host "Target: $($result.Root)"
-            Write-Host "Mode  : $($result.Mode)"
-            Write-Host "Files : $($result.Files.Count) (created: $createdCount, updated: $updatedCount, unchanged: $unchangedCount)"
+            Write-Host "目標：$($result.Root)"
+            Write-Host "類型：$($result.Mode)"
+            Write-Host "檔案：$($result.Files.Count)（新增：$createdCount、更新：$updatedCount、未變更：$unchangedCount）"
         }
-        foreach ($registration in $registrations) { Write-Host "Registered project: $($registration.Type) $($registration.Path)" }
-        Write-Host "Backup: $transactionRoot"
-        if ($Mode -eq 'CVS') { Write-Host 'Restart Codex and use /hooks to review and trust the CVS hook.' }
-        else { Write-Host 'Restart PowerShell and Codex to reload settings, commands, and MCP servers.' }
+        if ($Mode -eq 'Global') {
+            $packageStatus = if ([bool]$ccusage.PackageInstalledNow) { '已安裝 ccusage 套件' } elseif ([bool]$ccusageBefore.Installed) { '沿用既有 ccusage 套件' } else { '已略過 ccusage 套件' }
+            $commandStatus = if ([bool]$ccusage.CommandsUpdated) { '已更新 ccsessions、cdaily 指令' } else { 'ccsessions、cdaily 指令未變更' }
+            Write-Host "ccusage：$packageStatus；$commandStatus"
+        }
+        foreach ($registration in $registrations) { Write-Host "已登記專案：$($registration.Type) $($registration.Path)" }
+        Write-Host "交易備份：$transactionRoot"
+        if ($Mode -eq 'CVS') { Write-Host '請重新啟動 Codex，並使用 /hooks 檢閱及信任 CVS Hook。' }
+        else { Write-Host '請重新啟動 PowerShell 與 Codex，以載入設定、指令與 MCP。' }
     } catch {
         $reason = $_.Exception.Message
         $rollbackErrors = New-Object 'System.Collections.Generic.List[string]'

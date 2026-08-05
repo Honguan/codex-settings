@@ -136,14 +136,21 @@ function Uninstall-ManagedTarget {
         }
 
         if ($manifest.PSObject.Properties.Name -contains 'External' -and $null -ne $manifest.External) {
-            if ($null -ne $manifest.External.PowerShellProfile) {
-                $profilePath = [string]$manifest.External.PowerShellProfile.Path
+            $profileEntries = if ($manifest.External.PSObject.Properties.Name -contains 'PowerShellProfiles') {
+                @($manifest.External.PowerShellProfiles)
+            } elseif ($null -ne $manifest.External.PowerShellProfile) {
+                @($manifest.External.PowerShellProfile)
+            } else { @() }
+            $profileChanged = 0
+            foreach ($profile in $profileEntries) {
+                $profilePath = [string]$profile.Path
+                if ([string]::IsNullOrWhiteSpace($profilePath)) { continue }
                 Save-TransactionFile -Transaction $transaction -Path $profilePath
                 if (Test-Path -LiteralPath $profilePath -PathType Leaf) {
                     $state = Get-TextFileState -Path $profilePath
                     $newContent = Remove-CcusageProfileBlocks -Content $state.Content
-                    $profileExistedBefore = if ($manifest.External.PowerShellProfile.PSObject.Properties.Name -contains 'ExistedBefore') {
-                        [bool]$manifest.External.PowerShellProfile.ExistedBefore
+                    $profileExistedBefore = if ($profile.PSObject.Properties.Name -contains 'ExistedBefore') {
+                        [bool]$profile.ExistedBefore
                     } else { $true }
                     if ([string]::IsNullOrWhiteSpace($newContent) -and -not $profileExistedBefore) {
                         Remove-Item -LiteralPath $profilePath -Force
@@ -151,9 +158,10 @@ function Uninstall-ManagedTarget {
                         if (-not [string]::IsNullOrWhiteSpace($newContent)) { $newContent = $newContent.TrimEnd() + $state.NewLine }
                         Write-TextFileState -Path $profilePath -Content $newContent -Encoding $state.Encoding
                     }
-                    $externalResults.PowerShellProfile = 'removed managed ccsessions/cdaily blocks'
+                    $profileChanged++
                 }
             }
+            if ($profileChanged -gt 0) { $externalResults.PowerShellProfiles = "removed managed ccsessions/cdaily blocks from $profileChanged profile(s)" }
 
             if ($null -ne $manifest.External.Ccusage -and [bool]$manifest.External.Ccusage.Managed) {
                 $originalState = [pscustomobject]@{

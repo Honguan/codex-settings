@@ -1,23 +1,26 @@
 function Select-Mode {
     Write-Host ''
-    Write-Host 'Codex Settings Installer'
-    Write-Host '========================'
-    Write-Host '[1] Install global settings, MCP, ccusage, ccsessions, and cdaily'
-    Write-Host '[2] Install Git project settings'
-    Write-Host '[3] Install CVS project settings'
-    Write-Host '[4] Backup current settings'
-    Write-Host '[5] Restore a backup'
-    Write-Host '[6] Update global settings and registered projects'
-    Write-Host '[7] Uninstall managed settings'
-    Write-Host '[0] Exit installer'
+    Write-Host 'Codex Settings 一鍵安裝器'
+    Write-Host '========================='
+    Write-Host '安裝與更新'
+    Write-Host '[1] 全域設定：Codex、MCP、ccusage 指令'
+    Write-Host '[2] Git 專案設定'
+    Write-Host '[3] CVS 專案設定'
+    Write-Host '[4] 更新：全域設定與已登記專案'
+    Write-Host ''
+    Write-Host '備份與管理'
+    Write-Host '[5] 備份目前設定'
+    Write-Host '[6] 還原備份'
+    Write-Host '[7] 移除受管理設定'
+    Write-Host '[0] 結束'
 
     switch (Read-Host 'Select') {
         '1' { return 'Global' }
         '2' { return 'Git' }
         '3' { return 'CVS' }
-        '4' { return 'Backup' }
-        '5' { return 'Restore' }
-        '6' { return 'Update' }
+        '4' { return 'Update' }
+        '5' { return 'Backup' }
+        '6' { return 'Restore' }
         '7' { return 'Uninstall' }
         '0' { return 'Exit' }
         default { throw 'Invalid selection.' }
@@ -26,9 +29,9 @@ function Select-Mode {
 
 function Select-InstallStyle {
     Write-Host ''
-    Write-Host 'Installation style'
-    Write-Host '[1] Merge managed settings and preserve other content'
-    Write-Host '[2] Replace template files completely'
+    Write-Host '安裝方式'
+    Write-Host '[1] 安全合併（建議）：保留未受管理的既有內容'
+    Write-Host '[2] 完整覆蓋：以範本取代目標檔案'
 
     switch (Read-Host 'Select') {
         '1' { return 'Merge' }
@@ -39,17 +42,17 @@ function Select-InstallStyle {
 
 function Select-OptionalGlobalSkill {
     Write-Host ''
-    Write-Host 'Optional global skill'
-    Write-Host 'request-execution-optimizer is not installed by default.'
-    $selection = Read-Host 'Install request-execution-optimizer? [y/N]'
+    Write-Host '選用全域技能：request-execution-optimizer'
+    Write-Host '預設不安裝；已受管理時會在後續更新中保留。'
+    $selection = Read-Host '要安裝嗎？[y/N]'
     return $selection -in @('y', 'Y', 'yes', 'YES')
 }
 
 function Select-OptionalDefaultModeRequestUserInput {
     Write-Host ''
-    Write-Host 'Optional default mode request_user_input feature'
-    Write-Host 'This enables [features] default_mode_request_user_input = true in config.toml.'
-    $selection = Read-Host 'Enable default mode request_user_input? [y/N]'
+    Write-Host '選用功能：預設啟用 request_user_input'
+    Write-Host '會在 config.toml 的 [features] 加入 default_mode_request_user_input = true。'
+    $selection = Read-Host '要啟用嗎？[y/N]'
     return $selection -in @('y', 'Y', 'yes', 'YES')
 }
 
@@ -79,7 +82,7 @@ function Select-GlobalProjectPaths {
             }
         }
     } else {
-        Write-Host 'No registered projects.'
+        Write-Host '尚未登記任何專案。'
     }
 
     foreach ($path in Read-ProjectPaths 'Add Git/CVS project paths (semicolon separated, blank to skip)') {
@@ -110,10 +113,6 @@ function Test-Prerequisites([string]$InstallMode, [string]$TargetPath) {
     }
     if ([int]$matches[1] -lt 20) { throw "Node.js 20 or newer is required. Current: $nodeVersion" }
 
-    $registry = & npm view ccusage version --silent 2>&1
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace(($registry | Out-String))) {
-        throw "Unable to reach npm or resolve ccusage@latest.`n$($registry | Out-String)"
-    }
     Test-DirectoryWritable -Path (Split-Path -Parent $PROFILE.CurrentUserAllHosts)
 
     $configTemplate = Join-Path $ScriptRoot 'templates\global\config.toml'
@@ -415,7 +414,7 @@ function Write-Manifest($Result, $Transaction, $External) {
     $path = Join-Path $Result.Root '.codex-settings-manifest.json'
     Save-TransactionFile $Transaction $path
     $manifest = [ordered]@{
-        Version = 3
+        Version = 4
         Mode = $Result.Mode
         InstalledAt = (Get-Date).ToString('o')
         TargetRoot = $Result.Root

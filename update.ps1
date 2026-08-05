@@ -9,28 +9,28 @@ $ErrorActionPreference = 'Stop'
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 if (-not $SkipRepositoryPull) {
-    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-        throw 'Git is required to update this settings repository.'
-    }
-
     if (-not (Test-Path -LiteralPath (Join-Path $ScriptRoot '.git'))) {
-        throw 'This folder is not a Git clone. Clone the repository before using update.ps1.'
-    }
+        Write-Host '發佈安裝包不含 Git 工作目錄；略過儲存庫更新，套用目前解壓縮的版本。'
+    } else {
+        if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+            throw 'Git is required to update this settings repository.'
+        }
 
-    $dirty = & git -C $ScriptRoot status --porcelain
-    if ($LASTEXITCODE -ne 0) {
-        throw 'Unable to inspect the settings repository status.'
-    }
-    if ($dirty) {
-        throw 'The settings repository has local changes. Commit or discard them before updating.'
-    }
+        $dirty = & git -C $ScriptRoot status --porcelain
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Unable to inspect the settings repository status.'
+        }
+        if ($dirty) {
+            throw 'The settings repository has local changes. Commit or discard them before updating.'
+        }
 
-    & git -C $ScriptRoot pull --ff-only
-    if ($LASTEXITCODE -ne 0) {
-        throw 'git pull --ff-only failed.'
-    }
+        & git -C $ScriptRoot pull --ff-only
+        if ($LASTEXITCODE -ne 0) {
+            throw 'git pull --ff-only failed.'
+        }
 
-    Write-Host 'Settings repository updated.'
+        Write-Host 'Settings repository updated.'
+    }
 } else {
     Write-Host 'Settings repository pull skipped.'
 }

@@ -2,7 +2,8 @@
 param(
     [switch]$SkipPackageInstall,
     [switch]$SkipRuntimeValidation,
-    [switch]$PassThru
+    [switch]$PassThru,
+    [object]$PackageState
 )
 
 $ErrorActionPreference = 'Stop'
@@ -18,38 +19,29 @@ if (-not (Test-Path -LiteralPath $templatePath -PathType Leaf)) {
     throw "ccusage profile template was not found: $templatePath"
 }
 
-if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
-    throw 'npm was not found. Install Node.js before installing ccusage.'
-}
-if (-not (Get-Command npx -ErrorAction SilentlyContinue)) {
-    throw 'npx was not found. Reinstall Node.js with npm package-runner support.'
-}
-
-$packageBefore = Get-CcusageState
+$packageBefore = if ($null -ne $PackageState) { $PackageState } else { Get-CcusageState }
 $profilePaths = @($PROFILE.CurrentUserAllHosts, $PROFILE.CurrentUserCurrentHost) | Select-Object -Unique
 $profileTargets = foreach ($profilePath in $profilePaths) {
     Test-DirectoryWritable -Path (Split-Path -Parent $profilePath)
     $profileState = Get-TextFileState -Path $profilePath
-    $backupPath = $null
-    if ($profileState.Exists) {
-        $backupPath = "$profilePath.ccusage-backup-$(Get-Date -Format 'yyyyMMdd-HHmmss-fff')"
-        Copy-FileAtomic -Source $profilePath -Destination $backupPath
-    }
     [pscustomobject]@{
         Path = $profilePath
         State = $profileState
-        BackupPath = $backupPath
+        BackupPath = $null
+        Changed = $false
     }
 }
 
 try {
-    if (-not $SkipPackageInstall) {
+    $packageInstalledNow = $false
+    if (-not [bool]$packageBefore.Installed -and -not $SkipPackageInstall) {
         $installOutput = & npm install --global 'ccusage@latest' 2>&1
         $installExitCode = $LASTEXITCODE
         $installOutput | Out-Host
         if ($installExitCode -ne 0) {
             throw "ccusage@latest installation failed with npm exit code $installExitCode.`n$($installOutput | Out-String)"
         }
+        $packageInstalledNow = $true
     }
 
     $managedContent = [IO.File]::ReadAllText($templatePath).Trim()
@@ -61,15 +53,22 @@ try {
             $existingContent.TrimEnd() + $profileTarget.State.NewLine + $profileTarget.State.NewLine + $managedContent + $profileTarget.State.NewLine
         }
 
-        $tokens = $null
-        $parseErrors = $null
-        [void][Management.Automation.Language.Parser]::ParseInput($newContent, [ref]$tokens, [ref]$parseErrors)
-        if ($parseErrors.Count -gt 0) {
-            $firstError = $parseErrors[0]
-            throw "PowerShell profile validation failed for $($profileTarget.Path) at line $($firstError.Extent.StartLineNumber): $($firstError.Message)"
-        }
+        if ($newContent -ne $profileTarget.State.Content) {
+            $tokens = $null
+            $parseErrors = $null
+            [void][Management.Automation.Language.Parser]::ParseInput($newContent, [ref]$tokens, [ref]$parseErrors)
+            if ($parseErrors.Count -gt 0) {
+                $firstError = $parseErrors[0]
+                throw "PowerShell profile validation failed for $($profileTarget.Path) at line $($firstError.Extent.StartLineNumber): $($firstError.Message)"
+            }
 
-        Write-TextFileState -Path $profileTarget.Path -Content $newContent -Encoding $profileTarget.State.Encoding
+            if ($profileTarget.State.Exists) {
+                $profileTarget.BackupPath = "$($profileTarget.Path).ccusage-backup-$(Get-Date -Format 'yyyyMMdd-HHmmss-fff')"
+                Copy-FileAtomic -Source $profileTarget.Path -Destination $profileTarget.BackupPath
+            }
+            Write-TextFileState -Path $profileTarget.Path -Content $newContent -Encoding $profileTarget.State.Encoding
+            $profileTarget.Changed = $true
+        }
     }
 
     Remove-Item Function:\ccsessions, Function:\cdaily -Force -ErrorAction SilentlyContinue
@@ -82,7 +81,7 @@ try {
         throw "The cdaily function was not loaded from template: $templatePath"
     }
 
-    if (-not $SkipRuntimeValidation) {
+    if ($packageInstalledNow -and -not $SkipRuntimeValidation) {
         $versionOutput = & npx --yes 'ccusage@latest' --version 2>&1
         $versionExitCode = $LASTEXITCODE
         if ($versionExitCode -ne 0) {
@@ -90,23 +89,33 @@ try {
         }
     }
 
-    $packageAfter = Get-CcusageState
+    $packageAfter = if ($packageInstalledNow) { Get-CcusageState } else { $packageBefore }
     $allHostsTarget = $profileTargets | Where-Object { $_.Path -eq $PROFILE.CurrentUserAllHosts } | Select-Object -First 1
     $result = [pscustomobject]@{
         ProfilePath = $allHostsTarget.Path
         ProfileExistedBefore = [bool]$allHostsTarget.State.Exists
         ProfileBackupPath = $allHostsTarget.BackupPath
         ProfilePaths = @($profileTargets.Path)
+        ProfileStates = @($profileTargets | ForEach-Object {
+            [pscustomobject]@{
+                Path = $_.Path
+                ExistedBefore = [bool]$_.State.Exists
+            }
+        })
         ProfileBackupPaths = @($profileTargets.BackupPath | Where-Object { $null -ne $_ })
         PackageBefore = $packageBefore
         PackageAfter = $packageAfter
-        InstalledLatest = -not $SkipPackageInstall
+        PackageInstalledNow = $packageInstalledNow
+        CommandsUpdated = @($profileTargets | Where-Object Changed).Count -gt 0
         PowerShellVersion = [string]$PSVersionTable.PSVersion
     }
 
     if ($PassThru) { return $result }
 
-    Write-Host 'ccusage@latest, ccsessions, and cdaily installed successfully.'
+    if ($packageInstalledNow) { Write-Host '已安裝 ccusage@latest。' }
+    elseif ([bool]$packageBefore.Installed) { Write-Host "偵測到 ccusage $($packageBefore.Version)；略過套件重複安裝。" }
+    else { Write-Host '已略過 ccusage 套件安裝。' }
+    Write-Host (if (@($profileTargets | Where-Object Changed).Count -gt 0) { '已更新 ccsessions、cdaily 指令。' } else { 'ccsessions、cdaily 指令已是最新內容，未改寫 Profile。' })
     Write-Host "PowerShell: $($PSVersionTable.PSVersion)"
     foreach ($profileTarget in $profileTargets) { Write-Host "Profile   : $($profileTarget.Path)" }
     foreach ($profileTarget in $profileTargets) {
@@ -118,6 +127,7 @@ try {
 
     try {
         foreach ($profileTarget in $profileTargets) {
+            if (-not $profileTarget.Changed) { continue }
             if ($profileTarget.State.Exists) {
                 Copy-FileAtomic -Source $profileTarget.BackupPath -Destination $profileTarget.Path
             } else {
@@ -128,7 +138,7 @@ try {
         [void]$rollbackErrors.Add("Profile rollback failed: $($_.Exception.Message)")
     }
 
-    if (-not $SkipPackageInstall) {
+    if ($packageInstalledNow) {
         try { Restore-CcusageState -State $packageBefore }
         catch { [void]$rollbackErrors.Add("ccusage rollback failed: $($_.Exception.Message)") }
     }

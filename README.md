@@ -7,9 +7,19 @@ Windows 上的 Codex 全域、Git 專案與 CVS 專案設定管理工具。
 - 全域 47 條、Git 13 條、CVS 8 條權限規則。
 - 安全合併、備份、還原、移除與中斷回復。
 - Context7、Playwright MCP。
-- `ccusage@latest`、`ccsessions`、`cdaily`。
+- 缺少時才安裝 `ccusage@latest`；每次同步 `ccsessions`、`cdaily`。
 - Git／CVS 專案登記與批次更新。
 - CVS CRLF Hook。
+
+## 發佈一鍵安裝包
+
+推送 `v*` Git tag 時，GitHub Actions 會建立單一 `CodexSettings-OneClick.zip` 發佈附件。壓縮包內雖包含必要的範本與支援程式，但使用者只需執行 `Install.cmd`；不需要個別執行任何其他 `.ps1`。
+
+本機建立相同發佈包：
+
+```powershell
+.\build-release.ps1
+```
 
 ## 需求
 
@@ -25,26 +35,30 @@ Windows 上的 Codex 全域、Git 專案與 CVS 專案設定管理工具。
 
 **PowerShell 7 已測試通過。**
 
-## 快速安裝
+## 一鍵安裝
+
+發佈包只有一個對使用者公開的安裝入口：`Install.cmd`。
+
+1. 下載並解壓縮 `CodexSettings-OneClick.zip`。
+2. 雙擊 `Install.cmd`。
+3. 在選單選擇安裝、更新、備份、還原或移除。
+
+安裝器會清楚列出兩種安裝方式：
+
+- **安全合併（建議）**：僅更新本工具管理的內容，保留其他設定。
+- **完整覆蓋**：以範本取代目標檔案，適用於要重設設定時。
+
+需要非互動執行時，仍只透過同一入口傳遞參數：
 
 ```powershell
-# 全域設定、MCP、ccusage、ccsessions、cdaily
-./install.ps1 -Mode Global
-
-# 另外選用安裝 request-execution-optimizer 全域技能
-./install.ps1 -Mode Global -InstallRequestExecutionOptimizer
-
-# 選用啟用 request_user_input 預設模式
-./install.ps1 -Mode Global -EnableDefaultModeRequestUserInput
-
-# Git 專案
-./install.ps1 -Mode Git -ProjectPath 'E:\Git\MyProject'
-
-# CVS 專案
-./install.ps1 -Mode CVS -ProjectPath 'E:\CVS\MyProject'
+& .\Install.cmd -Mode Global
+& .\Install.cmd -Mode Global -InstallRequestExecutionOptimizer
+& .\Install.cmd -Mode Global -EnableDefaultModeRequestUserInput
+& .\Install.cmd -Mode Git -ProjectPath 'E:\Git\MyProject'
+& .\Install.cmd -Mode CVS -ProjectPath 'E:\CVS\MyProject'
 ```
 
-也可雙擊 `Install.cmd`。若系統沒有 PowerShell 7，全域安裝會停止並顯示實際版本。
+若系統沒有 PowerShell 7，全域安裝會停止並顯示實際版本。
 
 互動式全域安裝也會詢問是否加入：
 
@@ -71,7 +85,7 @@ model_reasoning_effort = "high"
 建議順序：
 
 ```powershell
-./install.ps1 -Mode Global
+& .\Install.cmd -Mode Global
 npx codex-model-router install --global
 npx codex-model-router doctor --global
 ```
@@ -139,14 +153,16 @@ Git／CVS 專案安裝成功後會登記到：
 
 執行：
 
+在 `Install.cmd` 選擇「更新：全域設定與已登記專案」，或執行：
+
 ```powershell
-./update.ps1
+& .\Install.cmd -Mode Update
 ```
 
 會：
 
 1. `git pull --ff-only` 更新本設定倉庫。
-2. 更新全域設定、MCP、ccusage、`ccsessions`、`cdaily`。
+2. 更新全域設定、MCP、`ccsessions`、`cdaily`；已安裝的 `ccusage` 不會重複執行 npm 安裝。
 3. 更新所有已登記 Git／CVS 專案的 Codex 設定。
 4. 個別顯示成功或失敗原因。
 
@@ -154,22 +170,13 @@ Git／CVS 專案安裝成功後會登記到：
 
 CVS CRLF Hook 使用獨立的 `crlf-v2-<專案雜湊>.json` 狀態檔，不會讀取舊 `.txt` 或 v1 JSON。每次全域／CVS 安裝結束都會檢查 CRLF Hook 與腳本數量；若仍有重複項目，安裝會失敗並由交易備份回復。
 
-可用參數：
-
-```powershell
-./update.ps1 -SkipRepositoryPull
-./update.ps1 -SkipGlobal
-./update.ps1 -SkipCcusageInstall
-```
+發佈 ZIP 不含 Git 工作目錄；更新時會略過 `git pull`，直接套用目前解壓縮的版本。從 Git clone 執行時，更新功能才會先執行 `git pull --ff-only`。
 
 ## 備份與還原
 
 ### 手動備份
 
-```powershell
-./backup.ps1 -Mode Global
-./backup.ps1 -Mode Project -ProjectPath 'E:\Git\MyProject'
-```
+在 `Install.cmd` 選擇「備份目前設定」。
 
 全域手動備份只包含指定設定元件：
 
@@ -179,25 +186,18 @@ CVS CRLF Hook 使用獨立的 `crlf-v2-<專案雜湊>.json` 狀態檔，不會�
 - `~/.agents/skills`
 - `~/.codex/skills`
 - 已登記專案清單
-- PowerShell 7 Profile
+- PowerShell 7 的 `CurrentUserAllHosts` 與 `CurrentUserCurrentHost` Profile
 - ccusage 安裝狀態
 
 不備份 Codex 驗證資料、Sessions、History、Logs 或明文 Context7 Key。
 
 ### 還原
 
-```powershell
-./restore.ps1
-```
-
-可還原手動備份、安裝交易備份及新版解除安裝備份。
+在 `Install.cmd` 選擇「還原備份」。可還原手動備份、安裝交易備份及新版解除安裝備份。
 
 ### 移除
 
-```powershell
-./uninstall.ps1 -Mode Global
-./uninstall.ps1 -Mode Project -ProjectPath 'E:\Git\MyProject'
-```
+在 `Install.cmd` 選擇「移除受管理設定」。
 
 解除安裝前會建立完整可還原備份，包括：
 
@@ -215,7 +215,7 @@ Context7 Key 僅以 Windows 使用者 DPAPI 加密後保存於本機解除安裝
 
 來源：<https://github.com/ccusage/ccusage>
 
-全域安裝維持最新版：
+全域安裝會先讀取一次目前的 `ccusage` 狀態：未安裝才執行 `npm install --global ccusage@latest`；已安裝則只同步或新增 `ccsessions`、`cdaily` 指令，不重複檢查 npm registry、重裝套件或改寫無變更的 Profile。需要自行升級 `ccusage` 時可執行：
 
 ```powershell
 npm install --global ccusage@latest
@@ -248,7 +248,7 @@ env_http_headers = { "CONTEXT7_API_KEY" = "CONTEXT7_API_KEY" }
 略過 Key：
 
 ```powershell
-./install.ps1 -Mode Global -SkipContext7Key
+& .\Install.cmd -Mode Global -SkipContext7Key
 ```
 
 ### Playwright

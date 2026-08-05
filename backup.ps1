@@ -55,7 +55,7 @@ New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null
 
 $itemCount = 0
 $metadata = [ordered]@{
-    Version = 3
+    Version = 4
     CreatedAt = (Get-Date).ToString('o')
     Mode = $Mode
     ProjectRoot = $ProjectPath
@@ -82,10 +82,19 @@ if ($Mode -eq 'Global' -or $Mode -eq 'All') {
         $itemCount += Copy-ExistingItem -Source $registryPath -Destination (Join-Path $backupRoot 'global\registry\projects.json')
     }
 
-    $profilePath = $PROFILE.CurrentUserAllHosts
-    $profileTarget = Join-Path $backupRoot 'global\powershell\profile.ps1'
-    $profileExisted = Test-Path -LiteralPath $profilePath -PathType Leaf
-    if ($profileExisted) { $itemCount += Copy-ExistingItem -Source $profilePath -Destination $profileTarget }
+    $profileItems = New-Object 'System.Collections.Generic.List[object]'
+    $profilePaths = @($PROFILE.CurrentUserAllHosts, $PROFILE.CurrentUserCurrentHost) | Select-Object -Unique
+    for ($index = 0; $index -lt $profilePaths.Count; $index++) {
+        $profilePath = $profilePaths[$index]
+        $relativePath = "global\powershell\profile-$($index + 1).ps1"
+        $profileExisted = Test-Path -LiteralPath $profilePath -PathType Leaf
+        if ($profileExisted) { $itemCount += Copy-ExistingItem -Source $profilePath -Destination (Join-Path $backupRoot $relativePath) }
+        [void]$profileItems.Add([ordered]@{
+            Path = $profilePath
+            Existed = $profileExisted
+            BackupRelativePath = if ($profileExisted) { $relativePath } else { $null }
+        })
+    }
 
     $ccusage = Get-CcusageState
     $metadata.Global = [ordered]@{
@@ -98,11 +107,7 @@ if ($Mode -eq 'Global' -or $Mode -eq 'All') {
             Existed = $registryExisted
             BackupRelativePath = if ($registryExisted) { 'global\registry\projects.json' } else { $null }
         }
-        PowerShellProfile = [ordered]@{
-            Path = $profilePath
-            Existed = $profileExisted
-            BackupRelativePath = if ($profileExisted) { 'global\powershell\profile.ps1' } else { $null }
-        }
+        PowerShellProfiles = $profileItems.ToArray()
         Ccusage = [ordered]@{
             Installed = [bool]$ccusage.Installed
             Version = [string]$ccusage.Version

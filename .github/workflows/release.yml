@@ -1,0 +1,27 @@
+name: Release one-click installer
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build one-click package
+        shell: pwsh
+        run: ./build-release.ps1
+      - name: Publish release package
+        shell: pwsh
+        run: |
+          gh release view $env:GITHUB_REF_NAME 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $env:GITHUB_REF_NAME dist/CodexSettings-OneClick.zip --clobber
+          } else {
+            gh release create $env:GITHUB_REF_NAME dist/CodexSettings-OneClick.zip --generate-notes
+          }

@@ -118,9 +118,14 @@ try {
             }
         }
 
-        $profileMetadata = $metadata.Global.PowerShellProfile
-        if ($null -ne $profileMetadata) {
+        $profileEntries = if ($metadata.Global.PSObject.Properties.Name -contains 'PowerShellProfiles') {
+            @($metadata.Global.PowerShellProfiles)
+        } elseif ($null -ne $metadata.Global.PowerShellProfile) {
+            @($metadata.Global.PowerShellProfile)
+        } else { @() }
+        foreach ($profileMetadata in $profileEntries) {
             $profilePath = [string]$profileMetadata.Path
+            if ([string]::IsNullOrWhiteSpace($profilePath)) { continue }
             if ([bool]$profileMetadata.Existed) {
                 $profileBackup = Join-Path $BackupPath ([string]$profileMetadata.BackupRelativePath)
                 if (-not (Test-Path -LiteralPath $profileBackup -PathType Leaf)) { throw "PowerShell profile backup is missing: $profileBackup" }

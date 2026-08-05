@@ -26,6 +26,7 @@ tmp/
 Thumbs.db
 
 manual-backup
+dist/
 
 # Files managed locally by codex-settings
 /.codex-settings-manifest.json
