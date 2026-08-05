@@ -30,10 +30,11 @@ function Select-Mode {
 function Select-InstallStyle {
     Write-Host ''
     Write-Host '安裝方式'
-    Write-Host '[1] 安全合併（建議）：保留未受管理的既有內容'
+    Write-Host '[1] 安全合併（預設、建議）：保留未受管理的既有內容'
     Write-Host '[2] 完整覆蓋：以範本取代目標檔案'
 
-    switch (Read-Host 'Select') {
+    switch (Read-Host 'Select [1]') {
+        '' { return 'Merge' }
         '1' { return 'Merge' }
         '2' { return 'Replace' }
         default { throw 'Invalid installation style.' }
