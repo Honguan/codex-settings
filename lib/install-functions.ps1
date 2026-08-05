@@ -177,7 +177,7 @@ function Test-Owned($Entry, [string]$Path) {
 
 function Get-Strategy([string]$ModeName, [string]$RelativePath) {
     $normalized = $RelativePath.Replace('\', '/')
-    if ($normalized -eq 'AGENTS.md' -or $normalized.EndsWith('/AGENTS.md')) {
+    if ($normalized -eq 'AGENTS.md' -or $normalized.EndsWith('/AGENTS.md') -or $normalized -eq 'agent.md' -or $normalized.EndsWith('/agent.md')) {
         return [pscustomobject]@{ Name = 'managed-block'; Start = "<!-- >>> CODEX-SETTINGS:$ModeName:AGENTS >>> -->"; End = "<!-- <<< CODEX-SETTINGS:$ModeName:AGENTS <<< -->" }
     }
     if ($normalized -eq 'config.toml') {

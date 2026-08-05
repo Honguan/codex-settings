@@ -95,7 +95,7 @@ npx codex-model-router install --global --set-default
 
 ### 安全合併
 
-- `AGENTS.md`、Rules 使用管理區塊。
+- `agent.md`、Rules 使用管理區塊。
 - `config.toml` 保留既有頂層鍵與 MCP 區段。
 - CVS `hooks.json` 保留其他 Hook。
 - 安裝或更新時會移除全域及 CVS 專案中的舊版 CRLF Hook，只保留 CVS 專案的單一 `PostToolUse` 與單一 `Stop`；SOLUNA 與自訂 Hook 不受影響。
