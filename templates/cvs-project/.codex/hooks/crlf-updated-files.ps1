@@ -4,13 +4,16 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $hookSource = 'project'
-$hookVersion = '2'
+$hookVersion = 'crlf-v2'
+$script:toolName = 'unknown'
+$script:payloadParsed = $false
+$script:rejectedCount = 0
 
 $hookDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $projectRoot = Split-Path -Parent (Split-Path -Parent $hookDir)
 $rootMarker = Join-Path $projectRoot '.codex-root'
 if (-not (Test-Path -LiteralPath $rootMarker -PathType Leaf)) {
-    Write-Error "HookSource=$hookSource HookVersion=$hookVersion StateFile=unresolved Tracked=0 Converted=0 Verified=0 Failed=1 Error=CVS project root marker was not found: $rootMarker" -ErrorAction Continue
+    Write-Error "HookSource=$hookSource HookVersion=$hookVersion ToolName=$script:toolName PayloadParsed=$script:payloadParsed StateFile=unresolved Tracked=0 Converted=0 Verified=0 Rejected=0 Failed=1 Error=CVS project root marker was not found: $rootMarker" -ErrorAction Continue
     exit 1
 }
 
@@ -52,7 +55,18 @@ function Write-HookFailure {
         [int]$Failed = 1
     )
 
-    Write-Error "HookSource=$hookSource HookVersion=$hookVersion StateFile=$stateFile Tracked=$Tracked Converted=$Converted Verified=$Verified Failed=$Failed Error=$ErrorMessage" -ErrorAction Continue
+    Write-Error "HookSource=$hookSource HookVersion=$hookVersion ToolName=$script:toolName PayloadParsed=$script:payloadParsed StateFile=$stateFile Tracked=$Tracked Converted=$Converted Verified=$Verified Rejected=$script:rejectedCount Failed=$Failed Error=$ErrorMessage" -ErrorAction Continue
+}
+
+function Write-HookResult {
+    param(
+        [int]$Tracked = 0,
+        [int]$Converted = 0,
+        [int]$Verified = 0,
+        [int]$Failed = 0
+    )
+
+    Write-Output "HookSource=$hookSource HookVersion=$hookVersion ToolName=$script:toolName PayloadParsed=$script:payloadParsed StateFile=$stateFile Tracked=$Tracked Converted=$Converted Verified=$Verified Rejected=$script:rejectedCount Failed=$Failed"
 }
 
 function Enter-StateLock {
@@ -73,12 +87,13 @@ function Resolve-ManagedPath {
     param([AllowEmptyString()][string]$Path)
 
     if ([string]::IsNullOrWhiteSpace($Path)) { return $null }
-    $expanded = [Environment]::ExpandEnvironmentVariables($Path.Trim())
-    if (-not [IO.Path]::IsPathRooted($expanded)) {
-        $expanded = Join-Path $projectRoot $expanded
-    }
-
-    try { $fullPath = [IO.Path]::GetFullPath($expanded) } catch { return $null }
+    try {
+        $expanded = [Environment]::ExpandEnvironmentVariables($Path.Trim())
+        if (-not [IO.Path]::IsPathRooted($expanded)) {
+            $expanded = Join-Path $projectRoot $expanded
+        }
+        $fullPath = [IO.Path]::GetFullPath($expanded)
+    } catch { return $null }
     if (-not $fullPath.StartsWith($projectPrefix, [StringComparison]::OrdinalIgnoreCase)) { return $null }
 
     $relativePath = $fullPath.Substring($projectPrefix.Length).Replace('\', '/')
@@ -103,23 +118,76 @@ function Test-AllowedTarget {
 function Add-Target {
     param([object]$Path)
 
-    if ($null -eq $Path) { return }
-    if ($Path -is [System.Collections.IEnumerable] -and -not ($Path -is [string])) {
-        foreach ($item in $Path) { Add-Target $item }
-        return
-    }
+    try {
+        if ($null -eq $Path) { return $false }
+        if ($Path -is [System.Collections.IEnumerable] -and -not ($Path -is [string])) {
+            $added = $false
+            foreach ($item in $Path) { if (Add-Target $item) { $added = $true } }
+            return $added
+        }
 
-    $target = Resolve-ManagedPath ([string]$Path)
-    if ($null -ne $target -and (Test-AllowedTarget $target)) {
-        [void]$script:targets.Add($target.RelativePath)
+        $candidate = ([string]$Path).Trim()
+        while ($candidate.EndsWith('\r') -or $candidate.EndsWith('\n')) { $candidate = $candidate.Substring(0, $candidate.Length - 2).TrimEnd() }
+        $candidate = $candidate.Trim('"', "'", '`').TrimEnd(';').Trim()
+        $candidate = $candidate.Trim('"', "'", '`')
+        if ([string]::IsNullOrWhiteSpace($candidate)) { return $false }
+
+        $target = Resolve-ManagedPath $candidate
+        if ($null -eq $target) {
+            $script:rejectedCount++
+            Write-Warning "CRLF target rejected: Path=[$candidate] Error=Path is outside the CVS project or is invalid."
+            return $false
+        }
+        if (-not (Test-AllowedTarget $target)) { return $false }
+        return $script:targets.Add($target.RelativePath)
+    } catch {
+        $script:rejectedCount++
+        Write-Warning "CRLF target rejected: Path=[$Path] Error=$($_.Exception.Message)"
+        return $false
     }
+}
+
+function Get-PropertyValue {
+    param([object]$Object, [string]$Name)
+
+    if ($null -eq $Object) { return $null }
+    if ($Object -is [System.Collections.IDictionary]) {
+        if ($Object.Contains($Name)) { return $Object[$Name] }
+        return $null
+    }
+    $property = @($Object.PSObject.Properties | Where-Object { $_.Name -eq $Name })[0]
+    if ($null -eq $property) { return $null }
+    return $property.Value
+}
+
+function Get-PayloadText {
+    param([object]$Payload, [AllowEmptyString()][string]$RawInput)
+
+    $parts = New-Object 'System.Collections.Generic.List[string]'
+    if (-not [string]::IsNullOrWhiteSpace($RawInput)) { [void]$parts.Add($RawInput) }
+    $toolInput = Get-PropertyValue $Payload 'tool_input'
+    foreach ($value in @(
+        (Get-PropertyValue $Payload 'input'),
+        (Get-PropertyValue $Payload 'command'),
+        $toolInput,
+        (Get-PropertyValue $toolInput 'input'),
+        (Get-PropertyValue $toolInput 'command')
+    )) {
+        if ($null -eq $value) { continue }
+        if ($value -is [string]) { [void]$parts.Add($value); continue }
+        try { [void]$parts.Add(($value | ConvertTo-Json -Depth 100 -Compress)) }
+        catch { [void]$parts.Add([string]$value) }
+    }
+    return [string]::Join("`n", $parts)
 }
 
 function Add-PatchTargets {
     param([AllowEmptyString()][string]$Text)
 
     if ([string]::IsNullOrWhiteSpace($Text)) { return }
-    $normalized = [regex]::Replace($Text, '(?<!\\)\\r\\n', "`n")
+    $normalized = [regex]::Replace($Text, '\\\\r\\\\n', "`n")
+    $normalized = [regex]::Replace($normalized, '\\\\n', "`n")
+    $normalized = [regex]::Replace($normalized, '(?<!\\)\\r\\n', "`n")
     $normalized = [regex]::Replace($normalized, '(?<!\\)\\n', "`n")
     foreach ($match in [regex]::Matches($normalized, '(?m)^\s*\*\*\* (?:Add|Update) File:\s*(?<path>[^\r\n]+?)\s*$')) {
         Add-Target $match.Groups['path'].Value
@@ -256,6 +324,8 @@ function Remove-StateFiles {
 if ($Flush) {
     if (-not (Test-Path -LiteralPath $stateFile -PathType Leaf)) {
         $stateMutex.Dispose()
+        Write-Output 'Tracked=0 Converted=0 Verified=0 Skipped=0 Failed=0'
+        Write-HookResult
         exit 0
     }
 
@@ -317,6 +387,7 @@ if ($Flush) {
     if ($finalized) {
         Write-Output "Tracked=$trackedCount Converted=$convertedCount Verified=$verifiedCount Skipped=$skippedCount Failed=$failedCount"
     }
+    Write-HookResult -Tracked $trackedCount -Converted $convertedCount -Verified $verifiedCount -Failed $failedCount
     exit $exitCode
 }
 
@@ -325,12 +396,16 @@ $inputText = [Console]::In.ReadToEnd()
 if (-not [string]::IsNullOrWhiteSpace($inputText)) {
     try {
         $payload = $inputText | ConvertFrom-Json -ErrorAction Stop
-        foreach ($scope in @($payload, $payload.input, $payload.tool_input)) {
-            Add-Target $scope.file_path
-            Add-Target $scope.path
-            Add-Target $scope.file_paths
-            Add-Target $scope.paths
+        $script:payloadParsed = $true
+        $script:toolName = [string](Get-PropertyValue $payload 'tool_name')
+        if ([string]::IsNullOrWhiteSpace($script:toolName)) { $script:toolName = 'unknown' }
+        foreach ($scope in @($payload, (Get-PropertyValue $payload 'input'), (Get-PropertyValue $payload 'tool_input'))) {
+            Add-Target (Get-PropertyValue $scope 'file_path') | Out-Null
+            Add-Target (Get-PropertyValue $scope 'path') | Out-Null
+            Add-Target (Get-PropertyValue $scope 'file_paths') | Out-Null
+            Add-Target (Get-PropertyValue $scope 'paths') | Out-Null
         }
+        Add-PatchTargets (Get-PayloadText -Payload $payload -RawInput $inputText)
         Add-PayloadPatchTargets $payload
     } catch {
         # Raw and escaped apply_patch payloads are handled below.
@@ -340,6 +415,7 @@ if (-not [string]::IsNullOrWhiteSpace($inputText)) {
 
 if ($targets.Count -eq 0) {
     Write-Warning 'CRLF tracked files: 0. No updated file paths were found in the PostToolUse payload.'
+    Write-HookResult
     $stateMutex.Dispose()
     exit 0
 }
@@ -364,6 +440,7 @@ try {
     }
     Write-Output "CRLF tracked files: $($targets.Count)"
     foreach ($path in @($targets | Sort-Object)) { Write-Output "CRLF target: $path" }
+    Write-HookResult -Tracked $targets.Count
     exit 0
 } catch {
     Write-HookFailure -ErrorMessage "CRLF state update failed: $($_.Exception.Message)" -Tracked $targets.Count -Failed 1

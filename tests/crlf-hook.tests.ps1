@@ -44,6 +44,25 @@ try {
     $execText = $execOutput -join "`n"
     if ($execText -notmatch 'CRLF tracked files: 2') { throw "exec targets were not reported: $execText" }
     if ($execText -notmatch 'CRLF target: B\.php' -or $execText -notmatch 'CRLF target: C\.php') { throw "exec target paths were incomplete: $execText" }
+    if ($LASTEXITCODE -ne 0 -or $execText -notmatch 'ToolName=exec PayloadParsed=True') { throw "exec payload diagnostics were incomplete: $execText" }
+
+    $spacePath = Join-Path $projectRoot 'with space.php'
+    [IO.File]::WriteAllText($spacePath, "<?php`necho 'space';`n", (New-Object Text.UTF8Encoding($false)))
+    $paths += $spacePath
+    $escapedExec = ('const patch = "*** Begin Patch\\n*** Update File: {0}\\n@@\\n*** Update File: {1}\\n@@\\n*** End Patch";' -f $spacePath.Replace('\', '/'), $paths[2].Replace('\', '/'))
+    $escapedPayload = @{ input = @{ command = $escapedExec } } | ConvertTo-Json -Compress
+    $escapedOutput = @(($escapedPayload | & $pwsh -NoProfile -ExecutionPolicy Bypass -File $hookPath) 2>&1)
+    $escapedText = $escapedOutput -join "`n"
+    if ($LASTEXITCODE -ne 0 -or $escapedText -notmatch 'CRLF tracked files: 2' -or $escapedText -notmatch 'with space\.php') { throw "Escaped exec payload was not handled safely: $escapedText" }
+
+    $malformedOutput = @('{invalid-json' | & $pwsh -NoProfile -ExecutionPolicy Bypass -File $hookPath 2>&1)
+    if ($LASTEXITCODE -ne 0 -or ($malformedOutput -join "`n") -notmatch 'CRLF tracked files: 0') { throw 'Malformed payload did not safely return success.' }
+
+    $missingFieldOutput = @('{"tool_name":"exec"}' | & $pwsh -NoProfile -ExecutionPolicy Bypass -File $hookPath 2>&1)
+    if ($LASTEXITCODE -ne 0 -or ($missingFieldOutput -join "`n") -notmatch 'PayloadParsed=True') { throw 'Missing payload fields did not safely return success.' }
+
+    $rejectedPathOutput = @('{"tool_name":"exec","tool_input":{"file_path":"C:\\outside.php"}}' | & $pwsh -NoProfile -ExecutionPolicy Bypass -File $hookPath 2>&1)
+    if ($LASTEXITCODE -ne 0 -or ($rejectedPathOutput -join "`n") -notmatch 'Rejected=1') { throw 'A rejected path caused an unsafe Hook result.' }
 
     (@{ tool_input = @{ file_path = $deletedPath } } | ConvertTo-Json -Compress) | & $pwsh -NoProfile -ExecutionPolicy Bypass -File $hookPath | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "PostToolUse hook failed with exit code $LASTEXITCODE" }
@@ -56,7 +75,7 @@ try {
     if ($stateFiles.Count -ne 1) { throw "Expected one state file, found $($stateFiles.Count)." }
     if ($stateFiles[0].Name -notmatch '^crlf-v2-[0-9A-F]{16}\.json$') { throw "State file is not versioned: $($stateFiles[0].Name)" }
     $state = Get-Content -Raw -LiteralPath $stateFiles[0].FullName | ConvertFrom-Json
-    if (@($state.files).Count -ne 4) { throw "Expected four unique files, found $(@($state.files).Count)." }
+    if (@($state.files).Count -ne 5) { throw "Expected five unique files, found $(@($state.files).Count)." }
     foreach ($path in $paths) {
         if ([IO.File]::ReadAllText($path).Contains("`r`n")) { throw "PostToolUse converted before Stop: $path" }
     }
@@ -97,13 +116,15 @@ try {
     $finalResults = @($finalJobs | Wait-Job | Receive-Job)
     if (@($finalResults | Where-Object { $_.ExitCode -ne 0 }).Count -gt 0) { throw "Final Stop failed: $($finalResults.ExitCode -join ', ')" }
     $finalSummary = @($finalResults.Output | Where-Object { $_ -match '^Tracked=' }) -join "`n"
-    if ($finalSummary -notmatch 'Tracked=4 Converted=3 Verified=3 Skipped=1 Failed=0') { throw "Final summary was missing or incorrect: $finalSummary" }
+    if ($finalSummary -notmatch 'Tracked=5 Converted=4 Verified=4 Skipped=1 Failed=0') { throw "Final summary was missing or incorrect: $finalSummary" }
     foreach ($path in $paths) {
         $raw = [IO.File]::ReadAllText($path)
         if (-not $raw.Contains("`r`n") -or ([regex]::Matches($raw, "(?<!`r)`n")).Count -gt 0) { throw "Final Stop did not normalize: $path" }
     }
     if (([regex]::Matches([IO.File]::ReadAllText($untouchedPath), "(?<!`r)`n")).Count -eq 0) { throw 'Unmodified user file was converted.' }
     if (Test-Path -LiteralPath $stateFiles[0].FullName -PathType Leaf) { throw 'State was not cleared after successful finalization.' }
+    $emptyFlushOutput = @(& $pwsh -NoProfile -ExecutionPolicy Bypass -File $hookPath -Flush 2>&1)
+    if ($LASTEXITCODE -ne 0 -or ($emptyFlushOutput -join "`n") -notmatch 'Tracked=0 Converted=0 Verified=0 Skipped=0 Failed=0') { throw 'Flush without state did not safely return success.' }
 
     . $common
     . $installFunctions
@@ -176,7 +197,7 @@ try {
     $failureExitCode = $LASTEXITCODE
     $failureText = $failureOutput -join "`n"
     if ($failureExitCode -ne 1) { throw "Invalid state did not fail with exit code 1: $failureExitCode" }
-    foreach ($required in @('HookSource=project', 'HookVersion=2', 'StateFile=', 'Tracked=0', 'Converted=0', 'Verified=0', 'Failed=1', 'Error=')) {
+    foreach ($required in @('HookSource=project', 'HookVersion=crlf-v2', 'StateFile=', 'Tracked=0', 'Converted=0', 'Verified=0', 'Rejected=', 'Failed=1', 'Error=')) {
         if ($failureText -notmatch [regex]::Escape($required)) { throw "Failure diagnostics were missing '$required': $failureText" }
     }
 
