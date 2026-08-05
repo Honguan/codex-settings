@@ -18,6 +18,8 @@ jobs:
         run: ./build-release.ps1
       - name: Publish release package
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           gh release view $env:GITHUB_REF_NAME 2>$null
           if ($LASTEXITCODE -eq 0) {
