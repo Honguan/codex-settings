@@ -101,6 +101,45 @@ function Add-Target {
     }
 }
 
+function Add-PatchTargets {
+    param([AllowEmptyString()][string]$Text)
+
+    if ([string]::IsNullOrWhiteSpace($Text)) { return }
+    $normalized = [regex]::Replace($Text, '(?<!\\)\\r\\n', "`n")
+    $normalized = [regex]::Replace($normalized, '(?<!\\)\\n', "`n")
+    foreach ($match in [regex]::Matches($normalized, '(?m)^\s*\*\*\* (?:Add|Update) File:\s*(?<path>[^\r\n]+?)\s*$')) {
+        Add-Target $match.Groups['path'].Value
+    }
+}
+
+function Add-PayloadPatchTargets {
+    param(
+        [object]$Value,
+        [int]$Depth = 0
+    )
+
+    if ($null -eq $Value -or $Depth -gt 12) { return }
+    if ($Value -is [string]) {
+        Add-PatchTargets $Value
+        $trimmed = $Value.Trim()
+        if (($trimmed.StartsWith('{') -and $trimmed.EndsWith('}')) -or ($trimmed.StartsWith('[') -and $trimmed.EndsWith(']'))) {
+            try { Add-PayloadPatchTargets ($Value | ConvertFrom-Json -ErrorAction Stop) ($Depth + 1) } catch { }
+        }
+        return
+    }
+    if ($Value -is [System.Collections.IDictionary]) {
+        foreach ($item in $Value.Values) { Add-PayloadPatchTargets $item ($Depth + 1) }
+        return
+    }
+    if ($Value -is [System.Collections.IEnumerable]) {
+        foreach ($item in $Value) { Add-PayloadPatchTargets $item ($Depth + 1) }
+        return
+    }
+    foreach ($property in @($Value.PSObject.Properties)) {
+        Add-PayloadPatchTargets $property.Value ($Depth + 1)
+    }
+}
+
 function Convert-ToCrlf {
     param([Parameter(Mandatory = $true)][string]$Path)
 
@@ -137,6 +176,17 @@ function Convert-ToCrlf {
     } finally {
         $stream.Dispose()
     }
+}
+
+function Get-LfOnlyCount {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $bytes = [IO.File]::ReadAllBytes($Path)
+    $count = 0
+    for ($index = 0; $index -lt $bytes.Length; $index++) {
+        if ($bytes[$index] -eq 10 -and ($index -eq 0 -or $bytes[$index - 1] -ne 13)) { $count++ }
+    }
+    return $count
 }
 
 function Read-State {
@@ -210,19 +260,35 @@ if ($Flush) {
     }
 
     $exitCode = 0
+    $trackedCount = 0
     $convertedCount = 0
+    $verifiedCount = 0
+    $skippedCount = 0
+    $failedCount = 0
+    $finalized = $false
     try {
         $state = Read-State
         if ($null -ne $state -and (([DateTimeOffset]::UtcNow - $state.UpdatedAt).TotalSeconds -ge $quietPeriodSeconds)) {
+            $finalized = $true
+            $trackedCount = $state.Files.Count
             $allSucceeded = $true
             foreach ($relativePath in $state.Files) {
                 $target = Resolve-ManagedPath $relativePath
-                if ($null -eq $target -or -not (Test-AllowedTarget $target)) { continue }
+                if ($null -eq $target -or -not (Test-AllowedTarget $target)) {
+                    $skippedCount++
+                    continue
+                }
                 try {
                     if (Convert-ToCrlf -Path $target.FullPath) { $convertedCount++ }
+                    $lfOnly = Get-LfOnlyCount -Path $target.FullPath
+                    if ($lfOnly -gt 0) {
+                        throw "CRLF verification failed: $($target.RelativePath) still contains $lfOnly LF-only line ending(s)."
+                    }
+                    $verifiedCount++
                 } catch {
                     $allSucceeded = $false
-                    Write-Error "CRLF conversion failed: $($target.RelativePath) - $($_.Exception.Message)"
+                    $failedCount++
+                    Write-Error "CRLF conversion failed: $($target.RelativePath) - $($_.Exception.Message)" -ErrorAction Continue
                 }
             }
 
@@ -235,14 +301,17 @@ if ($Flush) {
             }
         }
     } catch {
-        Write-Error "CRLF finalization failed: $($_.Exception.Message)"
+        $failedCount++
+        Write-Error "CRLF finalization failed: $($_.Exception.Message)" -ErrorAction Continue
         $exitCode = 1
     } finally {
         Exit-StateLock
         $stateMutex.Dispose()
     }
 
-    if ($convertedCount -gt 0) { Write-Output "Converted $convertedCount file(s) to CRLF." }
+    if ($finalized) {
+        Write-Output "Tracked=$trackedCount Converted=$convertedCount Verified=$verifiedCount Skipped=$skippedCount Failed=$failedCount"
+    }
     exit $exitCode
 }
 
@@ -251,20 +320,21 @@ $inputText = [Console]::In.ReadToEnd()
 if (-not [string]::IsNullOrWhiteSpace($inputText)) {
     try {
         $payload = $inputText | ConvertFrom-Json -ErrorAction Stop
-        Add-Target $payload.tool_input.file_path
-        Add-Target $payload.tool_input.path
-        Add-Target $payload.tool_input.file_paths
-        Add-Target $payload.tool_input.paths
+        foreach ($scope in @($payload, $payload.input, $payload.tool_input)) {
+            Add-Target $scope.file_path
+            Add-Target $scope.path
+            Add-Target $scope.file_paths
+            Add-Target $scope.paths
+        }
+        Add-PayloadPatchTargets $payload
     } catch {
-        # apply_patch payloads are handled by the text matcher below.
+        # Raw and escaped apply_patch payloads are handled below.
     }
-
-    foreach ($match in [regex]::Matches($inputText, '\*\*\* (?:Add|Update) File: (.+)')) {
-        Add-Target $match.Groups[1].Value
-    }
+    Add-PatchTargets $inputText
 }
 
 if ($targets.Count -eq 0) {
+    Write-Warning 'CRLF tracked files: 0. No updated file paths were found in the PostToolUse payload.'
     $stateMutex.Dispose()
     exit 0
 }
@@ -287,9 +357,11 @@ try {
     } finally {
         Exit-StateLock
     }
+    Write-Output "CRLF tracked files: $($targets.Count)"
+    foreach ($path in @($targets | Sort-Object)) { Write-Output "CRLF target: $path" }
     exit 0
 } catch {
-    Write-Error "CRLF state update failed: $($_.Exception.Message)"
+    Write-Error "CRLF state update failed: $($_.Exception.Message)" -ErrorAction Continue
     exit 1
 } finally {
     $stateMutex.Dispose()
