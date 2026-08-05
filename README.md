@@ -95,7 +95,7 @@ npx codex-model-router install --global --set-default
 
 ### 安全合併
 
-- `AGENTS.md`、Rules 使用管理區塊。
+- `agent.md`、Rules 使用管理區塊。
 - `config.toml` 保留既有頂層鍵與 MCP 區段。
 - CVS `hooks.json` 保留其他 Hook。
 - 不覆蓋內容不同的未管理檔案。
