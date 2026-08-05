@@ -10,7 +10,7 @@
             "command": "pwsh -NoProfile -Command '$d=[IO.DirectoryInfo](Get-Location).Path;while($null -ne $d -and -not (Test-Path -LiteralPath (Join-Path $d.FullName \".codex-root\"))){$d=$d.Parent};if($null -ne $d){& (Join-Path $d.FullName \".codex/hooks/crlf-updated-files.ps1\")}'",
             "commandWindows": "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"$d=[IO.DirectoryInfo](Get-Location).Path;while($null -ne $d -and -not (Test-Path -LiteralPath (Join-Path $d.FullName '.codex-root'))){$d=$d.Parent};if($null -ne $d){& (Join-Path $d.FullName '.codex\\hooks\\crlf-updated-files.ps1')}\"",
             "timeout": 30,
-            "statusMessage": "Normalizing updated files to CRLF"
+            "statusMessage": "CodexSettings CRLF track"
           }
         ]
       }
@@ -23,7 +23,7 @@
             "command": "pwsh -NoProfile -Command '$d=[IO.DirectoryInfo](Get-Location).Path;while($null -ne $d -and -not (Test-Path -LiteralPath (Join-Path $d.FullName \".codex-root\"))){$d=$d.Parent};if($null -ne $d){& (Join-Path $d.FullName \".codex/hooks/crlf-updated-files.ps1\") -Flush}'",
             "commandWindows": "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"$d=[IO.DirectoryInfo](Get-Location).Path;while($null -ne $d -and -not (Test-Path -LiteralPath (Join-Path $d.FullName '.codex-root'))){$d=$d.Parent};if($null -ne $d){& (Join-Path $d.FullName '.codex\\hooks\\crlf-updated-files.ps1') -Flush}\"",
             "timeout": 30,
-            "statusMessage": "Finalizing CRLF normalization"
+            "statusMessage": "CodexSettings CRLF finalize"
           }
         ]
       }

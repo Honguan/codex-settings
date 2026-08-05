@@ -3,12 +3,15 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$hookSource = 'project'
+$hookVersion = '2'
 
 $hookDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $projectRoot = Split-Path -Parent (Split-Path -Parent $hookDir)
 $rootMarker = Join-Path $projectRoot '.codex-root'
 if (-not (Test-Path -LiteralPath $rootMarker -PathType Leaf)) {
-    throw "CVS project root marker was not found: $rootMarker"
+    Write-Error "HookSource=$hookSource HookVersion=$hookVersion StateFile=unresolved Tracked=0 Converted=0 Verified=0 Failed=1 Error=CVS project root marker was not found: $rootMarker" -ErrorAction Continue
+    exit 1
 }
 
 $projectRoot = [IO.Path]::GetFullPath($projectRoot).TrimEnd('\', '/')
@@ -37,9 +40,20 @@ try {
 } finally {
     $sha.Dispose()
 }
-$stateFile = Join-Path $stateBase ("crlf-$rootHash.json")
-$legacyStateFile = Join-Path $stateBase ("crlf-$rootHash.txt")
-$stateMutex = New-Object System.Threading.Mutex($false, "CodexSettings.Crlf.$rootHash")
+$stateFile = Join-Path $stateBase ("crlf-v2-$rootHash.json")
+$stateMutex = New-Object System.Threading.Mutex($false, "CodexSettings.Crlf.v2.$rootHash")
+
+function Write-HookFailure {
+    param(
+        [Parameter(Mandatory = $true)][string]$ErrorMessage,
+        [int]$Tracked = 0,
+        [int]$Converted = 0,
+        [int]$Verified = 0,
+        [int]$Failed = 1
+    )
+
+    Write-Error "HookSource=$hookSource HookVersion=$hookVersion StateFile=$stateFile Tracked=$Tracked Converted=$Converted Verified=$Verified Failed=$Failed Error=$ErrorMessage" -ErrorAction Continue
+}
 
 function Enter-StateLock {
     param([int]$TimeoutMilliseconds = 10000)
@@ -200,18 +214,12 @@ function Read-State {
             if ($null -ne $target) { [void]$pathSet.Add($target.RelativePath) }
         }
         try { $updatedAt = [DateTimeOffset]::Parse([string]$state.updatedAt).ToUniversalTime() } catch { }
-    } elseif (Test-Path -LiteralPath $legacyStateFile -PathType Leaf) {
-        foreach ($path in [IO.File]::ReadAllLines($legacyStateFile)) {
-            $target = Resolve-ManagedPath $path
-            if ($null -ne $target) { [void]$pathSet.Add($target.RelativePath) }
-        }
     } else {
         return $null
     }
 
     if ($null -eq $updatedAt) {
-        $statePath = if (Test-Path -LiteralPath $stateFile -PathType Leaf) { $stateFile } else { $legacyStateFile }
-        $updatedAt = [DateTimeOffset]([IO.File]::GetLastWriteTimeUtc($statePath))
+        $updatedAt = [DateTimeOffset]([IO.File]::GetLastWriteTimeUtc($stateFile))
     }
     return [pscustomobject]@{ Files = $pathSet; UpdatedAt = $updatedAt }
 }
@@ -239,16 +247,14 @@ function Write-State {
 }
 
 function Remove-StateFiles {
-    foreach ($path in @($stateFile, $legacyStateFile)) {
-        if (Test-Path -LiteralPath $path -PathType Leaf) {
-            try { Remove-Item -LiteralPath $path -Force -ErrorAction Stop }
-            catch { if (Test-Path -LiteralPath $path -PathType Leaf) { throw } }
-        }
+    if (Test-Path -LiteralPath $stateFile -PathType Leaf) {
+        try { Remove-Item -LiteralPath $stateFile -Force -ErrorAction Stop }
+        catch { if (Test-Path -LiteralPath $stateFile -PathType Leaf) { throw } }
     }
 }
 
 if ($Flush) {
-    if (-not (Test-Path -LiteralPath $stateFile -PathType Leaf) -and -not (Test-Path -LiteralPath $legacyStateFile -PathType Leaf)) {
+    if (-not (Test-Path -LiteralPath $stateFile -PathType Leaf)) {
         $stateMutex.Dispose()
         exit 0
     }
@@ -288,21 +294,20 @@ if ($Flush) {
                 } catch {
                     $allSucceeded = $false
                     $failedCount++
-                    Write-Error "CRLF conversion failed: $($target.RelativePath) - $($_.Exception.Message)" -ErrorAction Continue
+                    Write-HookFailure -ErrorMessage "CRLF conversion failed: $($target.RelativePath) - $($_.Exception.Message)" -Tracked $trackedCount -Converted $convertedCount -Verified $verifiedCount -Failed $failedCount
                 }
             }
 
             if ($allSucceeded) {
                 Remove-StateFiles
                 if (Test-Path -LiteralPath $stateFile -PathType Leaf) { $exitCode = 1 }
-                if (Test-Path -LiteralPath $legacyStateFile -PathType Leaf) { $exitCode = 1 }
             } else {
                 $exitCode = 1
             }
         }
     } catch {
         $failedCount++
-        Write-Error "CRLF finalization failed: $($_.Exception.Message)" -ErrorAction Continue
+        Write-HookFailure -ErrorMessage "CRLF finalization failed: $($_.Exception.Message)" -Tracked $trackedCount -Converted $convertedCount -Verified $verifiedCount -Failed $failedCount
         $exitCode = 1
     } finally {
         Exit-StateLock
@@ -361,7 +366,7 @@ try {
     foreach ($path in @($targets | Sort-Object)) { Write-Output "CRLF target: $path" }
     exit 0
 } catch {
-    Write-Error "CRLF state update failed: $($_.Exception.Message)" -ErrorAction Continue
+    Write-HookFailure -ErrorMessage "CRLF state update failed: $($_.Exception.Message)" -Tracked $targets.Count -Failed 1
     exit 1
 } finally {
     $stateMutex.Dispose()

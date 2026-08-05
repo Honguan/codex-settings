@@ -98,6 +98,7 @@ npx codex-model-router install --global --set-default
 - `AGENTS.md`、Rules 使用管理區塊。
 - `config.toml` 保留既有頂層鍵與 MCP 區段。
 - CVS `hooks.json` 保留其他 Hook。
+- 安裝或更新時會移除全域及 CVS 專案中的舊版 CRLF Hook，只保留 CVS 專案的單一 `PostToolUse` 與單一 `Stop`；SOLUNA 與自訂 Hook 不受影響。
 - 不覆蓋內容不同的未管理檔案。
 
 ### 編碼與換行
@@ -150,6 +151,8 @@ Git／CVS 專案安裝成功後會登記到：
 4. 個別顯示成功或失敗原因。
 
 不會對登記專案執行 `git pull` 或 `cvs update`，也不會更新 `codex-model-router` 套件。
+
+CVS CRLF Hook 使用獨立的 `crlf-v2-<專案雜湊>.json` 狀態檔，不會讀取舊 `.txt` 或 v1 JSON。每次全域／CVS 安裝結束都會檢查 CRLF Hook 與腳本數量；若仍有重複項目，安裝會失敗並由交易備份回復。
 
 可用參數：
 

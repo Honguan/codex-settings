@@ -237,9 +237,69 @@ function Add-DefaultModeRequestUserInputFeature([string]$Content, [string]$NewLi
     return $Content.TrimEnd() + $NewLine + $NewLine + '[features]' + $NewLine + 'default_mode_request_user_input = true'
 }
 
+function Remove-GlobalCrlfHooks([string]$Root, $Transaction) {
+    $hooksPath = Join-Path $Root 'hooks.json'
+    if (Test-Path -LiteralPath $hooksPath -PathType Leaf) {
+        $state = Get-TextFileState $hooksPath
+        $cleaned = Remove-CrlfHooksJson -Content $state.Content
+        if ($cleaned -ne $state.Content) {
+            Save-TransactionFile -Transaction $Transaction -Path $hooksPath
+            Write-TextFileState -Path $hooksPath -Content $cleaned -Encoding $state.Encoding
+        }
+    }
+
+    $legacyScript = Join-Path $Root 'hooks\crlf-updated-files.ps1'
+    if (Test-Path -LiteralPath $legacyScript -PathType Leaf) {
+        Save-TransactionFile -Transaction $Transaction -Path $legacyScript
+        Remove-Item -LiteralPath $legacyScript -Force
+    }
+}
+
+function Remove-LegacyCrlfState([string]$ProjectRoot, $Transaction) {
+    $normalizedRoot = [IO.Path]::GetFullPath($ProjectRoot).TrimEnd('\', '/')
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        $rootHash = ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($normalizedRoot)))).Replace('-', '').Substring(0, 16)
+    } finally {
+        $sha.Dispose()
+    }
+    $stateBase = if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'CodexSettings\HookState' } else { Join-Path ([IO.Path]::GetTempPath()) 'CodexSettings-HookState' }
+    foreach ($legacyState in @(
+        (Join-Path $stateBase ("crlf-$rootHash.json")),
+        (Join-Path $stateBase ("crlf-$rootHash.txt"))
+    )) {
+        if (Test-Path -LiteralPath $legacyState -PathType Leaf) {
+            Save-TransactionFile -Transaction $Transaction -Path $legacyState
+            Remove-Item -LiteralPath $legacyState -Force
+        }
+    }
+}
+
+function Assert-CrlfHookInstallation([string]$Mode, [string]$Root) {
+    $hooksPath = if ($Mode -eq 'CVS') { Join-Path $Root '.codex\hooks.json' } else { Join-Path $Root 'hooks.json' }
+    $content = if (Test-Path -LiteralPath $hooksPath -PathType Leaf) { [IO.File]::ReadAllText($hooksPath) } else { '' }
+    $counts = Get-CrlfHookCounts -Content $content
+
+    if ($Mode -eq 'Global') {
+        $scriptCount = if (Test-Path -LiteralPath (Join-Path $Root 'hooks\crlf-updated-files.ps1') -PathType Leaf) { 1 } else { 0 }
+        Write-Host "GlobalCRLFHookCount=$($counts.Total)"
+        if ($counts.Total -ne 0 -or $scriptCount -ne 0) { throw 'Global CRLF hook cleanup self-check failed.' }
+        return
+    }
+
+    if ($Mode -eq 'CVS') {
+        $scriptCount = if (Test-Path -LiteralPath (Join-Path $Root '.codex\hooks\crlf-updated-files.ps1') -PathType Leaf) { 1 } else { 0 }
+        Write-Host "ProjectPostToolUseCRLFHookCount=$($counts.PostToolUse)"
+        Write-Host "ProjectStopCRLFHookCount=$($counts.Stop)"
+        Write-Host "CRLFScriptCount=$scriptCount"
+        if ($counts.PostToolUse -ne 1 -or $counts.Stop -ne 1 -or $scriptCount -ne 1) { throw 'CVS CRLF hook installation self-check failed.' }
+    }
+}
+
 function Install-Target($Target, $Transaction, [switch]$Force) {
     if (-not (Test-Path -LiteralPath $Target.Template -PathType Container)) { throw "Template missing: $($Target.Template)" }
     New-Item -ItemType Directory -Path $Target.Root -Force | Out-Null
+    if ($Target.Mode -eq 'Global') { Remove-GlobalCrlfHooks -Root $Target.Root -Transaction $Transaction }
     $previous = Get-Manifest $Target.Root
     $entries = New-Object 'System.Collections.Generic.List[object]'
     $templatePaths = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
@@ -309,6 +369,9 @@ function Install-Target($Target, $Transaction, [switch]$Force) {
         $managedPaths = @($entries | ForEach-Object Path) + '.codex-settings-manifest.json'
         Update-GitIgnore -Root $Target.Root -Transaction $Transaction -ManagedPaths $managedPaths
     }
+
+    if ($Target.Mode -eq 'CVS') { Remove-LegacyCrlfState -ProjectRoot $Target.Root -Transaction $Transaction }
+    if ($Target.Mode -in @('Global', 'CVS')) { Assert-CrlfHookInstallation -Mode $Target.Mode -Root $Target.Root }
 
     return [pscustomobject]@{ Mode = $Target.Mode; Root = $Target.Root; Previous = $previous; Files = $entries.ToArray() }
 }

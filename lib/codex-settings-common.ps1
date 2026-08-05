@@ -320,6 +320,32 @@ function Merge-TomlTemplate {
     return $result
 }
 
+$script:CrlfHookSignaturePattern = '(?i)(crlf-updated-files\.ps1|Converting updated files? to CRLF|Normalizing updated files to CRLF|Finalizing CRLF normalization|CodexSettings CRLF (?:track|finalize))'
+
+function Test-CrlfHookEntry {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)]$Entry)
+
+    return (($Entry | ConvertTo-Json -Depth 20 -Compress) -match $script:CrlfHookSignaturePattern)
+}
+
+function Get-CrlfHookCounts {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Content)
+
+    $object = if ([string]::IsNullOrWhiteSpace($Content)) { [pscustomobject]@{ hooks = [pscustomobject]@{} } } else { $Content | ConvertFrom-Json -ErrorAction Stop }
+    $postToolUse = 0
+    $stop = 0
+    if ($null -ne $object.hooks) {
+        foreach ($eventName in @('PostToolUse', 'Stop')) {
+            if ($object.hooks.PSObject.Properties.Name -notcontains $eventName) { continue }
+            $count = @($object.hooks.PSObject.Properties[$eventName].Value | Where-Object { Test-CrlfHookEntry $_ }).Count
+            if ($eventName -eq 'PostToolUse') { $postToolUse = $count } else { $stop = $count }
+        }
+    }
+    return [pscustomobject]@{ PostToolUse = $postToolUse; Stop = $stop; Total = $postToolUse + $stop }
+}
+
 function Merge-HooksJson {
     [CmdletBinding()]
     param(
@@ -330,7 +356,7 @@ function Merge-HooksJson {
     $existing = if ([string]::IsNullOrWhiteSpace($ExistingContent)) { [pscustomobject]@{ hooks = [pscustomobject]@{} } } else { $ExistingContent | ConvertFrom-Json -ErrorAction Stop }
     if ($null -eq $existing.hooks) { $existing | Add-Member -NotePropertyName hooks -NotePropertyValue ([pscustomobject]@{}) -Force }
     foreach ($property in @($existing.hooks.PSObject.Properties)) {
-        $filtered = @($property.Value | Where-Object { ($_ | ConvertTo-Json -Depth 20 -Compress) -notmatch 'crlf-updated-files\.ps1' })
+        $filtered = @($property.Value | Where-Object { -not (Test-CrlfHookEntry $_) })
         if ($filtered.Count -eq 0) {
             $existing.hooks.PSObject.Properties.Remove($property.Name)
         } else {
@@ -345,7 +371,7 @@ function Merge-HooksJson {
     return ($existing | ConvertTo-Json -Depth 30)
 }
 
-function Remove-ManagedHooksJson {
+function Remove-CrlfHooksJson {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Content)
 
@@ -353,7 +379,7 @@ function Remove-ManagedHooksJson {
     $object = $Content | ConvertFrom-Json -ErrorAction Stop
     if ($null -eq $object.hooks) { return $Content }
     foreach ($property in @($object.hooks.PSObject.Properties)) {
-        $filtered = @($property.Value | Where-Object { ($_ | ConvertTo-Json -Depth 20 -Compress) -notmatch 'crlf-updated-files\.ps1' })
+        $filtered = @($property.Value | Where-Object { -not (Test-CrlfHookEntry $_) })
         if ($filtered.Count -eq 0) {
             $object.hooks.PSObject.Properties.Remove($property.Name)
         } else {
@@ -361,6 +387,13 @@ function Remove-ManagedHooksJson {
         }
     }
     return ($object | ConvertTo-Json -Depth 30)
+}
+
+function Remove-ManagedHooksJson {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Content)
+
+    return Remove-CrlfHooksJson -Content $Content
 }
 
 function Remove-CcusageProfileBlocks {
