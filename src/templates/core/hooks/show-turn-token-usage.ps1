@@ -9,9 +9,15 @@ function ConvertFrom-HookInputJson([string]$Text) {
         $originalError = $_
         $pattern = '(?s)(?<prefix>"last_assistant_message"\s*:\s*)".*"(?<suffix>\s*}\s*)$'
         $sanitized = [regex]::Replace($Text, $pattern, '${prefix}null${suffix}')
-        if ($sanitized -eq $Text) { throw $originalError }
-        try { return $sanitized | ConvertFrom-Json -ErrorAction Stop }
-        catch { throw $originalError }
+        if ($sanitized -ne $Text) {
+            try { return $sanitized | ConvertFrom-Json -ErrorAction Stop } catch {}
+        }
+        $messageProperty = @([regex]::Matches($Text, ',\s*"last_assistant_message"\s*:'))[-1]
+        if ($null -ne $messageProperty) {
+            $prefix = $Text.Substring(0, $messageProperty.Index).TrimEnd()
+            try { return ($prefix + '}') | ConvertFrom-Json -ErrorAction Stop } catch {}
+        }
+        throw $originalError
     }
 }
 

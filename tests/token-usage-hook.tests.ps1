@@ -116,6 +116,22 @@ Get-Content -LiteralPath $env:CODEX_SETTINGS_CCSESSIONS_SNAPSHOT -Raw
         throw 'Stop payload 的 last_assistant_message 含未跳脫引號時，未顯示 rollout 使用率。'
     }
 
+    $sessionTruncated = '019fd65b-39b0-7d60-99fc-deb094690005'
+    $truncatedInput = [ordered]@{
+        session_id = $sessionTruncated
+        turn_id = 'turn-truncated-message'
+        cwd = $repositoryRoot
+        transcript_path = $rolloutPath
+        hook_event_name = 'Stop'
+        stop_hook_active = $false
+        last_assistant_message = 'unfinished'
+    } | ConvertTo-Json -Compress
+    $truncatedInput = $truncatedInput.Substring(0, $truncatedInput.IndexOf('unfinished') + 'unfinished'.Length)
+    $fromTruncatedInput = Invoke-TokenHook -SessionId $sessionTruncated -TurnId 'turn-truncated-message' -RawInput $truncatedInput
+    if ([string]$fromTruncatedInput.systemMessage -match 'Token usage unavailable' -or -not $fromTruncatedInput.systemMessage.Contains('Input           2.47K')) {
+        throw '截斷的 Stop payload 未使用 rollout 顯示 Token 使用率。'
+    }
+
     $sessionRetry = '019fd65b-39b0-7d60-99fc-deb094690003'
     Set-Snapshot -SessionId $sessionRetry -InputTokens 8765 -CachedInputTokens 4321 -CacheWriteTokens 123 -OutputTokens 987 -TotalTokens 14073 -CostUsd 0.02
     $env:CODEX_SETTINGS_CCSESSIONS_RETRY_MARKER = $retryMarkerPath
@@ -151,7 +167,7 @@ Get-Content -LiteralPath $env:CODEX_SETTINGS_CCSESSIONS_SNAPSHOT -Raw
     $other = Invoke-TokenHook -SessionId $sessionB -TurnId 'turn-b1'
     if ($other.systemMessage -notmatch 'Token usage since session start') { throw '不同 Session 未使用獨立基準。' }
     $sessionStates = @(Get-ChildItem -LiteralPath $stateRoot -Filter '*.json' | Where-Object Name -ne 'settings.json')
-    if ($sessionStates.Count -ne 6) { throw "多 Session 狀態檔數量錯誤：$($sessionStates.Count)" }
+    if ($sessionStates.Count -ne 7) { throw "多 Session 狀態檔數量錯誤：$($sessionStates.Count)" }
 
     $stateA = @($sessionStates | Where-Object { (Get-Content -LiteralPath $_.FullName -Raw | ConvertFrom-Json).sessionId -eq $sessionA })[0]
     [IO.File]::WriteAllText($stateA.FullName, '{invalid', [Text.UTF8Encoding]::new($false))

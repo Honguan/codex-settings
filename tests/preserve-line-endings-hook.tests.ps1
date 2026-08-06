@@ -77,6 +77,13 @@ try {
     [IO.File]::WriteAllText((Join-Path $projectRoot '.codex\CVS\Entries'), '/ignored.txt/1.1///', [Text.Encoding]::ASCII)
     $unchangedTime = [IO.File]::GetLastWriteTimeUtc((Join-Path $projectRoot 'unchanged.txt'))
 
+    $escapedMixedPath = (Join-Path $projectRoot 'mixed.txt').Replace('\', '\\')
+    $nestedPatchCommand = 'const patch = "*** Begin Patch\n*** Update File: ' + $escapedMixedPath + '\n@@\n-old\n+new\n*** End Patch"; text(await tools.apply_patch(patch));'
+    $missingStateInput = New-HookInput -EventName PostToolUse -SessionId 'session-without-state' -ToolName exec -Command $nestedPatchCommand
+    Invoke-Hook -Mode Restore -SessionId 'session-without-state' -InputText $missingStateInput | Out-Null
+    Assert-Bytes 'mixed.txt' ([Text.Encoding]::ASCII.GetBytes("before`r`nmiddle`r`nend`r`n"))
+    Write-TestBytes 'mixed.txt' ([Text.Encoding]::ASCII.GetBytes("before`r`nmiddle`r`nend`n"))
+
     $sessionA = 'session-A'
     $execCommand = 'const patch = getPatch(); text(await tools.apply_patch(patch));'
     $trackInput = New-HookInput -EventName PreToolUse -SessionId $sessionA -ToolName exec -Command $execCommand
@@ -152,6 +159,17 @@ try {
     Assert-Bytes 'ansi.txt' ([byte[]](0xE9, 0x0A, 0xE8, 0x0A))
     Assert-Bytes 'binary.bin' ([byte[]](0x00, 0x41, 0x0A, 0x42, 0x0D, 0x0A))
     if ([IO.File]::GetLastWriteTimeUtc((Join-Path $projectRoot 'unchanged.txt')) -ne $unchangedTime) { throw 'Stop Hook 重寫了未修改檔案。' }
+
+    $truncatedStopInput = ([ordered]@{
+        session_id = $sessionB
+        cwd = $projectRoot
+        hook_event_name = 'Stop'
+        stop_hook_active = $false
+        last_assistant_message = 'unfinished'
+    } | ConvertTo-Json -Compress)
+    $truncatedStopInput = $truncatedStopInput.Substring(0, $truncatedStopInput.IndexOf('unfinished') + 'unfinished'.Length)
+    Invoke-Hook -Mode Finalize -SessionId $sessionB -InputText $truncatedStopInput | Out-Null
+    if (Test-Path -LiteralPath (Join-Path $stateRoot 'session-B.json')) { throw '截斷的 Stop payload 未完成換行修復與狀態清理。' }
 
     $invalid = Invoke-Hook -Mode Track -SessionId 'invalid' -InputText '{invalid-json'
     if ([string]::IsNullOrWhiteSpace([string]$invalid.Output.systemMessage)) { throw '無效 payload 沒有回傳清楚錯誤。' }

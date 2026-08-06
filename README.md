@@ -47,7 +47,7 @@ Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 - Git（首次安裝預設）：加入 Git 專屬 AGENTS、Rules 與 Issue 完成工作流；修正必須先驗證、以 `Fixes #N` 提交，且進入預設分支後才能關閉 Issue。
 - CVS：加入 CVS 專屬 AGENTS、Rules 與全域換行保護 Hooks。`PreToolUse` 依 session 記錄 CVS 追蹤檔的原始狀態，`PostToolUse` 在每次工具完成後立即恢復，`Stop` 負責最終補漏與清理。
 
-換行保護使用 wildcard matcher，因此直接 `apply_patch`、code mode 的 `exec → tools.apply_patch`、Shell、MCP 與其他本機工具都使用同一份修改前基準。它只處理雜湊實際改變的檔案，精確恢復原本的 CRLF／LF、檔尾換行與 BOM，不會重新編碼文字；session 狀態在完成後自動清除。Codex 的檔案修改卡片是工具執行當下的靜態 diff，PostToolUse 修復後不會回寫卡片；請以 Hook 診斷與最終 `cvs diff`／`cvs status` 判定實際結果。
+換行保護使用 wildcard matcher，因此直接 `apply_patch`、code mode 的 `exec → tools.apply_patch`、Shell、MCP 與其他本機工具都使用同一份修改前基準。它只處理雜湊實際改變的檔案，精確恢復原本的 CRLF／LF、檔尾換行與 BOM，不會重新編碼文字；若修改前快照缺失，`PostToolUse` 仍會辨識 patch 指向的 CVS 追蹤檔並修復混合換行。session 狀態在完成後自動清除。Codex 的檔案修改卡片是工具執行當下的靜態 diff，PostToolUse 修復後不會回寫卡片；請以 Hook 診斷與最終 `cvs diff`／`cvs status` 判定實際結果。
 
 安裝器會單獨詢問是否安裝 Windows 通知：首次安裝預設為否，已安裝時預設保留並更新；選擇不安裝會移除受管理通知，但保留使用率介面與其他自訂 Hook。通知使用 `PermissionRequest`、`request_user_input` 的 `PreToolUse` 與 `Stop` 官方事件，依專案名稱顯示不同標題與提示音。同一 session、turn 與類型在短時間內只顯示一次；設定位於 `~/.codex/state/notifications/settings.json`，可停用全部或個別通知。可執行 `~/.codex/hooks/show-codex-notification.ps1 -Type Completed -Test` 測試通知流程。
 
