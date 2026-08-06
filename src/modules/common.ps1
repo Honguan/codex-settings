@@ -386,16 +386,18 @@ function Merge-TomlTemplate {
     return $result
 }
 
-$script:ObsoleteCvsHookSignaturePattern = '(?i)((?:crlf-updated-files|normalize-cvs-crlf)\.ps1|Converting updated files? to CRLF|Normalizing updated files to CRLF|Finalizing CRLF normalization|CodexSettings CRLF (?:track|finalize))'
+$script:ManagedLineEndingHookSignaturePattern = '(?i)((?:crlf-updated-files|normalize-cvs-crlf|preserve-line-endings)\.ps1|Converting updated files? to CRLF|Normalizing updated files to CRLF|Finalizing CRLF normalization|CodexSettings CRLF (?:track|finalize)|Restoring original line endings)'
+$script:PreserveLineEndingHookSignaturePattern = '(?i)(preserve-line-endings\.ps1|Restoring original line endings)'
+$script:LegacyCrlfHookSignaturePattern = '(?i)((?:crlf-updated-files|normalize-cvs-crlf)\.ps1|Converting updated files? to CRLF|Normalizing updated files to CRLF|Finalizing CRLF normalization|CodexSettings CRLF (?:track|finalize))'
 
-function Test-ObsoleteCvsHookEntry {
+function Test-ManagedLineEndingHookEntry {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)]$Entry)
 
-    return (($Entry | ConvertTo-Json -Depth 20 -Compress) -match $script:ObsoleteCvsHookSignaturePattern)
+    return (($Entry | ConvertTo-Json -Depth 20 -Compress) -match $script:ManagedLineEndingHookSignaturePattern)
 }
 
-function Remove-ObsoleteCvsHooksJson {
+function Remove-ManagedLineEndingHooksJson {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Content)
 
@@ -403,7 +405,7 @@ function Remove-ObsoleteCvsHooksJson {
     $object = $Content | ConvertFrom-Json -ErrorAction Stop
     if ($null -eq $object.hooks) { return $Content }
     foreach ($property in @($object.hooks.PSObject.Properties)) {
-        $filtered = @($property.Value | Where-Object { -not (Test-ObsoleteCvsHookEntry $_) })
+        $filtered = @($property.Value | Where-Object { -not (Test-ManagedLineEndingHookEntry $_) })
         if ($filtered.Count -eq 0) {
             $object.hooks.PSObject.Properties.Remove($property.Name)
         } else {
@@ -411,6 +413,24 @@ function Remove-ObsoleteCvsHooksJson {
         }
     }
     return ($object | ConvertTo-Json -Depth 30)
+}
+
+function Merge-LineEndingHooksJson {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ExistingContent,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$TemplateContent
+    )
+
+    $cleaned = Remove-ManagedLineEndingHooksJson -Content $ExistingContent
+    $existing = if ([string]::IsNullOrWhiteSpace($cleaned)) { [pscustomobject]@{ hooks = [pscustomobject]@{} } } else { $cleaned | ConvertFrom-Json -ErrorAction Stop }
+    if ($null -eq $existing.hooks) { $existing | Add-Member -NotePropertyName hooks -NotePropertyValue ([pscustomobject]@{}) -Force }
+    $template = $TemplateContent | ConvertFrom-Json -ErrorAction Stop
+    foreach ($property in @($template.hooks.PSObject.Properties)) {
+        $current = if ($existing.hooks.PSObject.Properties.Name -contains $property.Name) { @($existing.hooks.PSObject.Properties[$property.Name].Value) } else { @() }
+        $existing.hooks | Add-Member -NotePropertyName $property.Name -NotePropertyValue (@($current) + @($property.Value)) -Force
+    }
+    return ($existing | ConvertTo-Json -Depth 30)
 }
 
 function Remove-CcusageProfileBlocks {

@@ -35,7 +35,7 @@
 
 ## Line endings
 
-When modifying files, preserve their existing CRLF or LF line-ending format.
+Preserve each file's original CRLF or LF format. Never introduce mixed line endings.
 
 # Validation
 

@@ -89,14 +89,14 @@ try {
     foreach ($heading in @('Communication', 'Code Changes', 'Architecture', 'File Handling', 'Validation')) {
         if ([regex]::Matches($agents, "(?m)^# $([regex]::Escape($heading))\s*$").Count -ne 1) { throw "Safe merge duplicated or omitted the AGENTS.md section: $heading" }
     }
-    if ([regex]::Matches($agents, '(?m)^## Line endings\s*$').Count -ne 1 -or $agents -notmatch 'When modifying files, preserve their existing CRLF or LF line-ending format\.') { throw 'Global AGENTS.md line-ending instructions are missing or duplicated.' }
+    if ([regex]::Matches($agents, '(?m)^## Line endings\s*$').Count -ne 1 -or $agents -notmatch "Preserve each file's original CRLF or LF format\. Never introduce mixed line endings\.") { throw 'Global AGENTS.md line-ending instructions are missing or duplicated.' }
     if ($agents -notmatch '(?m)^# User Custom Rules\s*$') { throw 'Safe merge removed a custom AGENTS.md section.' }
     if ($agents -match 'and backward compatibility\.') { throw 'Safe merge did not update a legacy AGENTS.md section.' }
     $installedHooks = Get-Content -LiteralPath (Join-Path $globalRoot 'hooks.json') -Raw | ConvertFrom-Json
     if (@($installedHooks.hooks.SessionStart).Count -ne 1) { throw 'CVS installation did not preserve the unmanaged user hook.' }
-    if ($installedHooks.hooks.PSObject.Properties.Name -contains 'PostToolUse' -or $installedHooks.hooks.PSObject.Properties.Name -contains 'Stop') { throw 'CVS installation retained an obsolete CRLF hook.' }
+    if ($installedHooks.hooks.PSObject.Properties.Name -contains 'PostToolUse' -or @($installedHooks.hooks.Stop).Count -ne 1 -or -not (Test-ManagedLineEndingHookEntry $installedHooks.hooks.Stop[0])) { throw 'CVS installation did not replace the obsolete CRLF hook with one line-ending protection hook.' }
     if (Test-Path -LiteralPath (Join-Path $globalRoot 'hooks\normalize-cvs-crlf.ps1')) { throw 'CVS installation retained an obsolete CRLF conversion script.' }
-    if (Test-Path -LiteralPath (Join-Path $globalRoot 'hooks') -PathType Container) { throw 'CVS installation retained an empty obsolete hooks directory.' }
+    if (-not (Test-Path -LiteralPath (Join-Path $globalRoot 'hooks\preserve-line-endings.ps1') -PathType Leaf)) { throw 'CVS installation omitted the line-ending protection script.' }
     $rules = Get-Content -LiteralPath $legacyRulesPath -Raw
     if ([regex]::Matches($rules, 'Block disk formatting\.').Count -ne 1 -or [regex]::Matches($rules, 'CVS project rules supplement').Count -ne 1 -or [regex]::Matches($rules, 'Git project rules supplement').Count -ne 0) {
         throw 'CVS installation did not replace legacy unmarked default.rules content without duplicates or conflicts.'
@@ -119,6 +119,9 @@ try {
     if ([regex]::Matches($rules, 'Git project rules supplement').Count -ne 1 -or [regex]::Matches($rules, 'CVS project rules supplement').Count -ne 0) { throw 'Git rules contain duplicate or conflicting project-type settings.' }
     if ($config -notmatch 'project_root_markers = \["\.git", "CVS"\]' -or $config -match '\.codex-root') { throw 'Global project root markers are invalid.' }
     if ((Get-DefaultDevelopmentEnvironment -Root $globalRoot) -ne 'Git') { throw 'Git was not recorded as the default project system.' }
+    $installedHooks = Get-Content -LiteralPath (Join-Path $globalRoot 'hooks.json') -Raw | ConvertFrom-Json
+    if (@($installedHooks.hooks.SessionStart).Count -ne 1 -or $installedHooks.hooks.PSObject.Properties.Name -contains 'Stop') { throw 'Git installation did not remove only the managed line-ending hook.' }
+    if (Test-Path -LiteralPath (Join-Path $globalRoot 'hooks\preserve-line-endings.ps1')) { throw 'Git installation retained the CVS line-ending protection script.' }
 
     Install-TestEnvironment -Environment CVS
     $agents = Get-Content -LiteralPath (Join-Path $globalRoot 'AGENTS.md') -Raw
@@ -127,11 +130,12 @@ try {
     if ([regex]::Matches($rules, 'CVS project rules supplement').Count -ne 1 -or [regex]::Matches($rules, 'Git project rules supplement').Count -ne 0) { throw 'CVS rules contain duplicate or conflicting project-type settings.' }
     $installedHooks = Get-Content -LiteralPath (Join-Path $globalRoot 'hooks.json') -Raw | ConvertFrom-Json
     if (@($installedHooks.hooks.SessionStart).Count -ne 1) { throw 'CVS installation did not preserve the unmanaged user hook.' }
-    if ($installedHooks.hooks.PSObject.Properties.Name -contains 'PostToolUse' -or $installedHooks.hooks.PSObject.Properties.Name -contains 'Stop') { throw 'Repeated CVS installation added a CRLF hook.' }
-    if ((Test-Path -LiteralPath (Join-Path $script:ScriptRoot 'templates\environments\cvs\hooks.json')) -or (Test-Path -LiteralPath (Join-Path $script:ScriptRoot 'templates\environments\cvs\hooks\normalize-cvs-crlf.ps1'))) { throw 'CVS hook templates were not removed.' }
+    if ($installedHooks.hooks.PSObject.Properties.Name -contains 'PostToolUse' -or @($installedHooks.hooks.Stop).Count -ne 1 -or -not (Test-ManagedLineEndingHookEntry $installedHooks.hooks.Stop[0])) { throw 'Repeated CVS installation duplicated or omitted the line-ending protection hook.' }
+    if (-not (Test-Path -LiteralPath (Join-Path $script:ScriptRoot 'templates\environments\cvs\hooks.json')) -or -not (Test-Path -LiteralPath (Join-Path $script:ScriptRoot 'templates\environments\cvs\hooks\preserve-line-endings.ps1'))) { throw 'CVS line-ending hook templates are missing.' }
 
     Install-TestEnvironment -Environment Git
     if (Test-Path -LiteralPath (Join-Path $globalRoot 'hooks\normalize-cvs-crlf.ps1')) { throw 'Switching environments retained the obsolete CVS hook script.' }
+    if (Test-Path -LiteralPath (Join-Path $globalRoot 'hooks\preserve-line-endings.ps1')) { throw 'Switching environments retained the CVS line-ending protection script.' }
 
     $script:capturedEnvironmentPrompt = ''
     function Read-Host([string]$Prompt) {

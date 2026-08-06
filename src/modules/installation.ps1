@@ -221,6 +221,9 @@ function Get-Strategy([string]$ModeName, [string]$RelativePath) {
     if ($normalized -eq 'rules/default.rules' -or $normalized.EndsWith('/rules/default.rules')) {
         return [pscustomobject]@{ Name = 'managed-block'; Start = "# >>> CODEX-SETTINGS:${ModeName}:RULES >>>"; End = "# <<< CODEX-SETTINGS:${ModeName}:RULES <<<" }
     }
+    if ($normalized -eq 'hooks.json' -or $normalized.EndsWith('/hooks.json')) {
+        return [pscustomobject]@{ Name = 'managed-hooks'; Start = $null; End = $null }
+    }
     return [pscustomobject]@{ Name = 'replace'; Start = $null; End = $null }
 }
 
@@ -265,18 +268,18 @@ function Add-DefaultModeRequestUserInputFeature([string]$Content, [string]$NewLi
     return $Content.TrimEnd() + $NewLine + $NewLine + '[features]' + $NewLine + 'default_mode_request_user_input = true'
 }
 
-function Remove-ObsoleteGlobalCvsHooks([string]$Root, $Transaction) {
+function Remove-GlobalLineEndingHooks([string]$Root, $Transaction) {
     $hooksPath = Join-Path $Root 'hooks.json'
     if (Test-Path -LiteralPath $hooksPath -PathType Leaf) {
         $state = Get-TextFileState $hooksPath
-        $cleaned = Remove-ObsoleteCvsHooksJson -Content $state.Content
+        $cleaned = Remove-ManagedLineEndingHooksJson -Content $state.Content
         if ($cleaned -ne $state.Content) {
             Save-TransactionFile -Transaction $Transaction -Path $hooksPath
             Write-TextFileState -Path $hooksPath -Content $cleaned -Encoding $state.Encoding
         }
     }
 
-    foreach ($scriptName in @('crlf-updated-files.ps1', 'normalize-cvs-crlf.ps1')) {
+    foreach ($scriptName in @('crlf-updated-files.ps1', 'normalize-cvs-crlf.ps1', 'preserve-line-endings.ps1')) {
         $scriptPath = Join-Path $Root ("hooks\$scriptName")
         if (Test-Path -LiteralPath $scriptPath -PathType Leaf) {
             Save-TransactionFile -Transaction $Transaction -Path $scriptPath
@@ -286,6 +289,33 @@ function Remove-ObsoleteGlobalCvsHooks([string]$Root, $Transaction) {
     $hooksRoot = Join-Path $Root 'hooks'
     if ((Test-Path -LiteralPath $hooksRoot -PathType Container) -and @(Get-ChildItem -LiteralPath $hooksRoot -Force).Count -eq 0) {
         Remove-Item -LiteralPath $hooksRoot -Force
+    }
+}
+
+function Assert-GlobalLineEndingHook([ValidateSet('Git', 'CVS')][string]$DevelopmentEnvironment, [string]$Root) {
+    $hooksPath = Join-Path $Root 'hooks.json'
+    $hookContent = if (Test-Path -LiteralPath $hooksPath -PathType Leaf) { [IO.File]::ReadAllText($hooksPath) } else { '' }
+    $preserveHookCount = 0
+    $legacyHookCount = 0
+    if (-not [string]::IsNullOrWhiteSpace($hookContent)) {
+        $hookObject = $hookContent | ConvertFrom-Json -ErrorAction Stop
+        if ($null -ne $hookObject.hooks) {
+            foreach ($property in @($hookObject.hooks.PSObject.Properties)) {
+                foreach ($entry in @($property.Value)) {
+                    $entryJson = $entry | ConvertTo-Json -Depth 20 -Compress
+                    if ($entryJson -match $script:PreserveLineEndingHookSignaturePattern) { $preserveHookCount++ }
+                    if ($entryJson -match $script:LegacyCrlfHookSignaturePattern) { $legacyHookCount++ }
+                }
+            }
+        }
+    }
+    $preserveScriptCount = if (Test-Path -LiteralPath (Join-Path $Root 'hooks\preserve-line-endings.ps1') -PathType Leaf) { 1 } else { 0 }
+    if ($DevelopmentEnvironment -eq 'CVS') {
+        if ($preserveHookCount -ne 1 -or $preserveScriptCount -ne 1 -or $legacyHookCount -ne 0) {
+            throw "CVS 換行保護安裝檢查失敗：LineEndingHookCount=$preserveHookCount PreserveLineEndingScriptCount=$preserveScriptCount LegacyCrlfHookCount=$legacyHookCount"
+        }
+    } elseif ($preserveHookCount -ne 0 -or $preserveScriptCount -ne 0 -or $legacyHookCount -ne 0) {
+        throw 'Git 全域設定仍包含 CVS 換行保護 Hook。'
     }
 }
 
@@ -344,7 +374,7 @@ function Remove-ObsoleteProjectSettings($Transaction, [string]$RegistryPath) {
                 }
             } elseif ($strategy -eq 'managed-hooks') {
                 $state = Get-TextFileState -Path $path
-                $content = Remove-ObsoleteCvsHooksJson -Content $state.Content
+                $content = Remove-ManagedLineEndingHooksJson -Content $state.Content
                 $object = if ([string]::IsNullOrWhiteSpace($content)) { $null } else { $content | ConvertFrom-Json -ErrorAction Stop }
                 $hasHooks = $null -ne $object -and $null -ne $object.hooks -and @($object.hooks.PSObject.Properties).Count -gt 0
                 if (-not $hasHooks -and -not [bool]$entry.ExistedBefore) {
@@ -417,7 +447,7 @@ function Remove-ObsoleteProjectSettings($Transaction, [string]$RegistryPath) {
 function Install-Target($Target, $Transaction, [switch]$Force) {
     if (-not (Test-Path -LiteralPath $Target.Template -PathType Container)) { throw "找不到範本：$($Target.Template)" }
     New-Item -ItemType Directory -Path $Target.Root -Force | Out-Null
-    if ($Target.Mode -eq 'Global') { Remove-ObsoleteGlobalCvsHooks -Root $Target.Root -Transaction $Transaction }
+    if ($Target.Mode -eq 'Global') { Remove-GlobalLineEndingHooks -Root $Target.Root -Transaction $Transaction }
     $previous = Get-Manifest $Target.Root
     $entries = New-Object 'System.Collections.Generic.List[object]'
     $templatePaths = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
@@ -461,6 +491,7 @@ function Install-Target($Target, $Transaction, [switch]$Force) {
                     $configBase = Remove-ManagedBlock -Content $existing -StartMarker '# >>> CODEX-SETTINGS: >>>' -EndMarker '# <<< CODEX-SETTINGS: <<<'
                     $merged = Merge-TomlTemplate $configBase $template $strategy.Start $strategy.End $state.NewLine
                 }
+                'managed-hooks' { $merged = Merge-LineEndingHooksJson -ExistingContent $existing -TemplateContent $template }
             }
             if ($isOptionalFeatureConfig) { $merged = Add-DefaultModeRequestUserInputFeature -Content $merged -NewLine $state.NewLine }
             Write-TextFileState $destination $merged $state.Encoding
@@ -490,6 +521,8 @@ function Install-Target($Target, $Transaction, [switch]$Force) {
             }
         }
     }
+
+    if ($Target.Mode -eq 'Global') { Assert-GlobalLineEndingHook -DevelopmentEnvironment $Target.DevelopmentEnvironment -Root $Target.Root }
 
     return [pscustomobject]@{ Mode = $Target.Mode; DevelopmentEnvironment = $Target.DevelopmentEnvironment; Root = $Target.Root; Previous = $previous; Files = $entries.ToArray() }
 }
