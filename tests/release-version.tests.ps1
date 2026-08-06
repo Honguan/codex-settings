@@ -25,4 +25,18 @@ if (-not $invalidVersionFailed) {
     throw '不合法的版本格式未被拒絕。'
 }
 
+$buildRoot = Join-Path ([IO.Path]::GetTempPath()) ('codex-settings-versioned-build-' + [guid]::NewGuid().ToString('N'))
+try {
+    & (Join-Path (Split-Path -Parent $scriptPath) 'build-installer.ps1') -Version 'v9.8.7' -OutputDirectory $buildRoot
+    $versionedInstaller = Join-Path $buildRoot 'CodexSettings-Setup-v9.8.7.cmd'
+    if (-not (Test-Path -LiteralPath $versionedInstaller -PathType Leaf)) {
+        throw '建置結果沒有使用版本化檔名。'
+    }
+    if (Test-Path -LiteralPath (Join-Path $buildRoot 'CodexSettings-Setup.cmd')) {
+        throw '建置結果仍包含無版本檔名。'
+    }
+} finally {
+    Remove-Item -LiteralPath $buildRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 Write-Host 'Release version tests passed.'

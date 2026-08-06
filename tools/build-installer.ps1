@@ -1,5 +1,9 @@
 [CmdletBinding()]
 param(
+    [Parameter(Mandatory)]
+    [ValidatePattern('^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$')]
+    [string]$Version,
+
     [string]$OutputDirectory = (Join-Path (Split-Path -Parent $PSScriptRoot) 'dist')
 )
 
@@ -8,7 +12,7 @@ $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $stagingRoot = Join-Path ([IO.Path]::GetTempPath()) ('CodexSettings-Setup-' + [guid]::NewGuid().ToString('N'))
 $payloadRoot = Join-Path $stagingRoot 'payload'
 $archivePath = Join-Path $stagingRoot 'payload.zip'
-$installerPath = Join-Path $OutputDirectory 'CodexSettings-Setup.cmd'
+$installerPath = Join-Path $OutputDirectory "CodexSettings-Setup-$Version.cmd"
 
 $header = @'
 @echo off

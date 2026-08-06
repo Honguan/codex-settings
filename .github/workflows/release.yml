@@ -28,15 +28,16 @@ jobs:
           }
       - name: Build single-file installer
         shell: pwsh
-        run: ./tools/build-installer.ps1
+        run: ./tools/build-installer.ps1 -Version $env:GITHUB_REF_NAME
       - name: Publish installer
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          $asset = "dist/CodexSettings-Setup-$env:GITHUB_REF_NAME.cmd"
           gh release view $env:GITHUB_REF_NAME 2>$null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $env:GITHUB_REF_NAME dist/CodexSettings-Setup.cmd --clobber
+            gh release upload $env:GITHUB_REF_NAME $asset --clobber
           } else {
-            gh release create $env:GITHUB_REF_NAME dist/CodexSettings-Setup.cmd --generate-notes
+            gh release create $env:GITHUB_REF_NAME $asset --generate-notes
           }
