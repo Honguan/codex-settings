@@ -6,8 +6,8 @@ $stateRoot = Join-Path $testRoot 'state'
 $snapshotPath = Join-Path $testRoot 'snapshot.json'
 $mockPath = Join-Path $testRoot 'mock-ccsessions.ps1'
 
-function Set-Snapshot([string]$SessionId, [long]$InputTokens, [long]$CachedInputTokens, [long]$OutputTokens, [long]$TotalTokens, [decimal]$CostUsd, [string[]]$Models = @('gpt-5.6-sol')) {
-    $value = [ordered]@{ success = $true; sessionId = $SessionId; models = $Models; inputTokens = $InputTokens; cachedInputTokens = $CachedInputTokens; outputTokens = $OutputTokens; totalTokens = $TotalTokens; costUsd = $CostUsd }
+function Set-Snapshot([string]$SessionId, [long]$InputTokens, [long]$CachedInputTokens, [long]$CacheWriteTokens, [long]$OutputTokens, [long]$TotalTokens, [decimal]$CostUsd, [string[]]$Models = @('gpt-5.6-sol')) {
+    $value = [ordered]@{ success = $true; sessionId = $SessionId; models = $Models; inputTokens = $InputTokens; cachedInputTokens = $CachedInputTokens; cacheWriteTokens = $CacheWriteTokens; outputTokens = $OutputTokens; totalTokens = $TotalTokens; costUsd = $CostUsd }
     [IO.File]::WriteAllText($snapshotPath, ($value | ConvertTo-Json -Compress), [Text.UTF8Encoding]::new($false))
 }
 
@@ -39,21 +39,30 @@ try {
     $env:CODEX_SETTINGS_CCSESSIONS_SNAPSHOT = $snapshotPath
 
     $sessionA = '019fd65b-39b0-7d60-99fc-deb09469413b'
-    Set-Snapshot -SessionId $sessionA -InputTokens 120000 -CachedInputTokens 80000 -OutputTokens 12000 -TotalTokens 212000 -CostUsd 0.18
+    Set-Snapshot -SessionId $sessionA -InputTokens 120000 -CachedInputTokens 80000 -CacheWriteTokens 20000 -OutputTokens 12000 -TotalTokens 212000 -CostUsd 0.18
     $first = Invoke-TokenHook -SessionId $sessionA -TurnId 'turn-1'
-    if ($first.systemMessage -notmatch 'Token usage since session start' -or $first.systemMessage -notmatch '120,000' -or $first.systemMessage -notmatch '019fd65b\.\.\.69413b') { throw '新 Session 第一輪未顯示完整累積用量。' }
+    foreach ($expected in @('Token usage since session start', 'Input           120K', 'Cache           80K', 'Cache hit rate  36.36%', 'Estimated usage 0.14%', '019fd65b...69413b')) {
+        if (-not $first.systemMessage.Contains($expected)) { throw "新 Session 第一輪缺少：$expected" }
+    }
+    $orderedLabels = @('Session', 'Model', 'Input', 'Output', 'Cache', 'Total', 'Cache hit rate', 'Cost', 'Estimated usage')
+    $previousIndex = -1
+    foreach ($label in $orderedLabels) {
+        $index = $first.systemMessage.IndexOf($label, [StringComparison]::Ordinal)
+        if ($index -le $previousIndex) { throw "Token 顯示順序錯誤：$label" }
+        $previousIndex = $index
+    }
 
     $duplicate = Invoke-TokenHook -SessionId $sessionA -TurnId 'turn-1-duplicate'
     if (@($duplicate.PSObject.Properties).Count -ne 0) { throw '相同用量 snapshot 被重複顯示。' }
 
-    Set-Snapshot -SessionId $sessionA -InputTokens 145000 -CachedInputTokens 96000 -OutputTokens 15500 -TotalTokens 256500 -CostUsd 0.22 -Models @('gpt-5.6-sol', 'gpt-5.6-terra')
+    Set-Snapshot -SessionId $sessionA -InputTokens 145000 -CachedInputTokens 96000 -CacheWriteTokens 22000 -OutputTokens 15500 -TotalTokens 256500 -CostUsd 0.22 -Models @('gpt-5.6-sol', 'gpt-5.6-terra')
     $second = Invoke-TokenHook -SessionId $sessionA -TurnId 'turn-2'
-    foreach ($expected in @('Turn token usage', '+25,000', '+16,000', '+3,500', '+44,500', '+$0.04', 'gpt-5.6-sol, gpt-5.6-terra')) {
+    foreach ($expected in @('Turn token usage', '+25K', '+16K', '+3.5K', '+44.5K', 'Cache hit rate  37.21%', '+$0.04', 'Estimated usage 0.03%', 'gpt-5.6-sol, gpt-5.6-terra')) {
         if (-not $second.systemMessage.Contains($expected)) { throw "第二輪差值缺少：$expected" }
     }
 
     $sessionB = '019fd65b-39b0-7d60-99fc-deb094699999'
-    Set-Snapshot -SessionId $sessionB -InputTokens 10 -CachedInputTokens 2 -OutputTokens 3 -TotalTokens 15 -CostUsd 0.001
+    Set-Snapshot -SessionId $sessionB -InputTokens 10 -CachedInputTokens 2 -CacheWriteTokens 1 -OutputTokens 3 -TotalTokens 15 -CostUsd 0.001
     $other = Invoke-TokenHook -SessionId $sessionB -TurnId 'turn-b1'
     if ($other.systemMessage -notmatch 'Token usage since session start') { throw '不同 Session 未使用獨立基準。' }
     $sessionStates = @(Get-ChildItem -LiteralPath $stateRoot -Filter '*.json' | Where-Object Name -ne 'settings.json')
@@ -61,7 +70,7 @@ try {
 
     $stateA = @($sessionStates | Where-Object { (Get-Content -LiteralPath $_.FullName -Raw | ConvertFrom-Json).sessionId -eq $sessionA })[0]
     [IO.File]::WriteAllText($stateA.FullName, '{invalid', [Text.UTF8Encoding]::new($false))
-    Set-Snapshot -SessionId $sessionA -InputTokens 150000 -CachedInputTokens 97000 -OutputTokens 16000 -TotalTokens 263000 -CostUsd 0.23
+    Set-Snapshot -SessionId $sessionA -InputTokens 150000 -CachedInputTokens 97000 -CacheWriteTokens 22500 -OutputTokens 16000 -TotalTokens 263000 -CostUsd 0.23
     $rebuilt = Invoke-TokenHook -SessionId $sessionA -TurnId 'turn-3'
     if ($rebuilt.systemMessage -notmatch 'Token usage since session start' -or @(Get-ChildItem -LiteralPath $stateRoot -Filter '*.corrupt-*').Count -ne 1) { throw '損壞狀態未備份並重建。' }
 

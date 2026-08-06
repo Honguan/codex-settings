@@ -234,6 +234,7 @@ function global:ccsessions {
             models = $models
             inputTokens = [long]$Row.inputTokens
             cachedInputTokens = [long]$Row.cacheReadTokens
+            cacheWriteTokens = [long]$Row.cacheCreationTokens
             outputTokens = [long]$Row.outputTokens
             totalTokens = [long]$Row.totalTokens
             costUsd = [decimal]$Row.costUSD

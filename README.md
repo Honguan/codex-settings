@@ -25,10 +25,10 @@ Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 
 ## 一鍵安裝
 
-下載 Release 中含版本號的單一檔案，例如 `CodexSettings-Setup-v1.8.0.cmd`，不需解壓縮，直接執行：
+下載 Release 中含版本號的單一檔案，例如 `CodexSettings-Setup-v1.8.1.cmd`，不需解壓縮，直接執行：
 
 ```powershell
-.\CodexSettings-Setup-v1.8.0.cmd
+.\CodexSettings-Setup-v1.8.1.cmd
 ```
 
 安裝器會在 `%TEMP%` 解開內嵌程式、執行後立即清理；全域安裝成功後會直接關閉，不再返回選單或等待按鍵。從原始碼執行時則使用根目錄的 `Install.cmd`。
@@ -51,7 +51,7 @@ Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 
 Windows 通知使用 `PermissionRequest`、`request_user_input` 的 `PreToolUse` 與 `Stop` 官方事件，依專案名稱顯示不同標題與提示音。同一 session、turn 與類型在短時間內只顯示一次；設定位於 `~/.codex/state/notifications/settings.json`，可停用全部或個別通知。可執行 `~/.codex/hooks/show-codex-notification.ps1 -Type Completed -Test` 測試通知流程。
 
-每輪 Token 統計使用 `Stop` payload 的 Session ID 呼叫 `ccsessions -Json`，不會改用其他 Session。第一輪顯示目前累積值，後續顯示 Input、Cached input、Output、Total 與 Cost 差值；模型切換時會列出所有模型。狀態依 Session 分開儲存在 `~/.codex/state/token-usage`，相同 snapshot 不會重複顯示。Codex Hook 無法改寫既有 assistant 文字，因此統計透過 `systemMessage` 緊接在回覆後顯示；設定位於同目錄的 `settings.json`。
+每輪 Token 統計使用 `Stop` payload 的 Session ID 呼叫 `ccsessions -Json`，不會改用其他 Session。顯示順序為 Session、Model、Input、Output、Cache、Total、Cache hit rate、Cost、Estimated usage；第一輪顯示目前累積值，後續顯示本輪差值，Token 以 K／M／B 縮寫。`Cache` 顯示快取讀取 Token；快取命中率仍以 `Cache read ÷ (Cache read + Cache write + Input)` 計算，估計消耗比例以每 US$1.30 = 1% 計算。狀態依 Session 分開儲存在 `~/.codex/state/token-usage`，相同 snapshot 不會重複顯示。Codex Hook 無法改寫既有 assistant 文字，因此統計透過 `systemMessage` 緊接在回覆後顯示；設定位於同目錄的 `settings.json`。
 
 安裝成功後會將選擇記錄為預設專案體系。下次互動安裝按 Enter，或非互動安裝未提供 `-DevelopmentEnvironment` 時，會沿用上次的 Git／CVS 選擇。
 
@@ -204,10 +204,10 @@ cdaily 30                        # 顯示最近 30 天的每日統計
 確認版本後再建立對應的 Git tag。GitHub Actions 僅接受完整的 `v主版.次版.修訂版` 標籤。
 
 ```powershell
-.\tools\build-installer.ps1 -Version v1.8.0
+.\tools\build-installer.ps1 -Version v1.8.1
 ```
 
-輸出為唯一的 `dist\CodexSettings-Setup-v1.8.0.cmd`，內嵌所有必要模組與範本。正式發佈時，檔名版本會直接取自 Git tag。
+輸出為唯一的 `dist\CodexSettings-Setup-v1.8.1.cmd`，內嵌所有必要模組與範本。正式發佈時，檔名版本會直接取自 Git tag。
 
 原始碼依職責整理為：
 

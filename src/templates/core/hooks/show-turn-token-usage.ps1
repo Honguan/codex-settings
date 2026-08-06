@@ -74,6 +74,7 @@ function ConvertTo-Snapshot($Usage, [string]$SessionId) {
         models = @($Usage.models)
         inputTokens = [long]$Usage.inputTokens
         cachedInputTokens = [long]$Usage.cachedInputTokens
+        cacheWriteTokens = [long]$Usage.cacheWriteTokens
         outputTokens = [long]$Usage.outputTokens
         totalTokens = [long]$Usage.totalTokens
         costUsd = [decimal]$Usage.costUsd
@@ -104,6 +105,7 @@ function Save-State([string]$Path, $Snapshot, [string]$Hash, [string]$TurnId) {
         models = @($Snapshot.models)
         inputTokens = $Snapshot.inputTokens
         cachedInputTokens = $Snapshot.cachedInputTokens
+        cacheWriteTokens = $Snapshot.cacheWriteTokens
         outputTokens = $Snapshot.outputTokens
         totalTokens = $Snapshot.totalTokens
         costUsd = $Snapshot.costUsd
@@ -116,9 +118,22 @@ function Save-State([string]$Path, $Snapshot, [string]$Hash, [string]$TurnId) {
     Move-Item -LiteralPath $temporaryPath -Destination $Path -Force
 }
 
-function Format-Number([long]$Value, [bool]$Delta) {
+function Format-TokenCount([long]$Value, [bool]$Delta) {
     $prefix = if ($Delta) { '+' } else { '' }
-    return $prefix + $Value.ToString('N0', [Globalization.CultureInfo]::InvariantCulture)
+    $units = @(
+        [pscustomobject]@{ Limit = 1000000000; Divisor = 1000000000; Suffix = 'B' },
+        [pscustomobject]@{ Limit = 1000000; Divisor = 1000000; Suffix = 'M' },
+        [pscustomobject]@{ Limit = 1000; Divisor = 1000; Suffix = 'K' }
+    )
+    foreach ($unit in $units) {
+        if ([Math]::Abs($Value) -lt $unit.Limit) { continue }
+        $scaled = [double]$Value / $unit.Divisor
+        $decimals = if ([Math]::Abs($scaled) -ge 100) { 0 } elseif ([Math]::Abs($scaled) -ge 10) { 1 } else { 2 }
+        $text = $scaled.ToString("F$decimals", [Globalization.CultureInfo]::InvariantCulture)
+        if ($decimals -gt 0) { $text = $text.TrimEnd('0').TrimEnd('.') }
+        return $prefix + $text + $unit.Suffix
+    }
+    return $prefix + $Value.ToString([Globalization.CultureInfo]::InvariantCulture)
 }
 
 function Format-Cost([decimal]$Value, [bool]$Delta) {
@@ -131,6 +146,10 @@ function Format-Cost([decimal]$Value, [bool]$Delta) {
 function Format-SessionId([string]$SessionId) {
     if ($SessionId.Length -le 17) { return $SessionId }
     return $SessionId.Substring(0, 8) + '...' + $SessionId.Substring($SessionId.Length - 6)
+}
+
+function Format-Percentage([decimal]$Value) {
+    return $Value.ToString('0.00', [Globalization.CultureInfo]::InvariantCulture) + '%'
 }
 
 try {
@@ -151,8 +170,9 @@ try {
     if ($null -ne $previous -and [string]$previous.snapshotHash -eq $hash) { Write-HookOutput ([pscustomobject]@{}); return }
 
     $isDelta = $null -ne $previous
+    if ($isDelta -and $previous.PSObject.Properties.Name -notcontains 'cacheWriteTokens') { $isDelta = $false }
     if ($isDelta) {
-        foreach ($property in @('inputTokens', 'cachedInputTokens', 'outputTokens', 'totalTokens', 'costUsd')) {
+        foreach ($property in @('inputTokens', 'cachedInputTokens', 'cacheWriteTokens', 'outputTokens', 'totalTokens', 'costUsd')) {
             if ([decimal]$current.$property -lt [decimal]$previous.$property) { $isDelta = $false; break }
         }
     }
@@ -160,6 +180,7 @@ try {
         [pscustomobject]@{
             inputTokens = [long]$current.inputTokens - [long]$previous.inputTokens
             cachedInputTokens = [long]$current.cachedInputTokens - [long]$previous.cachedInputTokens
+            cacheWriteTokens = [long]$current.cacheWriteTokens - [long]$previous.cacheWriteTokens
             outputTokens = [long]$current.outputTokens - [long]$previous.outputTokens
             totalTokens = [long]$current.totalTokens - [long]$previous.totalTokens
             costUsd = [decimal]$current.costUsd - [decimal]$previous.costUsd
@@ -170,13 +191,17 @@ try {
     $lines = New-Object 'System.Collections.Generic.List[string]'
     [void]$lines.Add('────────────────────────────')
     [void]$lines.Add($(if ($isDelta) { 'Turn token usage' } else { 'Token usage since session start' }))
-    [void]$lines.Add(('Input           {0}' -f (Format-Number $shown.inputTokens $isDelta)))
-    [void]$lines.Add(('Cached input    {0}' -f (Format-Number $shown.cachedInputTokens $isDelta)))
-    [void]$lines.Add(('Output          {0}' -f (Format-Number $shown.outputTokens $isDelta)))
-    [void]$lines.Add(('Total           {0}' -f (Format-Number $shown.totalTokens $isDelta)))
-    if ([bool]$settings.showCost) { [void]$lines.Add(('Cost            {0}' -f (Format-Cost $shown.costUsd $isDelta))) }
-    if ([bool]$settings.showModel -and @($current.models).Count -gt 0) { [void]$lines.Add(('Model           {0}' -f (@($current.models) -join ', '))) }
     if ([bool]$settings.showSessionId) { [void]$lines.Add(('Session         {0}' -f (Format-SessionId $sessionId))) }
+    if ([bool]$settings.showModel -and @($current.models).Count -gt 0) { [void]$lines.Add(('Model           {0}' -f (@($current.models) -join ', '))) }
+    [void]$lines.Add(('Input           {0}' -f (Format-TokenCount $shown.inputTokens $isDelta)))
+    [void]$lines.Add(('Output          {0}' -f (Format-TokenCount $shown.outputTokens $isDelta)))
+    [void]$lines.Add(('Cache           {0}' -f (Format-TokenCount $shown.cachedInputTokens $isDelta)))
+    [void]$lines.Add(('Total           {0}' -f (Format-TokenCount $shown.totalTokens $isDelta)))
+    $cacheTotal = [decimal]$shown.cachedInputTokens + [decimal]$shown.cacheWriteTokens + [decimal]$shown.inputTokens
+    $cacheHitRate = if ($cacheTotal -gt 0) { ([decimal]$shown.cachedInputTokens / $cacheTotal) * 100 } else { 0 }
+    [void]$lines.Add(('Cache hit rate  {0}' -f (Format-Percentage $cacheHitRate)))
+    if ([bool]$settings.showCost) { [void]$lines.Add(('Cost            {0}' -f (Format-Cost $shown.costUsd $isDelta))) }
+    if ([bool]$settings.showCost) { [void]$lines.Add(('Estimated usage {0}' -f (Format-Percentage (([decimal]$shown.costUsd / [decimal]1.3) * 1)))) }
     [void]$lines.Add('────────────────────────────')
     Write-HookOutput ([pscustomobject]@{ systemMessage = $lines -join [Environment]::NewLine })
 } catch {
