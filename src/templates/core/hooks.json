@@ -40,6 +40,17 @@
             "statusMessage": "CodexSettings Windows notification"
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pwsh -NoProfile -Command '& (Join-Path $HOME \".codex/hooks/show-turn-token-usage.ps1\")'",
+            "commandWindows": "pwsh.exe -NoProfile -ExecutionPolicy Bypass -Command \"& (Join-Path $HOME '.codex\\hooks\\show-turn-token-usage.ps1')\"",
+            "timeout": 30,
+            "statusMessage": "CodexSettings turn token usage"
+          }
+        ]
       }
     ]
   }

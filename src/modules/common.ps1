@@ -389,7 +389,9 @@ function Merge-TomlTemplate {
 $script:ManagedLineEndingHookSignaturePattern = '(?i)((?:crlf-updated-files|normalize-cvs-crlf|preserve-line-endings)\.ps1|Converting updated files? to CRLF|Normalizing updated files to CRLF|Finalizing CRLF normalization|CodexSettings CRLF (?:track|finalize)|Restoring original line endings)'
 $script:PreserveLineEndingHookSignaturePattern = '(?i)(preserve-line-endings\.ps1|Restoring original line endings)'
 $script:LegacyCrlfHookSignaturePattern = '(?i)((?:crlf-updated-files|normalize-cvs-crlf)\.ps1|Converting updated files? to CRLF|Normalizing updated files to CRLF|Finalizing CRLF normalization|CodexSettings CRLF (?:track|finalize))'
-$script:ManagedGlobalHookSignaturePattern = '(?i)(show-codex-notification\.ps1|CodexSettings Windows notification)'
+$script:ManagedNotificationHookSignaturePattern = '(?i)(show-codex-notification\.ps1|CodexSettings Windows notification)'
+$script:ManagedTokenUsageHookSignaturePattern = '(?i)(show-turn-token-usage\.ps1|CodexSettings turn token usage)'
+$script:ManagedGlobalHookSignaturePattern = '(?i)(show-(?:codex-notification|turn-token-usage)\.ps1|CodexSettings (?:Windows notification|turn token usage))'
 
 function Test-ManagedLineEndingHookEntry {
     [CmdletBinding()]
@@ -403,6 +405,20 @@ function Test-ManagedGlobalHookEntry {
     param([Parameter(Mandatory = $true)]$Entry)
 
     return (($Entry | ConvertTo-Json -Depth 20 -Compress) -match $script:ManagedGlobalHookSignaturePattern)
+}
+
+function Test-ManagedNotificationHookEntry {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)]$Entry)
+
+    return (($Entry | ConvertTo-Json -Depth 20 -Compress) -match $script:ManagedNotificationHookSignaturePattern)
+}
+
+function Test-ManagedTokenUsageHookEntry {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)]$Entry)
+
+    return (($Entry | ConvertTo-Json -Depth 20 -Compress) -match $script:ManagedTokenUsageHookSignaturePattern)
 }
 
 function Remove-ManagedLineEndingHooksJson {

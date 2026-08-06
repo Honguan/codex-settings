@@ -36,4 +36,10 @@ if (($global:CcSessionsNpxArguments -join ' ') -notmatch '--timezone Asia/Taipei
     throw "ccsessions did not request the Taipei timezone. Arguments: $($global:CcSessionsNpxArguments -join ' ')"
 }
 
+$jsonText = (& ccsessions -Json '019fd1f8-4928-7432-9697-8070ae4a87a2' | Out-String).Trim()
+$json = $jsonText | ConvertFrom-Json -ErrorAction Stop
+if (-not [bool]$json.success -or $json.sessionId -ne '019fd1f8-4928-7432-9697-8070ae4a87a2' -or $json.cachedInputTokens -ne 4 -or $json.totalTokens -ne 10 -or @($json.models).Count -ne 2) {
+    throw "ccsessions JSON output is invalid: $jsonText"
+}
+
 Write-Host 'ccsessions Taipei timezone tests passed.'

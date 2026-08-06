@@ -171,6 +171,7 @@ try {
         $commandStatus = if ([bool]$ccusage.CommandsUpdated) { '已更新 ccsessions、cdaily 指令' } else { 'ccsessions、cdaily 指令未變更' }
         Write-Host "ccusage：$packageStatus；$commandStatus"
         Write-Host '  ccsessions [數量或 Session ID]：查看 Session 的模型、Token、費用與台北時間。'
+        Write-Host '  ccsessions -Json <Session ID>：輸出每輪 Token Hook 使用的機器可讀資料。'
         Write-Host '  cdaily [天數]：查看每日 Token 與費用統計。'
         Write-Host "舊專案設定：處理 $($obsoleteProjects.Projects) 個專案、移除 $($obsoleteProjects.FilesRemoved) 個檔案、更新 $($obsoleteProjects.FilesUpdated) 個檔案"
         Write-Host "交易備份：$transactionRoot"

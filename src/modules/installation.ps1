@@ -306,6 +306,7 @@ function Assert-GlobalLineEndingHook([ValidateSet('Git', 'CVS')][string]$Develop
     $notificationQuestionHookCount = 0
     $notificationPermissionHookCount = 0
     $notificationCompletedHookCount = 0
+    $tokenUsageHookCount = 0
     if (-not [string]::IsNullOrWhiteSpace($hookContent)) {
         $hookObject = $hookContent | ConvertFrom-Json -ErrorAction Stop
         if ($null -ne $hookObject.hooks) {
@@ -318,19 +319,24 @@ function Assert-GlobalLineEndingHook([ValidateSet('Git', 'CVS')][string]$Develop
                         if ($property.Name -eq 'Stop') { $finalizeHookCount++ }
                     }
                     if ($entryJson -match $script:LegacyCrlfHookSignaturePattern) { $legacyHookCount++ }
-                    if ($entryJson -match $script:ManagedGlobalHookSignaturePattern) {
+                    if ($entryJson -match $script:ManagedNotificationHookSignaturePattern) {
                         if ($property.Name -eq 'PreToolUse') { $notificationQuestionHookCount++ }
                         if ($property.Name -eq 'PermissionRequest') { $notificationPermissionHookCount++ }
                         if ($property.Name -eq 'Stop') { $notificationCompletedHookCount++ }
                     }
+                    if ($property.Name -eq 'Stop' -and $entryJson -match $script:ManagedTokenUsageHookSignaturePattern) { $tokenUsageHookCount++ }
                 }
             }
         }
     }
     $preserveScriptCount = if (Test-Path -LiteralPath (Join-Path $Root 'hooks\preserve-line-endings.ps1') -PathType Leaf) { 1 } else { 0 }
     $notificationScriptCount = if (Test-Path -LiteralPath (Join-Path $Root 'hooks\show-codex-notification.ps1') -PathType Leaf) { 1 } else { 0 }
+    $tokenUsageScriptCount = if (Test-Path -LiteralPath (Join-Path $Root 'hooks\show-turn-token-usage.ps1') -PathType Leaf) { 1 } else { 0 }
     if ($notificationQuestionHookCount -ne 1 -or $notificationPermissionHookCount -ne 1 -or $notificationCompletedHookCount -ne 1 -or $notificationScriptCount -ne 1) {
         throw "Windows 通知安裝檢查失敗：QuestionHookCount=$notificationQuestionHookCount PermissionHookCount=$notificationPermissionHookCount CompletedHookCount=$notificationCompletedHookCount NotificationScriptCount=$notificationScriptCount"
+    }
+    if ($tokenUsageHookCount -ne 1 -or $tokenUsageScriptCount -ne 1) {
+        throw "每輪 Token 統計安裝檢查失敗：TokenUsageHookCount=$tokenUsageHookCount TokenUsageScriptCount=$tokenUsageScriptCount"
     }
     if ($DevelopmentEnvironment -eq 'CVS') {
         if ($trackHookCount -ne 1 -or $restoreHookCount -ne 1 -or $finalizeHookCount -ne 1 -or $preserveScriptCount -ne 1 -or $legacyHookCount -ne 0) {

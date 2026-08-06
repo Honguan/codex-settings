@@ -7,7 +7,8 @@ function global:ccsessions {
     [CmdletBinding()]
     param(
         [Parameter(Position = 0, ValueFromRemainingArguments = $true)]
-        [string[]]$Value
+        [string[]]$Value,
+        [switch]$Json
     )
 
     $commandContext = [pscustomobject]@{ Text = $null; Raw = $null }
@@ -224,6 +225,21 @@ function global:ccsessions {
         return [pscustomobject]$totals
     }
 
+    function ConvertTo-UsageRow($Row) {
+        $modelValue = $Row.models
+        $models = if ($null -eq $modelValue) { @() } elseif ($modelValue -is [string]) { @($modelValue) } elseif (@($modelValue.PSObject.Properties).Count -gt 0) { @($modelValue.PSObject.Properties.Name) } else { @($modelValue) }
+        return [pscustomobject][ordered]@{
+            success = $true
+            sessionId = Get-SessionId $Row
+            models = $models
+            inputTokens = [long]$Row.inputTokens
+            cachedInputTokens = [long]$Row.cacheReadTokens
+            outputTokens = [long]$Row.outputTokens
+            totalTokens = [long]$Row.totalTokens
+            costUsd = [decimal]$Row.costUSD
+        }
+    }
+
     function Show-Details([object[]]$Rows) {
         $tableRows = @($Rows | ForEach-Object {
             [pscustomobject][ordered]@{
@@ -288,6 +304,10 @@ function global:ccsessions {
         if ($listMode) {
             if ($count -lt 1 -or $count -gt 100) { throw 'The session count must be between 1 and 100.' }
             $recent = @($sessions | Select-Object -First $count)
+            if ($Json) {
+                Write-Output (ConvertTo-Json -InputObject @($recent | ForEach-Object { ConvertTo-UsageRow $_ }) -Depth 6 -Compress)
+                return
+            }
             Show-Details $recent
             return
         }
@@ -302,8 +322,17 @@ function global:ccsessions {
             return $false
         })
         if ($matched.Count -eq 0) { throw "No matching Codex sessions were found for: $($arguments -join ', ')" }
+        if ($Json) {
+            $usageRows = @($matched | ForEach-Object { ConvertTo-UsageRow $_ })
+            Write-Output $(if ($usageRows.Count -eq 1) { $usageRows[0] | ConvertTo-Json -Depth 6 -Compress } else { ConvertTo-Json -InputObject $usageRows -Depth 6 -Compress })
+            return
+        }
         Show-Details $matched
     } catch {
+        if ($Json) {
+            Write-Output ([pscustomobject]@{ success = $false; error = $_.Exception.Message } | ConvertTo-Json -Compress)
+            return
+        }
         Write-Host 'ccsessions 執行失敗。' -ForegroundColor Red
         Write-Host "原因：$($_.Exception.Message)" -ForegroundColor Red
         if (-not [string]::IsNullOrWhiteSpace($commandContext.Text)) { Write-Host "指令：$($commandContext.Text)" }

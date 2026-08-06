@@ -8,6 +8,7 @@ Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 
 - 安裝或更新全域 `AGENTS.md`、`config.toml` 與權限規則。
 - 安裝全域 Windows 通知 Hook，分別提示任務完成、等待權限與等待回答。
+- 安裝全域每輪 Token 統計 Hook，以目前 Session 的 `ccsessions` 累積值計算本輪差值。
 - 在全域安裝流程選擇 Git 或 CVS，合併對應的全域 AGENTS 與 Rules。
 - 安裝 Context7、Playwright MCP 設定。
 - 安裝或更新 `ccusage`，並新增或更新 `ccsessions`（Session 用量）與 `cdaily`（每日用量）指令。
@@ -49,6 +50,8 @@ Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 換行保護使用 wildcard matcher，因此直接 `apply_patch`、code mode 的 `exec → tools.apply_patch`、Shell、MCP 與其他本機工具都使用同一份修改前基準。它只處理雜湊實際改變的檔案，精確恢復原本的 CRLF／LF、檔尾換行與 BOM，不會重新編碼文字；session 狀態在完成後自動清除。
 
 Windows 通知使用 `PermissionRequest`、`request_user_input` 的 `PreToolUse` 與 `Stop` 官方事件，依專案名稱顯示不同標題與提示音。同一 session、turn 與類型在短時間內只顯示一次；設定位於 `~/.codex/state/notifications/settings.json`，可停用全部或個別通知。可執行 `~/.codex/hooks/show-codex-notification.ps1 -Type Completed -Test` 測試通知流程。
+
+每輪 Token 統計使用 `Stop` payload 的 Session ID 呼叫 `ccsessions -Json`，不會改用其他 Session。第一輪顯示目前累積值，後續顯示 Input、Cached input、Output、Total 與 Cost 差值；模型切換時會列出所有模型。狀態依 Session 分開儲存在 `~/.codex/state/token-usage`，相同 snapshot 不會重複顯示。Codex Hook 無法改寫既有 assistant 文字，因此統計透過 `systemMessage` 緊接在回覆後顯示；設定位於同目錄的 `settings.json`。
 
 安裝成功後會將選擇記錄為預設專案體系。下次互動安裝按 Enter，或非互動安裝未提供 `-DevelopmentEnvironment` 時，會沿用上次的 Git／CVS 選擇。
 
@@ -172,11 +175,12 @@ npx --yes skills@latest add mattpocock/skills -g -a codex -y --skill setup-matt-
 ccsessions                       # 顯示最近 10 筆 Session
 ccsessions 20                    # 顯示最近 20 筆 Session
 ccsessions 019fd1f8...4a87a2     # 顯示指定 Session
+ccsessions -Json <Session ID>    # 輸出 Hook 使用的機器可讀 JSON
 cdaily                           # 顯示最近 7 天的每日統計
 cdaily 30                        # 顯示最近 30 天的每日統計
 ```
 
-- `ccsessions [數量或 Session ID]`：顯示 Session ID、使用模型、Token、費用與台北時間；同一 Session 切換過的模型會分行顯示。
+- `ccsessions [數量或 Session ID]`：顯示 Session ID、使用模型、Token、費用與台北時間；同一 Session 切換過的模型會分行顯示。加上 `-Json` 可輸出機器可讀資料。
 - `cdaily [天數]`：顯示指定天數內每天的模型、Token 與費用統計，預設為 7 天。
 
 ## 發佈一鍵安裝包
