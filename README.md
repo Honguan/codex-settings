@@ -7,6 +7,7 @@ Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 ## 主要功能
 
 - 安裝或更新全域 `AGENTS.md`、`config.toml` 與權限規則。
+- 在全域安裝流程選擇 Git 或 CVS，合併對應的全域 AGENTS 與 Rules。
 - 安裝 Context7、Playwright MCP 設定。
 - 安裝或更新 `ccusage`，並維護 `ccsessions`、`cdaily` 指令。
 - 選用 `request-execution-optimizer` 與 `mattpocock/skills`。
@@ -22,11 +23,13 @@ Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 
 ## 一鍵安裝
 
-下載 Release 的 `CodexSettings-OneClick.zip`，解壓縮後只執行：
+下載 Release 的單一檔案 `CodexSettings-Setup.cmd`，不需解壓縮，直接執行：
 
 ```powershell
-.\Install.cmd
+.\CodexSettings-Setup.cmd
 ```
+
+安裝器會在 `%TEMP%` 解開內嵌程式、執行後立即清理。從原始碼執行時則使用根目錄的 `Install.cmd`。
 
 主選單只有四項：
 
@@ -37,10 +40,16 @@ Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 
 安全合併是預設安裝方式，會保留未受管理的既有內容。完整覆蓋只應在確定要用範本取代目標設定時使用。
 
+選擇「全域安裝／更新」後會選擇開發環境：
+
+- Git（預設）：加入 Git 專屬 AGENTS 與 Rules，並移除全域 CVS CRLF Hook。
+- CVS：加入 CVS 專屬 AGENTS、Rules 與全域 CRLF Hook。Hook 只在目前目錄屬於 CVS 工作副本時執行。
+
 非互動安裝：
 
 ```powershell
-.\Install.cmd -Mode Global
+.\Install.cmd -Mode Global -DevelopmentEnvironment Git
+.\Install.cmd -Mode Global -DevelopmentEnvironment CVS
 ```
 
 常用參數：
@@ -85,6 +94,8 @@ Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 ├─ AGENTS.md
 ├─ config.toml
 ├─ rules\default.rules
+├─ hooks.json                 # 僅 CVS
+├─ hooks\normalize-cvs-crlf.ps1 # 僅 CVS
 └─ .codex-settings-manifest.json
 ```
 
@@ -111,13 +122,13 @@ Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 
 ```powershell
 # 建立全域手動備份
-.\backup.ps1 -Mode Global
+.\Install.cmd -Mode Backup
 
 # 選擇最近備份並還原
-.\restore.ps1
+.\Install.cmd -Mode Restore
 
 # 移除全域受管理設定
-.\uninstall.ps1 -Mode Global
+.\Install.cmd -Mode Uninstall
 ```
 
 手動備份預設位於 `%LOCALAPPDATA%\CodexSettingsBackup`。Context7 Key 只記錄是否存在，不會把明文密鑰寫入備份或儲存庫。
@@ -141,9 +152,22 @@ cdaily
 ## 發佈一鍵安裝包
 
 ```powershell
-.\build-release.ps1
+.\tools\build-installer.ps1
 ```
 
-輸出為 `dist\CodexSettings-OneClick.zip`。壓縮包包含必要範本與支援程式，但使用者只需要執行 `Install.cmd`。
+輸出為唯一的 `dist\CodexSettings-Setup.cmd`，內嵌所有必要模組與範本。
+
+原始碼依職責整理為：
+
+```text
+src\
+├─ installer.ps1
+├─ modules\
+├─ operations\
+└─ templates\
+tests\
+tools\
+└─ build-installer.ps1
+```
 
 推送 `v*` Git tag 時，GitHub Actions 會建立同名 Release 附件。

@@ -25,5 +25,4 @@ tmp/
 .DS_Store
 Thumbs.db
 
-manual-backup
 dist/

@@ -1,4 +1,4 @@
-name: Release one-click installer
+name: Release single-file installer
 
 on:
   push:
@@ -9,21 +9,28 @@ permissions:
   contents: write
 
 jobs:
-  package:
+  build:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Build one-click package
+      - uses: actions/checkout@v6
+      - name: Validate installer
         shell: pwsh
-        run: ./build-release.ps1
-      - name: Publish release package
+        run: |
+          Get-ChildItem ./tests/*.tests.ps1 | Sort-Object Name | ForEach-Object {
+            & pwsh -NoLogo -NoProfile -File $_.FullName
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - name: Build single-file installer
+        shell: pwsh
+        run: ./tools/build-installer.ps1
+      - name: Publish installer
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release view $env:GITHUB_REF_NAME 2>$null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $env:GITHUB_REF_NAME dist/CodexSettings-OneClick.zip --clobber
+            gh release upload $env:GITHUB_REF_NAME dist/CodexSettings-Setup.cmd --clobber
           } else {
-            gh release create $env:GITHUB_REF_NAME dist/CodexSettings-OneClick.zip --generate-notes
+            gh release create $env:GITHUB_REF_NAME dist/CodexSettings-Setup.cmd --generate-notes
           }

@@ -1,0 +1,32 @@
+{
+  "description": "Global CVS hooks that preserve CRLF line endings inside CVS working copies.",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "^(apply_patch|Edit|Write|exec)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pwsh -NoProfile -Command '& (Join-Path $HOME \".codex/hooks/normalize-cvs-crlf.ps1\")'",
+            "commandWindows": "pwsh.exe -NoProfile -ExecutionPolicy Bypass -Command \"& (Join-Path $HOME '.codex\\hooks\\normalize-cvs-crlf.ps1')\"",
+            "timeout": 30,
+            "statusMessage": "CodexSettings CRLF track"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pwsh -NoProfile -Command '& (Join-Path $HOME \".codex/hooks/normalize-cvs-crlf.ps1\") -Flush'",
+            "commandWindows": "pwsh.exe -NoProfile -ExecutionPolicy Bypass -Command \"& (Join-Path $HOME '.codex\\hooks\\normalize-cvs-crlf.ps1') -Flush\"",
+            "timeout": 30,
+            "statusMessage": "CodexSettings CRLF finalize"
+          }
+        ]
+      }
+    ]
+  }
+}

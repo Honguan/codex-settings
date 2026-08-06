@@ -8,13 +8,14 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-. (Join-Path $ScriptRoot 'lib\codex-settings-common.ps1')
+$SourceRoot = Split-Path -Parent $ScriptRoot
+. (Join-Path $ScriptRoot 'common.ps1')
 
 if ($PSVersionTable.PSVersion.Major -lt 7) {
     throw "安裝 ccsessions 與 cdaily 需要 PowerShell 7 或更新版本；目前版本：$($PSVersionTable.PSVersion)"
 }
 
-$templatePath = Join-Path $ScriptRoot 'templates\powershell\ccusage-profile.ps1'
+$templatePath = Join-Path $SourceRoot 'templates\profile\usage-commands.ps1'
 if (-not (Test-Path -LiteralPath $templatePath -PathType Leaf)) {
     throw "找不到 ccusage Profile 範本：$templatePath"
 }

@@ -1,8 +1,8 @@
 $ErrorActionPreference = 'Stop'
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
-$script:ScriptRoot = $repositoryRoot
-. (Join-Path $repositoryRoot 'lib\codex-settings-common.ps1')
-. (Join-Path $repositoryRoot 'lib\install-functions.ps1')
+$script:ScriptRoot = Join-Path $repositoryRoot 'src'
+. (Join-Path $script:ScriptRoot 'modules\common.ps1')
+. (Join-Path $script:ScriptRoot 'modules\installation.ps1')
 
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('codex-settings-project-cleanup-' + [guid]::NewGuid().ToString('N'))
 $projectRoot = Join-Path $testRoot 'project'

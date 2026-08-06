@@ -3,7 +3,7 @@ param()
 
 $ErrorActionPreference = 'Stop'
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$profileTemplate = Join-Path $repositoryRoot 'templates\powershell\ccusage-profile.ps1'
+$profileTemplate = Join-Path $repositoryRoot 'src\templates\profile\usage-commands.ps1'
 $source = Get-Content -Raw -LiteralPath $profileTemplate
 
 if ($source -match '\.ToLocalTime\(\)') {

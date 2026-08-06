@@ -7,8 +7,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$SourceRoot = Split-Path -Parent $ScriptRoot
 $BackupBase = Join-Path $env:LOCALAPPDATA 'CodexSettingsBackup'
-. (Join-Path $ScriptRoot 'lib\codex-settings-common.ps1')
+. (Join-Path $SourceRoot 'modules\common.ps1')
 
 function Get-Context7BackupState {
     $value = [Environment]::GetEnvironmentVariable('CONTEXT7_API_KEY', 'User')

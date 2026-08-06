@@ -7,7 +7,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-. (Join-Path $ScriptRoot 'lib\codex-settings-common.ps1')
+$SourceRoot = Split-Path -Parent $ScriptRoot
+. (Join-Path $SourceRoot 'modules\common.ps1')
 
 function Copy-ExistingItem {
     param(

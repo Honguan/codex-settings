@@ -7,8 +7,8 @@ sandbox_mode = "workspace-write"
 # /review uses the current session model by default, so no separate
 # review_model override is needed while Terra is the primary model.
 
-# Detect normal Git repositories and CVS repositories prepared by this package.
-project_root_markers = [".git", ".codex-root"]
+# Detect Git and CVS repositories without adding marker files to projects.
+project_root_markers = [".git", "CVS"]
 
 # AGENTS.md remains the preferred filename. These names are compatibility fallbacks.
 project_doc_fallback_filenames = ["AGENT.md", "agent.md"]

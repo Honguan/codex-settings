@@ -320,7 +320,7 @@ function Merge-TomlTemplate {
     return $result
 }
 
-$script:CrlfHookSignaturePattern = '(?i)(crlf-updated-files\.ps1|Converting updated files? to CRLF|Normalizing updated files to CRLF|Finalizing CRLF normalization|CodexSettings CRLF (?:track|finalize))'
+$script:CrlfHookSignaturePattern = '(?i)((?:crlf-updated-files|normalize-cvs-crlf)\.ps1|Converting updated files? to CRLF|Normalizing updated files to CRLF|Finalizing CRLF normalization|CodexSettings CRLF (?:track|finalize))'
 
 function Test-CrlfHookEntry {
     [CmdletBinding()]
