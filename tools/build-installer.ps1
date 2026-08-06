@@ -40,7 +40,6 @@ set "CODEX_SETTINGS_EXIT=%ERRORLEVEL%"
 :cleanup
 pwsh.exe -NoProfile -ExecutionPolicy Bypass -Command "if(Test-Path -LiteralPath $env:CODEX_SETTINGS_TEMP){Remove-Item -LiteralPath $env:CODEX_SETTINGS_TEMP -Recurse -Force}" >nul 2>nul
 echo.
-if "%~1"=="" pause
 exit /b %CODEX_SETTINGS_EXIT%
 
 :__CODEX_SETTINGS_PAYLOAD__

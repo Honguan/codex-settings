@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [ValidateSet('Track', 'Restore')]
+    [ValidateSet('Track', 'Restore', 'Finalize')]
     [string]$Mode
 )
 
@@ -161,7 +161,7 @@ function Save-InitialState($InputObject) {
     }
 }
 
-function Restore-InitialState($InputObject, [Collections.Generic.List[string]]$Warnings) {
+function Restore-InitialState($InputObject, [Collections.Generic.List[string]]$Warnings, [switch]$Cleanup) {
     $statePath = Get-StatePath -SessionId ([string]$InputObject.session_id)
     if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) { return }
     try {
@@ -192,7 +192,7 @@ function Restore-InitialState($InputObject, [Collections.Generic.List[string]]$W
             }
         }
     } finally {
-        Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue
+        if ($Cleanup) { Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue }
     }
 }
 
@@ -206,7 +206,7 @@ try {
         if ([string]::IsNullOrWhiteSpace([string]$inputObject.cwd)) { throw 'Hook input is missing cwd.' }
         Save-InitialState -InputObject $inputObject
     } else {
-        Restore-InitialState -InputObject $inputObject -Warnings $warnings
+        Restore-InitialState -InputObject $inputObject -Warnings $warnings -Cleanup:($Mode -eq 'Finalize')
     }
 } catch {
     $warnings.Add("Line-ending $($Mode.ToLowerInvariant()) failed: $($_.Exception.Message)")

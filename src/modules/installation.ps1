@@ -297,6 +297,7 @@ function Assert-GlobalLineEndingHook([ValidateSet('Git', 'CVS')][string]$Develop
     $hookContent = if (Test-Path -LiteralPath $hooksPath -PathType Leaf) { [IO.File]::ReadAllText($hooksPath) } else { '' }
     $trackHookCount = 0
     $restoreHookCount = 0
+    $finalizeHookCount = 0
     $legacyHookCount = 0
     if (-not [string]::IsNullOrWhiteSpace($hookContent)) {
         $hookObject = $hookContent | ConvertFrom-Json -ErrorAction Stop
@@ -306,7 +307,8 @@ function Assert-GlobalLineEndingHook([ValidateSet('Git', 'CVS')][string]$Develop
                     $entryJson = $entry | ConvertTo-Json -Depth 20 -Compress
                     if ($entryJson -match $script:PreserveLineEndingHookSignaturePattern) {
                         if ($property.Name -eq 'PreToolUse') { $trackHookCount++ }
-                        if ($property.Name -eq 'Stop') { $restoreHookCount++ }
+                        if ($property.Name -eq 'PostToolUse') { $restoreHookCount++ }
+                        if ($property.Name -eq 'Stop') { $finalizeHookCount++ }
                     }
                     if ($entryJson -match $script:LegacyCrlfHookSignaturePattern) { $legacyHookCount++ }
                 }
@@ -315,10 +317,10 @@ function Assert-GlobalLineEndingHook([ValidateSet('Git', 'CVS')][string]$Develop
     }
     $preserveScriptCount = if (Test-Path -LiteralPath (Join-Path $Root 'hooks\preserve-line-endings.ps1') -PathType Leaf) { 1 } else { 0 }
     if ($DevelopmentEnvironment -eq 'CVS') {
-        if ($trackHookCount -ne 1 -or $restoreHookCount -ne 1 -or $preserveScriptCount -ne 1 -or $legacyHookCount -ne 0) {
-            throw "CVS 換行保護安裝檢查失敗：TrackHookCount=$trackHookCount RestoreHookCount=$restoreHookCount PreserveLineEndingScriptCount=$preserveScriptCount LegacyCrlfHookCount=$legacyHookCount"
+        if ($trackHookCount -ne 1 -or $restoreHookCount -ne 1 -or $finalizeHookCount -ne 1 -or $preserveScriptCount -ne 1 -or $legacyHookCount -ne 0) {
+            throw "CVS 換行保護安裝檢查失敗：TrackHookCount=$trackHookCount RestoreHookCount=$restoreHookCount FinalizeHookCount=$finalizeHookCount PreserveLineEndingScriptCount=$preserveScriptCount LegacyCrlfHookCount=$legacyHookCount"
         }
-    } elseif ($trackHookCount -ne 0 -or $restoreHookCount -ne 0 -or $preserveScriptCount -ne 0 -or $legacyHookCount -ne 0) {
+    } elseif ($trackHookCount -ne 0 -or $restoreHookCount -ne 0 -or $finalizeHookCount -ne 0 -or $preserveScriptCount -ne 0 -or $legacyHookCount -ne 0) {
         throw 'Git 全域設定仍包含 CVS 換行保護 Hook。'
     }
 }

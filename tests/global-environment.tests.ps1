@@ -94,7 +94,7 @@ try {
     if ($agents -match 'and backward compatibility\.') { throw 'Safe merge did not update a legacy AGENTS.md section.' }
     $installedHooks = Get-Content -LiteralPath (Join-Path $globalRoot 'hooks.json') -Raw | ConvertFrom-Json
     if (@($installedHooks.hooks.SessionStart).Count -ne 1) { throw 'CVS installation did not preserve the unmanaged user hook.' }
-    if ($installedHooks.hooks.PSObject.Properties.Name -contains 'PostToolUse' -or @($installedHooks.hooks.PreToolUse).Count -ne 1 -or @($installedHooks.hooks.Stop).Count -ne 1 -or -not (Test-ManagedLineEndingHookEntry $installedHooks.hooks.PreToolUse[0]) -or -not (Test-ManagedLineEndingHookEntry $installedHooks.hooks.Stop[0])) { throw 'CVS installation did not replace the obsolete CRLF hook with one Track and one Restore hook.' }
+    if (@($installedHooks.hooks.PreToolUse).Count -ne 1 -or @($installedHooks.hooks.PostToolUse).Count -ne 1 -or @($installedHooks.hooks.Stop).Count -ne 1 -or -not (Test-ManagedLineEndingHookEntry $installedHooks.hooks.PreToolUse[0]) -or -not (Test-ManagedLineEndingHookEntry $installedHooks.hooks.PostToolUse[0]) -or -not (Test-ManagedLineEndingHookEntry $installedHooks.hooks.Stop[0])) { throw 'CVS installation did not install one Track, Restore, and Finalize hook.' }
     if (Test-Path -LiteralPath (Join-Path $globalRoot 'hooks\normalize-cvs-crlf.ps1')) { throw 'CVS installation retained an obsolete CRLF conversion script.' }
     if (-not (Test-Path -LiteralPath (Join-Path $globalRoot 'hooks\preserve-line-endings.ps1') -PathType Leaf)) { throw 'CVS installation omitted the line-ending protection script.' }
     $rules = Get-Content -LiteralPath $legacyRulesPath -Raw
@@ -120,7 +120,7 @@ try {
     if ($config -notmatch 'project_root_markers = \["\.git", "CVS"\]' -or $config -match '\.codex-root') { throw 'Global project root markers are invalid.' }
     if ((Get-DefaultDevelopmentEnvironment -Root $globalRoot) -ne 'Git') { throw 'Git was not recorded as the default project system.' }
     $installedHooks = Get-Content -LiteralPath (Join-Path $globalRoot 'hooks.json') -Raw | ConvertFrom-Json
-    if (@($installedHooks.hooks.SessionStart).Count -ne 1 -or $installedHooks.hooks.PSObject.Properties.Name -contains 'PreToolUse' -or $installedHooks.hooks.PSObject.Properties.Name -contains 'Stop') { throw 'Git installation did not remove only the managed line-ending hooks.' }
+    if (@($installedHooks.hooks.SessionStart).Count -ne 1 -or $installedHooks.hooks.PSObject.Properties.Name -contains 'PreToolUse' -or $installedHooks.hooks.PSObject.Properties.Name -contains 'PostToolUse' -or $installedHooks.hooks.PSObject.Properties.Name -contains 'Stop') { throw 'Git installation did not remove only the managed line-ending hooks.' }
     if (Test-Path -LiteralPath (Join-Path $globalRoot 'hooks\preserve-line-endings.ps1')) { throw 'Git installation retained the CVS line-ending protection script.' }
 
     Install-TestEnvironment -Environment CVS
@@ -130,7 +130,7 @@ try {
     if ([regex]::Matches($rules, 'CVS project rules supplement').Count -ne 1 -or [regex]::Matches($rules, 'Git project rules supplement').Count -ne 0) { throw 'CVS rules contain duplicate or conflicting project-type settings.' }
     $installedHooks = Get-Content -LiteralPath (Join-Path $globalRoot 'hooks.json') -Raw | ConvertFrom-Json
     if (@($installedHooks.hooks.SessionStart).Count -ne 1) { throw 'CVS installation did not preserve the unmanaged user hook.' }
-    if ($installedHooks.hooks.PSObject.Properties.Name -contains 'PostToolUse' -or @($installedHooks.hooks.PreToolUse).Count -ne 1 -or @($installedHooks.hooks.Stop).Count -ne 1 -or -not (Test-ManagedLineEndingHookEntry $installedHooks.hooks.PreToolUse[0]) -or -not (Test-ManagedLineEndingHookEntry $installedHooks.hooks.Stop[0])) { throw 'Repeated CVS installation duplicated or omitted the line-ending protection hooks.' }
+    if (@($installedHooks.hooks.PreToolUse).Count -ne 1 -or @($installedHooks.hooks.PostToolUse).Count -ne 1 -or @($installedHooks.hooks.Stop).Count -ne 1 -or -not (Test-ManagedLineEndingHookEntry $installedHooks.hooks.PreToolUse[0]) -or -not (Test-ManagedLineEndingHookEntry $installedHooks.hooks.PostToolUse[0]) -or -not (Test-ManagedLineEndingHookEntry $installedHooks.hooks.Stop[0])) { throw 'Repeated CVS installation duplicated or omitted the line-ending protection hooks.' }
     if (-not (Test-Path -LiteralPath (Join-Path $script:ScriptRoot 'templates\environments\cvs\hooks.json')) -or -not (Test-Path -LiteralPath (Join-Path $script:ScriptRoot 'templates\environments\cvs\hooks\preserve-line-endings.ps1'))) { throw 'CVS line-ending hook templates are missing.' }
 
     Install-TestEnvironment -Environment Git

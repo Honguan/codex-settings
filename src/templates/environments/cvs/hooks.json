@@ -15,8 +15,9 @@
         ]
       }
     ],
-    "Stop": [
+    "PostToolUse": [
       {
+        "matcher": "*",
         "hooks": [
           {
             "type": "command",
@@ -24,6 +25,19 @@
             "commandWindows": "pwsh.exe -NoProfile -ExecutionPolicy Bypass -Command \"& (Join-Path $HOME '.codex\\hooks\\preserve-line-endings.ps1') -Mode Restore\"",
             "timeout": 60,
             "statusMessage": "Restoring original line endings"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pwsh -NoProfile -Command '& (Join-Path $HOME \".codex/hooks/preserve-line-endings.ps1\") -Mode Finalize'",
+            "commandWindows": "pwsh.exe -NoProfile -ExecutionPolicy Bypass -Command \"& (Join-Path $HOME '.codex\\hooks\\preserve-line-endings.ps1') -Mode Finalize\"",
+            "timeout": 60,
+            "statusMessage": "Finalizing original line endings"
           }
         ]
       }

@@ -38,7 +38,7 @@ if ($Mode -eq 'Interactive') {
                     $installMattPocockSkills = Select-OptionalMattPocockSkills
                     $enableDefaultModeRequestUserInput = Select-OptionalDefaultModeRequestUserInput
                     & $PSCommandPath -Mode Global -InstallStyle $style -DevelopmentEnvironment $developmentEnvironment -InstallRequestExecutionOptimizer:$installRequestExecutionOptimizer -InstallMattPocockSkills:$installMattPocockSkills -EnableDefaultModeRequestUserInput:$enableDefaultModeRequestUserInput
-                    $DevelopmentEnvironment = Get-DefaultDevelopmentEnvironment -Root $globalRoot
+                    return
                 }
                 default { & $PSCommandPath -Mode $selection }
             }

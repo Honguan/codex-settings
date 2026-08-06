@@ -16,7 +16,7 @@ function Assert-Bytes([string]$Name, [byte[]]$Expected) {
     if (-not [Linq.Enumerable]::SequenceEqual([byte[]]$actual, [byte[]]$Expected)) { throw "位元組內容不符：$Name" }
 }
 
-function Invoke-Hook([ValidateSet('Track', 'Restore')][string]$Mode, [string]$SessionId, [string]$InputText) {
+function Invoke-Hook([ValidateSet('Track', 'Restore', 'Finalize')][string]$Mode, [string]$SessionId, [string]$InputText) {
     $startInfo = [Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = 'pwsh'
     foreach ($argument in @('-NoLogo', '-NoProfile', '-File', $hookScript, '-Mode', $Mode)) { $startInfo.ArgumentList.Add($argument) }
@@ -37,13 +37,13 @@ function Invoke-Hook([ValidateSet('Track', 'Restore')][string]$Mode, [string]$Se
     return [pscustomobject]@{ Output = $output; Stdout = $stdout; Stderr = $stderr }
 }
 
-function New-HookInput([string]$EventName, [string]$SessionId) {
+function New-HookInput([string]$EventName, [string]$SessionId, [string]$ToolName = 'apply_patch', [string]$Command = '*** Begin Patch') {
     return ([ordered]@{
         session_id = $SessionId
         cwd = $projectRoot
         hook_event_name = $EventName
-        tool_name = 'apply_patch'
-        tool_input = [ordered]@{ command = '*** Begin Patch' }
+        tool_name = $ToolName
+        tool_input = [ordered]@{ command = $Command }
     } | ConvertTo-Json -Depth 5 -Compress)
 }
 
@@ -67,7 +67,8 @@ try {
     $unchangedTime = [IO.File]::GetLastWriteTimeUtc((Join-Path $projectRoot 'unchanged.txt'))
 
     $sessionA = 'session-A'
-    $trackInput = New-HookInput -EventName PreToolUse -SessionId $sessionA
+    $execCommand = 'const patch = getPatch(); text(await tools.apply_patch(patch));'
+    $trackInput = New-HookInput -EventName PreToolUse -SessionId $sessionA -ToolName exec -Command $execCommand
     Invoke-Hook -Mode Track -SessionId $sessionA -InputText $trackInput | Out-Null
     $statePathA = Join-Path $stateRoot 'session-A.json'
     if (-not (Test-Path -LiteralPath $statePathA -PathType Leaf)) { throw 'PreToolUse 未建立 session 狀態檔。' }
@@ -87,22 +88,39 @@ try {
     Write-TestBytes 'ansi.txt' ([byte[]](0xE9, 0x0D, 0x0A, 0xE8, 0x0D, 0x0A))
     Write-TestBytes 'binary.bin' ([byte[]](0x00, 0x41, 0x0A, 0x42, 0x0D, 0x0A))
 
+    $postInput = New-HookInput -EventName PostToolUse -SessionId $sessionA -ToolName exec -Command $execCommand
+    Invoke-Hook -Mode Restore -SessionId $sessionA -InputText $postInput | Out-Null
+    if (-not (Test-Path -LiteralPath $statePathA -PathType Leaf)) { throw 'PostToolUse 過早清理 session 狀態檔。' }
+
+    Assert-Bytes 'crlf.txt' ([Text.Encoding]::ASCII.GetBytes("before`r`nend`r`nadded1`r`nadded2`r`nadded3`r`n"))
+    Assert-Bytes 'lf.txt' ([Text.Encoding]::ASCII.GetBytes("before`nend`nadded1`nadded2`nadded3`n"))
+    Assert-Bytes 'no-final.txt' ([Text.Encoding]::ASCII.GetBytes("before`r`nend`r`nadded"))
+    Assert-Bytes 'with-final.txt' ([Text.Encoding]::ASCII.GetBytes("before`nend`n"))
+    Assert-Bytes 'utf8-bom.txt' ([byte[]](0xEF, 0xBB, 0xBF) + [Text.Encoding]::UTF8.GetBytes("before`r`nend`r`nadded`r`n"))
+    Assert-Bytes 'ansi.txt' ([byte[]](0xE9, 0x0A, 0xE8, 0x0A))
+
     Invoke-Hook -Mode Track -SessionId $sessionA -InputText $trackInput | Out-Null
     $stateAfterSecondTrack = Get-Content -LiteralPath $statePathA -Raw
     if ($stateAfterSecondTrack -ne $firstStateContent) { throw '同一 session 的第二次 Track 覆寫原始狀態。' }
+
+    Write-TestBytes 'no-final.txt' ([Text.Encoding]::ASCII.GetBytes("before`r`nend`r`nadded`nsecond`n"))
+    $directPatchInput = New-HookInput -EventName PostToolUse -SessionId $sessionA -ToolName apply_patch -Command '*** Update File: no-final.txt'
+    Invoke-Hook -Mode Restore -SessionId $sessionA -InputText $directPatchInput | Out-Null
+    Assert-Bytes 'no-final.txt' ([Text.Encoding]::ASCII.GetBytes("before`r`nend`r`nadded`r`nsecond"))
 
     $sessionB = 'session-B'
     Invoke-Hook -Mode Track -SessionId $sessionB -InputText (New-HookInput -EventName PreToolUse -SessionId $sessionB) | Out-Null
     if (-not (Test-Path -LiteralPath (Join-Path $stateRoot 'session-B.json'))) { throw '不同 session 未建立獨立狀態檔。' }
 
+    Write-TestBytes 'crlf.txt' ([Text.Encoding]::ASCII.GetBytes("before`r`nend`r`nadded1`nfinal`n"))
     $restoreInput = New-HookInput -EventName Stop -SessionId $sessionA
-    Invoke-Hook -Mode Restore -SessionId $sessionA -InputText $restoreInput | Out-Null
+    Invoke-Hook -Mode Finalize -SessionId $sessionA -InputText $restoreInput | Out-Null
     if (Test-Path -LiteralPath $statePathA) { throw 'Stop Hook 未清理完成的 session 狀態檔。' }
     if (-not (Test-Path -LiteralPath (Join-Path $stateRoot 'session-B.json'))) { throw 'Stop Hook 誤刪其他 session 狀態檔。' }
 
-    Assert-Bytes 'crlf.txt' ([Text.Encoding]::ASCII.GetBytes("before`r`nend`r`nadded1`r`nadded2`r`nadded3`r`n"))
+    Assert-Bytes 'crlf.txt' ([Text.Encoding]::ASCII.GetBytes("before`r`nend`r`nadded1`r`nfinal`r`n"))
     Assert-Bytes 'lf.txt' ([Text.Encoding]::ASCII.GetBytes("before`nend`nadded1`nadded2`nadded3`n"))
-    Assert-Bytes 'no-final.txt' ([Text.Encoding]::ASCII.GetBytes("before`r`nend`r`nadded"))
+    Assert-Bytes 'no-final.txt' ([Text.Encoding]::ASCII.GetBytes("before`r`nend`r`nadded`r`nsecond"))
     Assert-Bytes 'with-final.txt' ([Text.Encoding]::ASCII.GetBytes("before`nend`n"))
     Assert-Bytes 'utf8-bom.txt' ([byte[]](0xEF, 0xBB, 0xBF) + [Text.Encoding]::UTF8.GetBytes("before`r`nend`r`nadded`r`n"))
     Assert-Bytes 'ansi.txt' ([byte[]](0xE9, 0x0A, 0xE8, 0x0A))

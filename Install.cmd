@@ -14,5 +14,4 @@ pwsh.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0src\installer.ps1" %*
 
 set EXIT_CODE=%errorlevel%
 echo.
-if "%~1"=="" pause
 exit /b %EXIT_CODE%
