@@ -9,8 +9,8 @@ $stagingRoot = Join-Path ([IO.Path]::GetTempPath()) ("$packageName-" + [guid]::N
 $packageRoot = Join-Path $stagingRoot $packageName
 $archivePath = Join-Path $OutputDirectory "$packageName.zip"
 $items = @(
-    'Install.cmd', 'install.ps1', 'install-ccusage.ps1', 'backup.ps1', 'restore.ps1', 'update.ps1', 'uninstall.ps1', 'README.md',
-    'lib', 'templates'
+    'Install.cmd', 'install.ps1', 'install-ccusage.ps1', 'backup.ps1', 'restore.ps1', 'uninstall.ps1', 'README.md',
+    'lib', 'templates\global', 'templates\powershell', 'templates\user-skills'
 )
 
 try {

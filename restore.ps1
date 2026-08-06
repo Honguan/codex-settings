@@ -8,7 +8,6 @@ param(
 $ErrorActionPreference = 'Stop'
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $ScriptRoot 'lib\codex-settings-common.ps1')
-. (Join-Path $ScriptRoot 'lib\project-registry.ps1')
 
 function Copy-DirectoryContent {
     param(
@@ -92,32 +91,11 @@ try {
     } else {
         $globalCodex = Join-Path $BackupPath 'global\.codex'
         $globalAgents = Join-Path $BackupPath 'global\.agents'
-        $project = Join-Path $BackupPath 'project'
-
         $restoredCount += Copy-DirectoryContent -Source $globalCodex -Destination (Join-Path $HOME '.codex')
         $restoredCount += Copy-DirectoryContent -Source $globalAgents -Destination (Join-Path $HOME '.agents')
-        if (Test-Path -LiteralPath $project -PathType Container) {
-            $projectRoot = [string]$metadata.ProjectRoot
-            if ([string]::IsNullOrWhiteSpace($projectRoot)) { throw '備份中繼資料缺少 ProjectRoot。' }
-            $restoredCount += Copy-DirectoryContent -Source $project -Destination $projectRoot
-        }
     }
 
     if ($metadata.PSObject.Properties.Name -contains 'Global' -and $null -ne $metadata.Global) {
-        $registryMetadata = $metadata.Global.ProjectRegistry
-        if ($null -ne $registryMetadata) {
-            $registryPath = [string]$registryMetadata.Path
-            if ([string]::IsNullOrWhiteSpace($registryPath)) { $registryPath = Get-CodexProjectRegistryPath }
-            if ([bool]$registryMetadata.Existed) {
-                $registryBackup = Join-Path $BackupPath ([string]$registryMetadata.BackupRelativePath)
-                if (-not (Test-Path -LiteralPath $registryBackup -PathType Leaf)) { throw "找不到專案清單備份：$registryBackup" }
-                Copy-FileAtomic -Source $registryBackup -Destination $registryPath
-                $restoredCount++
-            } else {
-                Remove-Item -LiteralPath $registryPath -Force -ErrorAction SilentlyContinue
-            }
-        }
-
         $profileEntries = if ($metadata.Global.PSObject.Properties.Name -contains 'PowerShellProfiles') {
             @($metadata.Global.PowerShellProfiles)
         } elseif ($null -ne $metadata.Global.PowerShellProfile) {

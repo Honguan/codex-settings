@@ -1,304 +1,149 @@
 # Codex Settings
 
-Windows 上的 Codex 全域、Git 專案與 CVS 專案設定管理工具。
+Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 
-提供：
+所有設定都安裝到使用者層級，不再於 Git、CVS 或其他專案目錄建立 `AGENTS.md`、Rules、Hooks 或登記資料。
 
-- 全域 47 條、Git 13 條、CVS 8 條權限規則。
-- 安全合併、備份、還原、移除與中斷回復。
-- Context7、Playwright MCP。
-- 缺少時才安裝 `ccusage@latest`；每次同步 `ccsessions`、`cdaily`。
-- Git／CVS 專案登記與批次更新。
-- CVS CRLF Hook。
+## 主要功能
+
+- 安裝或更新全域 `AGENTS.md`、`config.toml` 與權限規則。
+- 安裝 Context7、Playwright MCP 設定。
+- 安裝或更新 `ccusage`，並維護 `ccsessions`、`cdaily` 指令。
+- 選用 `request-execution-optimizer` 與 `mattpocock/skills`。
+- 安全合併既有設定，並提供交易備份、中斷回復、備份、還原及移除。
+- 首次執行新版安裝器時，自動清除舊登記專案內由本工具管理的設定。
+
+## 需求
+
+- Windows 10 或更新版本。
+- PowerShell 7 或更新版本。
+- Codex CLI。
+- Node.js 20 或更新版本，且 `node`、`npm`、`npx` 可由 PATH 執行。
+
+## 一鍵安裝
+
+下載 Release 的 `CodexSettings-OneClick.zip`，解壓縮後只執行：
+
+```powershell
+.\Install.cmd
+```
+
+主選單只有四項：
+
+1. 全域安裝／更新
+2. 備份目前設定
+3. 還原備份
+4. 移除受管理設定
+
+安全合併是預設安裝方式，會保留未受管理的既有內容。完整覆蓋只應在確定要用範本取代目標設定時使用。
+
+非互動安裝：
+
+```powershell
+.\Install.cmd -Mode Global
+```
+
+常用參數：
+
+```powershell
+# 不詢問 Context7 API Key
+.\Install.cmd -Mode Global -SkipContext7Key
+
+# ccusage 已安裝時只更新 ccsessions、cdaily 指令
+.\Install.cmd -Mode Global -SkipCcusageInstall
+
+# 安裝 request-execution-optimizer
+.\Install.cmd -Mode Global -InstallRequestExecutionOptimizer
+
+# 啟動 mattpocock/skills 安裝器
+.\Install.cmd -Mode Global -InstallMattPocockSkills
+
+# 在 config.toml 啟用預設 request_user_input 功能
+.\Install.cmd -Mode Global -EnableDefaultModeRequestUserInput
+
+# 完整覆蓋受管理目標
+.\Install.cmd -Mode Global -InstallStyle Replace
+```
+
+## 舊專案設定清理
+
+新版全域安裝會讀取舊版 `%LOCALAPPDATA%\CodexSettings\projects.json`，逐一清理已登記專案：
+
+- 刪除舊安裝 manifest 所列的專案 `AGENTS.md`／`agent.md` 與 Rules。
+- 移除 CVS CRLF Hooks；其他 Hook 予以保留。
+- 移除 `.codex-root`、CRLF Hook 腳本與專案 manifest。
+- 清理完成後刪除舊專案登記清單。
+
+所有變更都納入同一筆交易備份；安裝失敗時會回復。找不到登記清單時直接略過，不會掃描或修改未登記的專案。
+
+## 設定位置
+
+主要全域設定安裝到：
+
+```text
+%USERPROFILE%\.codex\
+├─ AGENTS.md
+├─ config.toml
+├─ rules\default.rules
+└─ .codex-settings-manifest.json
+```
+
+選用技能安裝到 `%USERPROFILE%\.codex\skills`。`ccsessions` 與 `cdaily` 的受管理區塊寫入目前使用者的 PowerShell Profile。
+
+## 安全機制
+
+安全合併會依檔案類型處理：
+
+- `AGENTS.md`、Rules：只更新受管理區塊。
+- `config.toml`：保留既有鍵值與區段，只加入缺少的設定。
+- `hooks.json`：保留非本工具管理的 Hook。
+- 其他檔案：只覆寫本工具擁有的版本；遇到未受管理的同名檔案會停止。
+
+安裝前會建立交易備份：
+
+```text
+%LOCALAPPDATA%\CodexSettingsBackup\<時間>-global-transaction
+```
+
+若上次執行中斷，下次安裝、還原或移除會先回復未完成交易。
+
+## 備份、還原與移除
+
+```powershell
+# 建立全域手動備份
+.\backup.ps1 -Mode Global
+
+# 選擇最近備份並還原
+.\restore.ps1
+
+# 移除全域受管理設定
+.\uninstall.ps1 -Mode Global
+```
+
+手動備份預設位於 `%LOCALAPPDATA%\CodexSettingsBackup`。Context7 Key 只記錄是否存在，不會把明文密鑰寫入備份或儲存庫。
+
+## ccusage、ccsessions、cdaily
+
+安裝器會先檢查 `ccusage`：
+
+- 尚未安裝：安裝最新版。
+- 已安裝：沿用現有套件，不重複安裝。
+- 使用 `-SkipCcusageInstall`：不安裝套件，只新增或更新 Profile 指令。
+
+```powershell
+ccsessions
+ccsessions -Since 2026-08-01 -Until 2026-08-06
+cdaily
+```
+
+`ccsessions` 的時間會以台北時區顯示。
 
 ## 發佈一鍵安裝包
-
-推送 `v*` Git tag 時，GitHub Actions 會建立單一 `CodexSettings-OneClick.zip` 發佈附件。壓縮包內雖包含必要的範本與支援程式，但使用者只需執行 `Install.cmd`；不需要個別執行任何其他 `.ps1`。
-
-本機建立相同發佈包：
 
 ```powershell
 .\build-release.ps1
 ```
 
-## 需求
+輸出為 `dist\CodexSettings-OneClick.zip`。壓縮包包含必要範本與支援程式，但使用者只需要執行 `Install.cmd`。
 
-全域安裝需要：
-
-- Windows
-- PowerShell 7 或更新版本
-- Codex CLI
-- Node.js 20 或更新版本
-- npm、npx
-
-`ccsessions`、`cdaily` 會安裝到執行安裝器的 PowerShell 7 `CurrentUserAllHosts` 與 `CurrentUserCurrentHost` Profile，避免被主機專屬 Profile 中的同名命令覆蓋。
-
-**PowerShell 7 已測試通過。**
-
-## 一鍵安裝
-
-發佈包只有一個對使用者公開的安裝入口：`Install.cmd`。
-
-1. 下載並解壓縮 `CodexSettings-OneClick.zip`。
-2. 雙擊 `Install.cmd`。
-3. 在選單選擇安裝、更新、備份、還原或移除。
-
-安裝專案時先選擇 Git 或 CVS 開發環境；安裝器會在專案根目錄建立唯一的 `AGENTS.md`，合併通用規則與所選環境的專屬規則。
-
-安裝器會清楚列出兩種安裝方式：
-
-- **安全合併（預設、建議）**：僅更新本工具管理的內容，保留其他設定；在安裝方式選單直接按 Enter 即選擇此項。
-- **完整覆蓋**：以範本取代目標檔案，適用於要重設設定時。
-
-全域安裝列出已登記專案時，直接按 Enter 會一併更新全部專案；輸入以逗號分隔的 ID 可只更新指定專案。
-
-需要非互動執行時，仍只透過同一入口傳遞參數：
-
-```powershell
-& .\Install.cmd -Mode Global
-& .\Install.cmd -Mode Global -InstallRequestExecutionOptimizer
-& .\Install.cmd -Mode Global -InstallMattPocockSkills
-& .\Install.cmd -Mode Global -EnableDefaultModeRequestUserInput
-& .\Install.cmd -Mode Git -ProjectPath 'E:\Git\MyProject'
-& .\Install.cmd -Mode CVS -ProjectPath 'E:\CVS\MyProject'
-```
-
-若系統沒有 PowerShell 7，全域安裝會停止並顯示實際版本。
-
-互動式全域安裝也會詢問是否加入：
-
-- `mattpocock/skills`：安裝到 Codex 使用者層級，並由原始安裝器選擇要加入的技能。
-
-```toml
-[features]
-default_mode_request_user_input = true
-```
-
-## 模型設定
-
-全新設定預設加入：
-
-```toml
-model = "gpt-5.6-terra"
-model_reasoning_effort = "high"
-```
-
-安全合併不會覆蓋使用者原本的頂層 `model` 或 `model_reasoning_effort`。既有值會保留。
-
-沒有設定 `review_model`；`/review` 沿用目前 Session 模型。
-
-### codex-model-router
-
-建議順序：
-
-```powershell
-& .\Install.cmd -Mode Global
-npx codex-model-router install --global
-npx codex-model-router doctor --global
-```
-
-不要搭配：
-
-```powershell
-npx codex-model-router install --global --set-default
-```
-
-責任分工：
-
-| 工具 | 管理內容 |
-|---|---|
-| `codex-settings` | 主模型模板、AGENTS、Rules、MCP、Hook、ccusage、PowerShell Profile |
-| `codex-model-router` | Terra／Luna／Sol Agents 與路由 Skills |
-
-兩者沒有直接檔案衝突；Router 一般安裝不修改主模型。
-
-## 安全機制
-
-### 安全合併
-
-- 專案根目錄的 `AGENTS.md`、Rules 使用管理區塊；`AGENTS.md` 會合併通用規則與所選 Git／CVS 專屬規則。
-- `config.toml` 保留既有頂層鍵與 MCP 區段。
-- CVS `hooks.json` 保留其他 Hook。
-- 安裝或更新時會移除全域及 CVS 專案中的舊版 CRLF Hook，只保留 CVS 專案的單一 `PostToolUse` 與單一 `Stop`；SOLUNA 與自訂 Hook 不受影響。
-- 不覆蓋內容不同的未管理檔案。
-
-### 編碼與換行
-
-支援並保留：
-
-- UTF-8、有／無 BOM
-- UTF-16 LE／BE
-- 目前 Windows ANSI Code Page，例如繁體中文系統的 Big5／950
-- CRLF／LF
-
-檔案無法可靠解碼，或新內容無法用原編碼表示時，安裝會停止，不會猜測寫回。
-
-### 中斷回復
-
-設定寫入使用：
-
-- 單一操作鎖
-- 原子檔案替換
-- 持續更新的交易 Journal
-- 每個檔案修改前備份
-
-PowerShell、程序或電腦異常中止後，下次執行安裝、移除或還原時，會先回復未完成交易。
-
-交易備份位置：
-
-```text
-%LOCALAPPDATA%\CodexSettingsBackup
-```
-
-## 更新全域與所有專案
-
-Git／CVS 專案安裝成功後會登記到：
-
-```text
-%LOCALAPPDATA%\CodexSettings\projects.json
-```
-
-執行：
-
-在 `Install.cmd` 選擇「更新：全域設定與已登記專案」，或執行：
-
-```powershell
-& .\Install.cmd -Mode Update
-```
-
-更新預設套用全域設定與全部已登記專案。需要縮小範圍時，仍只需使用同一入口：
-
-```powershell
-# 略過設定儲存庫同步、僅套用目前版本
-& .\Install.cmd -Mode Update -SkipRepositoryPull
-
-# 僅更新已登記專案
-& .\Install.cmd -Mode Update -SkipGlobal
-
-# 僅更新全域設定
-& .\Install.cmd -Mode Update -SkipRegisteredProjects
-
-# 略過 ccusage 套件安裝（仍同步指令）
-& .\Install.cmd -Mode Update -SkipCcusageInstall
-```
-
-會：
-
-1. `git pull --ff-only` 更新本設定倉庫。
-2. 更新全域設定、MCP、`ccsessions`、`cdaily`；已安裝的 `ccusage` 不會重複執行 npm 安裝。
-3. 更新所有已登記 Git／CVS 專案的 Codex 設定。
-4. 個別顯示成功或失敗原因。
-
-不會對登記專案執行 `git pull` 或 `cvs update`，也不會更新 `codex-model-router` 套件。
-
-CVS CRLF Hook 使用獨立的 `crlf-v2-<專案雜湊>.json` 狀態檔，不會讀取舊 `.txt` 或 v1 JSON。每次全域／CVS 安裝結束都會檢查 CRLF Hook 與腳本數量；若仍有重複項目，安裝會失敗並由交易備份回復。
-
-發佈 ZIP 不含 Git 工作目錄；更新時會略過 `git pull`，直接套用目前解壓縮的版本。從 Git clone 執行時，更新功能才會先執行 `git pull --ff-only`。
-
-## 備份與還原
-
-### 手動備份
-
-在 `Install.cmd` 選擇「備份目前設定」。
-
-全域手動備份只包含指定設定元件：
-
-- AGENTS、`config.toml`、Rules、Agents、Hooks、Tools
-- codex-settings Manifest
-- codex-model-router 狀態與設定備份檔
-- `~/.agents/skills`
-- `~/.codex/skills`
-- 已登記專案清單
-- PowerShell 7 的 `CurrentUserAllHosts` 與 `CurrentUserCurrentHost` Profile
-- ccusage 安裝狀態
-
-不備份 Codex 驗證資料、Sessions、History、Logs 或明文 Context7 Key。
-
-### 還原
-
-在 `Install.cmd` 選擇「還原備份」。可還原手動備份、安裝交易備份及新版解除安裝備份。
-
-### 移除
-
-在 `Install.cmd` 選擇「移除受管理設定」。
-
-解除安裝前會建立完整可還原備份，包括：
-
-- 所有即將修改或移除的檔案
-- PowerShell Profile
-- 專案登記檔
-- ccusage 當前版本狀態
-- Context7 Key 狀態
-
-Context7 Key 僅以 Windows 使用者 DPAPI 加密後保存於本機解除安裝備份，不會寫入倉庫或明文檔案。
-
-`-Force` 會移除內容已被使用者修改的受管理檔案，只應在確定不需保留時使用。
-
-## ccusage、ccsessions、cdaily
-
-來源：<https://github.com/ccusage/ccusage>
-
-全域安裝會先讀取一次目前的 `ccusage` 狀態：未安裝才執行 `npm install --global ccusage@latest`；已安裝則只同步或新增 `ccsessions`、`cdaily` 指令，不重複檢查 npm registry、重裝套件或改寫無變更的 Profile。需要自行升級 `ccusage` 時可執行：
-
-```powershell
-npm install --global ccusage@latest
-```
-
-使用方式：
-
-```powershell
-ccsessions
-ccsessions 20
-ccsessions <Session ID>
-cdaily
-cdaily 30
-```
-
-`ccsessions` 保留自訂的 Session ID、Models、Token、Total、Cost、Time 資訊與數量／ID 篩選功能；`ccsessions` 與 `cdaily` 的 Token 欄位使用 `K`、`M`、`B` 計數符號，表格框線採用 `ccusage` 的報表風格。
-
-## MCP
-
-### Context7
-
-安裝時可輸入 API Key；Key 儲存在目前 Windows 使用者的 `CONTEXT7_API_KEY` 環境變數。
-
-```toml
-[mcp_servers.context7]
-url = "https://mcp.context7.com/mcp"
-env_http_headers = { "CONTEXT7_API_KEY" = "CONTEXT7_API_KEY" }
-```
-
-略過 Key：
-
-```powershell
-& .\Install.cmd -Mode Global -SkipContext7Key
-```
-
-### Playwright
-
-```toml
-[mcp_servers.playwright]
-command = "npx"
-args = ["-y", "@playwright/mcp@latest"]
-```
-
-Pencil 不安裝、不偵測、不修改。
-
-## CVS 流程
-
-每個目標依序：
-
-1. `cvs status <target>`
-2. `cvs -n update <target>`
-3. 檢查衝突與非預期變更
-4. 必要時執行 `cvs update <target>`
-5. 再次執行 `cvs status <target>`
-
-遇到 `C`、錯誤、非預期合併或不確定狀態時立即停止。`cvs commit` 必須取得使用者明確核准。
-
-CVS Hook 只處理專案內、白名單文字副檔名且不超過 10 MB 的檔案，並保留原始位元內容，只轉換換行為 CRLF。
-CRLF 正規化只由 CVS Hook 執行，Codex 不得另行執行手動換行轉換命令。
-CRLF Hook 會先記錄本輪 Codex 更新的檔案，待 Stop 靜默期結束後一次轉換並在全部成功後清除狀態；既有 CVS 專案執行更新時會同步套用此流程。
-PostToolUse 支援直接與 `exec` 包裝的 `apply_patch`，並在結算時驗證所有目標皆不含單獨 LF。
-
-安裝 CVS 設定後重新啟動 Codex，使用 `/hooks` 檢查並信任 Hook。
+推送 `v*` Git tag 時，GitHub Actions 會建立同名 Release 附件。

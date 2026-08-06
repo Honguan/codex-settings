@@ -1,8 +1,7 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('Interactive', 'Global', 'Project')]
+    [ValidateSet('Interactive', 'Global')]
     [string]$Mode = 'Interactive',
-    [string]$ProjectPath,
     [switch]$Force
 )
 
@@ -10,7 +9,6 @@ $ErrorActionPreference = 'Stop'
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $BackupBase = Join-Path $env:LOCALAPPDATA 'CodexSettingsBackup'
 . (Join-Path $ScriptRoot 'lib\codex-settings-common.ps1')
-. (Join-Path $ScriptRoot 'lib\project-registry.ps1')
 
 function Get-Context7BackupState {
     $value = [Environment]::GetEnvironmentVariable('CONTEXT7_API_KEY', 'User')
@@ -24,8 +22,7 @@ function Uninstall-ManagedTarget {
     param(
         [Parameter(Mandatory = $true)][string]$TargetRoot,
         [Parameter(Mandatory = $true)][string]$TargetLabel,
-        [switch]$ForceRemoval,
-        [switch]$UnregisterProject
+        [switch]$ForceRemoval
     )
 
     $manifestPath = Join-Path $TargetRoot '.codex-settings-manifest.json'
@@ -63,12 +60,6 @@ function Uninstall-ManagedTarget {
 
     try {
         Save-TransactionFile -Transaction $transaction -Path $manifestPath
-        $registryPath = $null
-        if ($UnregisterProject) {
-            $registryPath = Get-CodexProjectRegistryPath
-            Save-TransactionFile -Transaction $transaction -Path $registryPath
-        }
-
         foreach ($entry in @($manifest.Files)) {
             $relativePath = [string]$entry.Path
             $managedPath = Join-Path $TargetRoot $relativePath
@@ -186,11 +177,6 @@ function Uninstall-ManagedTarget {
             Write-JsonFileAtomic -Path $manifestPath -Value $manifest -Depth 14
         }
 
-        $projectUnregistered = $false
-        if ($UnregisterProject -and -not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
-            $projectUnregistered = Unregister-CodexProject -Path $TargetRoot
-        }
-
         Complete-FileTransaction -Transaction $transaction
         return [pscustomobject]@{
             Target = $TargetRoot
@@ -199,7 +185,6 @@ function Uninstall-ManagedTarget {
             Skipped = $skippedCount
             Backup = $backupRoot
             External = $externalResults
-            ProjectUnregistered = $projectUnregistered
         }
     } catch {
         $reason = $_.Exception.Message
@@ -235,27 +220,20 @@ try {
         Write-Host '移除受管理的 Codex 設定'
         Write-Host '========================'
         Write-Host '[1] 全域設定、ccsessions、cdaily 與受管理的 ccusage 狀態'
-        Write-Host '[2] 專案設定'
         Write-Host '[0] 結束'
         Write-Host ''
         switch (Read-Host '請選擇') {
             '1' { $Mode = 'Global' }
-            '2' { $Mode = 'Project' }
             '0' { exit 0 }
             default { throw '選項無效。' }
         }
     }
 
-    if ($Mode -eq 'Global') {
-        $targets = @(
-            [pscustomobject]@{ Root = Join-Path $HOME '.codex'; Label = 'global'; Unregister = $false },
-            [pscustomobject]@{ Root = Join-Path $HOME '.codex\skills'; Label = 'global-skills'; Unregister = $false },
-            [pscustomobject]@{ Root = Join-Path $HOME '.agents\skills'; Label = 'legacy-global-skills'; Unregister = $false }
-        )
-    } else {
-        if ([string]::IsNullOrWhiteSpace($ProjectPath)) { $ProjectPath = Read-Host '輸入專案根目錄' }
-        $targets = @([pscustomobject]@{ Root = (Resolve-Path -LiteralPath $ProjectPath).Path; Label = 'project'; Unregister = $true })
-    }
+    $targets = @(
+        [pscustomobject]@{ Root = Join-Path $HOME '.codex'; Label = 'global' },
+        [pscustomobject]@{ Root = Join-Path $HOME '.codex\skills'; Label = 'global-skills' },
+        [pscustomobject]@{ Root = Join-Path $HOME '.agents\skills'; Label = 'legacy-global-skills' }
+    )
 
     $availableTargets = @($targets | Where-Object { Test-Path -LiteralPath (Join-Path $_.Root '.codex-settings-manifest.json') -PathType Leaf })
     if ($availableTargets.Count -eq 0) { throw '所選範圍找不到受管理設定的資訊檔。' }
@@ -273,7 +251,7 @@ try {
 
     $results = @()
     foreach ($target in $availableTargets) {
-        $result = Uninstall-ManagedTarget -TargetRoot $target.Root -TargetLabel $target.Label -ForceRemoval:$Force -UnregisterProject:$target.Unregister
+        $result = Uninstall-ManagedTarget -TargetRoot $target.Root -TargetLabel $target.Label -ForceRemoval:$Force
         if ($null -ne $result) { $results += $result }
     }
 
@@ -287,7 +265,6 @@ try {
         if ($result.External.Count -gt 0) {
             foreach ($key in $result.External.Keys) { Write-Host ("{0,-14}: {1}" -f $key, $result.External[$key]) }
         }
-        if ($result.ProjectUnregistered) { Write-Host "已取消登記：$($result.Target)" }
         Write-Host ''
     }
 } finally {

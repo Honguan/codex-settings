@@ -2,27 +2,19 @@ function Select-Mode {
     Write-Host ''
     Write-Host 'Codex Settings 一鍵安裝器'
     Write-Host '========================='
-    Write-Host '安裝與更新'
-    Write-Host '[1] 全域設定：Codex、MCP、ccusage 指令'
-    Write-Host '專案開發環境（會合併通用與專屬 AGENTS.md 規則）'
-    Write-Host '[2] Git 專案設定'
-    Write-Host '[3] CVS 專案設定'
-    Write-Host '[4] 更新：全域設定與已登記專案'
+    Write-Host '[1] 全域安裝／更新：Codex、MCP、技能、ccusage 指令'
     Write-Host ''
     Write-Host '備份與管理'
-    Write-Host '[5] 備份目前設定'
-    Write-Host '[6] 還原備份'
-    Write-Host '[7] 移除受管理設定'
+    Write-Host '[2] 備份目前設定'
+    Write-Host '[3] 還原備份'
+    Write-Host '[4] 移除受管理設定'
     Write-Host '[0] 結束'
 
     switch (Read-Host '請選擇') {
         '1' { return 'Global' }
-        '2' { return 'Git' }
-        '3' { return 'CVS' }
-        '4' { return 'Update' }
-        '5' { return 'Backup' }
-        '6' { return 'Restore' }
-        '7' { return 'Uninstall' }
+        '2' { return 'Backup' }
+        '3' { return 'Restore' }
+        '4' { return 'Uninstall' }
         '0' { return 'Exit' }
         default { throw '選項無效。' }
     }
@@ -66,47 +58,6 @@ function Select-OptionalDefaultModeRequestUserInput {
     return $selection -in @('y', 'Y', 'yes', 'YES')
 }
 
-function Read-ProjectPaths([string]$Prompt) {
-    $value = [string](Read-Host $Prompt)
-    if ([string]::IsNullOrWhiteSpace($value)) { return @() }
-    return @($value -split ';' | ForEach-Object Trim | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-}
-
-function Select-GlobalProjectPaths {
-    $paths = New-Object 'System.Collections.Generic.List[string]'
-    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
-    $projects = @(Get-RegisteredCodexProjects)
-
-    if ($projects.Count -gt 0) {
-        Write-Host ''
-        Write-Host '已登記專案'
-        for ($index = 0; $index -lt $projects.Count; $index++) {
-            Write-Host ('[{0}] {1} {2}' -f ($index + 1), $projects[$index].Type, $projects[$index].Path)
-        }
-        $selection = [string](Read-Host '選擇要更新的專案 ID（以逗號分隔；直接按 Enter 全部更新）')
-        if ([string]::IsNullOrWhiteSpace($selection)) {
-            foreach ($project in $projects) {
-                if ($seen.Add([string]$project.Path)) { [void]$paths.Add([string]$project.Path) }
-            }
-        } else {
-            foreach ($part in ($selection -split '[,\s]+' | Where-Object { $_ })) {
-                if ($part -notmatch '^\d+$') { continue }
-                $index = [int]$part - 1
-                if ($index -ge 0 -and $index -lt $projects.Count -and $seen.Add([string]$projects[$index].Path)) {
-                    [void]$paths.Add([string]$projects[$index].Path)
-                }
-            }
-        }
-    } else {
-        Write-Host '尚未登記任何專案。'
-    }
-
-    foreach ($path in Read-ProjectPaths '新增 Git／CVS 專案路徑（以分號分隔；直接按 Enter 略過）') {
-        if ($seen.Add($path)) { [void]$paths.Add($path) }
-    }
-    return $paths.ToArray()
-}
-
 function Assert-Command([string]$Name) {
     if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) { throw "在 PATH 中找不到 $Name。" }
 }
@@ -136,39 +87,14 @@ function Test-Prerequisites([string]$InstallMode, [string]$TargetPath) {
     if ($shape.Duplicates.Count -gt 0) { throw "內建 config.toml 無效：$($shape.Duplicates -join ', ')" }
 }
 
-function Resolve-Targets([string]$InstallMode, [string[]]$RequestedPath, [switch]$InstallRequestExecutionOptimizer, [switch]$EnableDefaultModeRequestUserInput) {
+function Resolve-GlobalTargets([switch]$InstallRequestExecutionOptimizer, [switch]$EnableDefaultModeRequestUserInput) {
     $targets = New-Object 'System.Collections.Generic.List[object]'
-    if ($InstallMode -eq 'Global') {
-        [void]$targets.Add([pscustomobject]@{ Mode = 'Global'; Template = Join-Path $ScriptRoot 'templates\global'; Root = Join-Path $HOME '.codex'; EnableDefaultModeRequestUserInput = [bool]$EnableDefaultModeRequestUserInput })
-        $skillsRoot = Join-Path $HOME '.codex\skills'
-        $skillManifest = Join-Path $skillsRoot '.codex-settings-manifest.json'
-        if ($InstallRequestExecutionOptimizer -or (Test-Path -LiteralPath $skillManifest -PathType Leaf)) {
-            [void]$targets.Add([pscustomobject]@{ Mode = 'GlobalSkills'; Template = Join-Path $ScriptRoot 'templates\user-skills'; Root = $skillsRoot })
-        }
-    } elseif ($RequestedPath.Count -eq 0) {
-        $RequestedPath = @(Read-ProjectPaths "Enter $InstallMode project paths (semicolon separated)")
+    [void]$targets.Add([pscustomobject]@{ Mode = 'Global'; Template = Join-Path $ScriptRoot 'templates\global'; Root = Join-Path $HOME '.codex'; EnableDefaultModeRequestUserInput = [bool]$EnableDefaultModeRequestUserInput })
+    $skillsRoot = Join-Path $HOME '.codex\skills'
+    $skillManifest = Join-Path $skillsRoot '.codex-settings-manifest.json'
+    if ($InstallRequestExecutionOptimizer -or (Test-Path -LiteralPath $skillManifest -PathType Leaf)) {
+        [void]$targets.Add([pscustomobject]@{ Mode = 'GlobalSkills'; Template = Join-Path $ScriptRoot 'templates\user-skills'; Root = $skillsRoot })
     }
-
-    foreach ($path in @($RequestedPath | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
-        $root = (Resolve-Path -LiteralPath $path).Path
-        $mode = $InstallMode
-        if ($mode -eq 'Global') {
-            if (Test-Path -LiteralPath (Join-Path $root '.git')) { $mode = 'Git' }
-            elseif (Test-Path -LiteralPath (Join-Path $root 'CVS')) { $mode = 'CVS' }
-            else { throw "所選目錄不是 Git 或 CVS 專案根目錄：$root" }
-        }
-        $marker = if ($mode -eq 'Git') { '.git' } else { 'CVS' }
-        if (-not (Test-Path -LiteralPath (Join-Path $root $marker))) { throw "所選目錄不是 $mode 專案根目錄：$root" }
-        if (@($targets | Where-Object { [string]::Equals($_.Root, $root, [StringComparison]::OrdinalIgnoreCase) }).Count -gt 0) { continue }
-
-        [void]$targets.Add([pscustomobject]@{
-            Mode = $mode
-            Template = Join-Path $ScriptRoot ("templates\{0}-project" -f $mode.ToLowerInvariant())
-            Root = $root
-        })
-    }
-
-    if ($targets.Count -eq 0) { throw '需要提供專案路徑。' }
     return $targets.ToArray()
 }
 
@@ -193,12 +119,6 @@ function Test-Owned($Entry, [string]$Path) {
 function Get-Strategy([string]$ModeName, [string]$RelativePath) {
     $normalized = $RelativePath.Replace('\', '/')
     if ($normalized -eq 'AGENTS.md' -or $normalized.EndsWith('/AGENTS.md')) {
-        if ($ModeName -in @('Git', 'CVS')) {
-            return [pscustomobject]@{ Name = 'managed-block'; Start = '<!-- >>> CODEX-SETTINGS:PROJECT:AGENTS >>> -->'; End = '<!-- <<< CODEX-SETTINGS:PROJECT:AGENTS <<< -->' }
-        }
-        return [pscustomobject]@{ Name = 'managed-block'; Start = '<!-- >>> CODEX-SETTINGS: >>> -->'; End = '<!-- <<< CODEX-SETTINGS: <<< -->' }
-    }
-    if ($normalized -eq 'agent.md' -or $normalized.EndsWith('/agent.md')) {
         return [pscustomobject]@{ Name = 'managed-block'; Start = '<!-- >>> CODEX-SETTINGS: >>> -->'; End = '<!-- <<< CODEX-SETTINGS: <<< -->' }
     }
     if ($normalized -eq 'config.toml') {
@@ -209,53 +129,6 @@ function Get-Strategy([string]$ModeName, [string]$RelativePath) {
     }
     if ($normalized.EndsWith('/hooks.json')) { return [pscustomobject]@{ Name = 'managed-hooks'; Start = $null; End = $null } }
     return [pscustomobject]@{ Name = 'replace'; Start = $null; End = $null }
-}
-
-function Get-ProjectAgentsTemplateContent($Target, [string]$SourcePath, [string]$RelativePath, [string]$NewLine) {
-    $specific = [IO.File]::ReadAllText($SourcePath)
-    if ($Target.Mode -notin @('Git', 'CVS') -or $RelativePath.Replace('\', '/') -ne 'AGENTS.md') { return $specific }
-
-    $commonPath = Join-Path $ScriptRoot 'templates\global\AGENTS.md'
-    if (-not (Test-Path -LiteralPath $commonPath -PathType Leaf)) { throw "找不到通用 AGENTS.md 範本：$commonPath" }
-    $common = [IO.File]::ReadAllText($commonPath)
-    $normalize = { param([string]$Content) [regex]::Replace($Content.Trim(), "`r?`n", $NewLine) }
-    return (& $normalize $common) + $NewLine + $NewLine + (& $normalize $specific)
-}
-
-function Remove-LegacyProjectAgentsBlocks([string]$Content) {
-    $Content = Remove-ManagedBlock -Content $Content -StartMarker '<!-- >>> CODEX-SETTINGS: >>> -->' -EndMarker '<!-- <<< CODEX-SETTINGS: <<< -->'
-    foreach ($mode in @('Git', 'CVS')) {
-        $Content = Remove-ManagedBlock -Content $Content -StartMarker "<!-- >>> CODEX-SETTINGS:${mode}:AGENTS >>> -->" -EndMarker "<!-- <<< CODEX-SETTINGS:${mode}:AGENTS <<< -->"
-    }
-    return $Content
-}
-
-function Update-GitIgnore([string]$Root, $Transaction, [string[]]$ManagedPaths) {
-    $ignorePath = Join-Path $Root '.gitignore'
-    $state = Get-TextFileState $ignorePath
-    $paths = New-Object 'System.Collections.Generic.List[string]'
-    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
-    foreach ($managedPath in @($ManagedPaths)) {
-        if ([string]::IsNullOrWhiteSpace($managedPath)) { continue }
-        $rule = '/' + $managedPath.Replace('\', '/').TrimStart('/')
-        if ($rule -ne '/.gitignore' -and $seen.Add($rule)) { [void]$paths.Add($rule) }
-    }
-    if ($paths.Count -eq 0) { return }
-
-    $existingRules = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
-    foreach ($line in ($state.Content -split "`r?`n")) { [void]$existingRules.Add($line.Trim()) }
-    $missingRules = @($paths | Where-Object { -not $existingRules.Contains($_) })
-    if ($missingRules.Count -eq 0) { return }
-
-    Save-TransactionFile -Transaction $Transaction -Path $ignorePath
-    $header = '# Files managed locally by codex-settings'
-    $addition = if ($existingRules.Contains($header)) { $missingRules -join $state.NewLine } else { $header + $state.NewLine + ($missingRules -join $state.NewLine) }
-    $content = if ([string]::IsNullOrWhiteSpace($state.Content)) {
-        $addition + $state.NewLine
-    } else {
-        $state.Content.TrimEnd() + $state.NewLine + $state.NewLine + $addition + $state.NewLine
-    }
-    Write-TextFileState -Path $ignorePath -Content $content -Encoding $state.Encoding
 }
 
 function Add-DefaultModeRequestUserInputFeature([string]$Content, [string]$NewLine) {
@@ -295,45 +168,137 @@ function Remove-GlobalCrlfHooks([string]$Root, $Transaction) {
     }
 }
 
-function Remove-LegacyCrlfState([string]$ProjectRoot, $Transaction) {
-    $normalizedRoot = [IO.Path]::GetFullPath($ProjectRoot).TrimEnd('\', '/')
-    $sha = [Security.Cryptography.SHA256]::Create()
-    try {
-        $rootHash = ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($normalizedRoot)))).Replace('-', '').Substring(0, 16)
-    } finally {
-        $sha.Dispose()
-    }
-    $stateBase = if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'CodexSettings\HookState' } else { Join-Path ([IO.Path]::GetTempPath()) 'CodexSettings-HookState' }
-    foreach ($legacyState in @(
-        (Join-Path $stateBase ("crlf-$rootHash.json")),
-        (Join-Path $stateBase ("crlf-$rootHash.txt"))
-    )) {
-        if (Test-Path -LiteralPath $legacyState -PathType Leaf) {
-            Save-TransactionFile -Transaction $Transaction -Path $legacyState
-            Remove-Item -LiteralPath $legacyState -Force
-        }
-    }
-}
-
-function Assert-CrlfHookInstallation([string]$Mode, [string]$Root) {
-    $hooksPath = if ($Mode -eq 'CVS') { Join-Path $Root '.codex\hooks.json' } else { Join-Path $Root 'hooks.json' }
+function Assert-GlobalCrlfHookRemoved([string]$Root) {
+    $hooksPath = Join-Path $Root 'hooks.json'
     $content = if (Test-Path -LiteralPath $hooksPath -PathType Leaf) { [IO.File]::ReadAllText($hooksPath) } else { '' }
     $counts = Get-CrlfHookCounts -Content $content
+    $scriptCount = if (Test-Path -LiteralPath (Join-Path $Root 'hooks\crlf-updated-files.ps1') -PathType Leaf) { 1 } else { 0 }
+    if ($counts.Total -ne 0 -or $scriptCount -ne 0) { throw '全域 CRLF Hook 清理檢查失敗。' }
+}
 
-    if ($Mode -eq 'Global') {
-        $scriptCount = if (Test-Path -LiteralPath (Join-Path $Root 'hooks\crlf-updated-files.ps1') -PathType Leaf) { 1 } else { 0 }
-        Write-Host "GlobalCRLFHookCount=$($counts.Total)"
-        if ($counts.Total -ne 0 -or $scriptCount -ne 0) { throw 'Global CRLF hook cleanup self-check failed.' }
-        return
+function Remove-ObsoleteProjectSettings($Transaction, [string]$RegistryPath) {
+    if ([string]::IsNullOrWhiteSpace($RegistryPath)) {
+        $localAppData = [Environment]::GetFolderPath('LocalApplicationData')
+        if ([string]::IsNullOrWhiteSpace($localAppData)) { $localAppData = $env:LOCALAPPDATA }
+        if ([string]::IsNullOrWhiteSpace($localAppData)) { return [pscustomobject]@{ Projects = 0; FilesRemoved = 0; FilesUpdated = 0 } }
+        $RegistryPath = Join-Path $localAppData 'CodexSettings\projects.json'
+    }
+    if (-not (Test-Path -LiteralPath $RegistryPath -PathType Leaf)) {
+        return [pscustomobject]@{ Projects = 0; FilesRemoved = 0; FilesUpdated = 0 }
     }
 
-    if ($Mode -eq 'CVS') {
-        $scriptCount = if (Test-Path -LiteralPath (Join-Path $Root '.codex\hooks\crlf-updated-files.ps1') -PathType Leaf) { 1 } else { 0 }
-        Write-Host "ProjectPostToolUseCRLFHookCount=$($counts.PostToolUse)"
-        Write-Host "ProjectStopCRLFHookCount=$($counts.Stop)"
-        Write-Host "CRLFScriptCount=$scriptCount"
-        if ($counts.PostToolUse -ne 1 -or $counts.Stop -ne 1 -or $scriptCount -ne 1) { throw 'CVS CRLF hook installation self-check failed.' }
+    try { $registry = Get-Content -LiteralPath $RegistryPath -Raw | ConvertFrom-Json -ErrorAction Stop }
+    catch { throw "舊專案登記清單無效：$RegistryPath`n$($_.Exception.Message)" }
+
+    $projectCount = 0
+    $removedCount = 0
+    $updatedCount = 0
+    foreach ($project in @($registry.Projects)) {
+        $root = [string]$project.Path
+        if ([string]::IsNullOrWhiteSpace($root) -or -not (Test-Path -LiteralPath $root -PathType Container)) { continue }
+        $projectCount++
+        $manifestPath = Join-Path $root '.codex-settings-manifest.json'
+        $manifest = if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
+            try { Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json -ErrorAction Stop }
+            catch { throw "舊專案受管理設定資訊檔無效：$manifestPath`n$($_.Exception.Message)" }
+        } else { $null }
+
+        foreach ($entry in @($manifest.Files)) {
+            $relativePath = [string]$entry.Path
+            if ([string]::IsNullOrWhiteSpace($relativePath)) { continue }
+            $path = Join-Path $root $relativePath
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+            Save-TransactionFile -Transaction $Transaction -Path $path
+            $normalizedPath = $relativePath.Replace('\', '/')
+            if ($normalizedPath -in @('AGENTS.md', 'agent.md', '.codex/rules/default.rules')) {
+                Remove-Item -LiteralPath $path -Force
+                $removedCount++
+                continue
+            }
+            $strategy = [string]$entry.Strategy
+            if ($strategy -eq 'managed-block') {
+                $state = Get-TextFileState -Path $path
+                $content = $state.Content
+                if (-not [string]::IsNullOrWhiteSpace([string]$entry.StartMarker)) {
+                    $content = Remove-ManagedBlock -Content $content -StartMarker ([string]$entry.StartMarker) -EndMarker ([string]$entry.EndMarker)
+                }
+                if ([string]::IsNullOrWhiteSpace($content)) {
+                    Remove-Item -LiteralPath $path -Force
+                    $removedCount++
+                } else {
+                    Write-TextFileState -Path $path -Content ($content.TrimEnd() + $state.NewLine) -Encoding $state.Encoding
+                    $updatedCount++
+                }
+            } elseif ($strategy -eq 'managed-hooks') {
+                $state = Get-TextFileState -Path $path
+                $content = Remove-ManagedHooksJson -Content $state.Content
+                $object = if ([string]::IsNullOrWhiteSpace($content)) { $null } else { $content | ConvertFrom-Json -ErrorAction Stop }
+                $hasHooks = $null -ne $object -and $null -ne $object.hooks -and @($object.hooks.PSObject.Properties).Count -gt 0
+                if (-not $hasHooks -and -not [bool]$entry.ExistedBefore) {
+                    Remove-Item -LiteralPath $path -Force
+                    $removedCount++
+                } else {
+                    Write-TextFileState -Path $path -Content ($content.TrimEnd() + $state.NewLine) -Encoding $state.Encoding
+                    $updatedCount++
+                }
+            } else {
+                Remove-Item -LiteralPath $path -Force
+                $removedCount++
+            }
+        }
+
+        $gitIgnorePath = Join-Path $root '.gitignore'
+        if (Test-Path -LiteralPath $gitIgnorePath -PathType Leaf) {
+            $state = Get-TextFileState -Path $gitIgnorePath
+            $managedIgnoreRules = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+            [void]$managedIgnoreRules.Add('# Files managed locally by codex-settings')
+            [void]$managedIgnoreRules.Add('/.codex-settings-manifest.json')
+            foreach ($entry in @($manifest.Files)) {
+                $relativePath = [string]$entry.Path
+                if (-not [string]::IsNullOrWhiteSpace($relativePath)) { [void]$managedIgnoreRules.Add('/' + $relativePath.Replace('\', '/').TrimStart('/')) }
+            }
+            $remainingLines = @($state.Content -split '\r?\n' | Where-Object { -not $managedIgnoreRules.Contains($_.Trim()) })
+            $content = ($remainingLines -join $state.NewLine).TrimEnd()
+            if ($content -ne $state.Content.TrimEnd()) {
+                Save-TransactionFile -Transaction $Transaction -Path $gitIgnorePath
+                Write-TextFileState -Path $gitIgnorePath -Content $(if ($content) { $content + $state.NewLine } else { '' }) -Encoding $state.Encoding
+                $updatedCount++
+            }
+        }
+
+        $normalizedRoot = [IO.Path]::GetFullPath($root).TrimEnd('\', '/')
+        $sha = [Security.Cryptography.SHA256]::Create()
+        try { $rootHash = ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($normalizedRoot)))).Replace('-', '').Substring(0, 16) }
+        finally { $sha.Dispose() }
+        $stateRoot = Join-Path (Split-Path -Parent $RegistryPath) 'HookState'
+        foreach ($stateName in @("crlf-$rootHash.json", "crlf-$rootHash.txt", "crlf-v2-$rootHash.json")) {
+            $path = Join-Path $stateRoot $stateName
+            if (Test-Path -LiteralPath $path -PathType Leaf) {
+                Save-TransactionFile -Transaction $Transaction -Path $path
+                Remove-Item -LiteralPath $path -Force
+                $removedCount++
+            }
+        }
+
+        foreach ($legacyPath in @('.codex-root', '.codex\hooks\crlf-updated-files.ps1', '.codex-settings-manifest.json')) {
+            $path = Join-Path $root $legacyPath
+            if (Test-Path -LiteralPath $path -PathType Leaf) {
+                Save-TransactionFile -Transaction $Transaction -Path $path
+                Remove-Item -LiteralPath $path -Force
+                $removedCount++
+            }
+        }
+        foreach ($directory in @('.codex\hooks', '.codex\rules', '.codex')) {
+            $path = Join-Path $root $directory
+            if ((Test-Path -LiteralPath $path -PathType Container) -and @(Get-ChildItem -LiteralPath $path -Force).Count -eq 0) {
+                Remove-Item -LiteralPath $path -Force
+            }
+        }
     }
+
+    Save-TransactionFile -Transaction $Transaction -Path $RegistryPath
+    Remove-Item -LiteralPath $RegistryPath -Force
+    return [pscustomobject]@{ Projects = $projectCount; FilesRemoved = $removedCount; FilesUpdated = $updatedCount }
 }
 
 function Install-Target($Target, $Transaction, [switch]$Force) {
@@ -354,7 +319,7 @@ function Install-Target($Target, $Transaction, [switch]$Force) {
         $strategy = Get-Strategy $Target.Mode $relative
         $beforeHash = if ($state.Exists) { (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash } else { $null }
         Save-TransactionFile -Transaction $Transaction -Path $destination
-        $template = Get-ProjectAgentsTemplateContent -Target $Target -SourcePath $source.FullName -RelativePath $relative -NewLine $state.NewLine
+        $template = [IO.File]::ReadAllText($source.FullName)
         $isOptionalFeatureConfig = $Target.Mode -eq 'Global' -and $relative -eq 'config.toml' -and [bool]$Target.EnableDefaultModeRequestUserInput
         if ($isOptionalFeatureConfig) { $template = Add-DefaultModeRequestUserInputFeature -Content $template -NewLine $state.NewLine }
 
@@ -371,9 +336,6 @@ function Install-Target($Target, $Transaction, [switch]$Force) {
             else { Copy-FileAtomic -Source $source.FullName -Destination $destination }
         } else {
             $existing = if ($owned -and $null -ne $previous -and [int]$previous.Version -lt 2) { '' } else { $state.Content }
-            if ($Target.Mode -in @('Git', 'CVS') -and $relative.Replace('\', '/') -eq 'AGENTS.md') {
-                $existing = Remove-LegacyProjectAgentsBlocks $existing
-            }
             switch ($strategy.Name) {
                 'managed-block' { $merged = Merge-ManagedBlock $existing $template $strategy.Start $strategy.End $state.NewLine }
                 'managed-toml' { $merged = Merge-TomlTemplate $existing $template $strategy.Start $strategy.End $state.NewLine }
@@ -408,13 +370,7 @@ function Install-Target($Target, $Transaction, [switch]$Force) {
         }
     }
 
-    if ($Target.Mode -eq 'Git') {
-        $managedPaths = @($entries | ForEach-Object Path) + '.codex-settings-manifest.json'
-        Update-GitIgnore -Root $Target.Root -Transaction $Transaction -ManagedPaths $managedPaths
-    }
-
-    if ($Target.Mode -eq 'CVS') { Remove-LegacyCrlfState -ProjectRoot $Target.Root -Transaction $Transaction }
-    if ($Target.Mode -in @('Global', 'CVS')) { Assert-CrlfHookInstallation -Mode $Target.Mode -Root $Target.Root }
+    if ($Target.Mode -eq 'Global') { Assert-GlobalCrlfHookRemoved -Root $Target.Root }
 
     return [pscustomobject]@{ Mode = $Target.Mode; Root = $Target.Root; Previous = $previous; Files = $entries.ToArray() }
 }

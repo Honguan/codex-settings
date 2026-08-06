@@ -8,7 +8,7 @@ function Write-BytesAtomic {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Path,
-        [Parameter(Mandatory = $true)][byte[]]$Bytes
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][byte[]]$Bytes
     )
 
     $directory = Split-Path -Parent $Path

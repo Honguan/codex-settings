@@ -1,13 +1,9 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('Interactive', 'Global', 'Git', 'CVS', 'Backup', 'Restore', 'Update', 'Uninstall')]
+    [ValidateSet('Interactive', 'Global', 'Backup', 'Restore', 'Uninstall')]
     [string]$Mode = 'Interactive',
-    [string[]]$ProjectPath,
     [switch]$SkipContext7Key,
     [switch]$SkipCcusageInstall,
-    [switch]$SkipRepositoryPull,
-    [switch]$SkipGlobal,
-    [switch]$SkipRegisteredProjects,
     [switch]$InstallRequestExecutionOptimizer,
     [switch]$InstallMattPocockSkills,
     [switch]$EnableDefaultModeRequestUserInput,
@@ -21,7 +17,6 @@ $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $BackupBase = Join-Path $env:LOCALAPPDATA 'CodexSettingsBackup'
 . (Join-Path $ScriptRoot 'lib\codex-settings-common.ps1')
 . (Join-Path $ScriptRoot 'lib\install-functions.ps1')
-. (Join-Path $ScriptRoot 'lib\project-registry.ps1')
 
 if ($Mode -eq 'Interactive') {
     while ($true) {
@@ -35,18 +30,7 @@ if ($Mode -eq 'Interactive') {
                     $installRequestExecutionOptimizer = Select-OptionalGlobalSkill
                     $installMattPocockSkills = Select-OptionalMattPocockSkills
                     $enableDefaultModeRequestUserInput = Select-OptionalDefaultModeRequestUserInput
-                    $paths = Select-GlobalProjectPaths
-                    & $PSCommandPath -Mode Global -InstallStyle $style -ProjectPath $paths -InstallRequestExecutionOptimizer:$installRequestExecutionOptimizer -InstallMattPocockSkills:$installMattPocockSkills -EnableDefaultModeRequestUserInput:$enableDefaultModeRequestUserInput
-                }
-                'Git' {
-                    $style = Select-InstallStyle
-                    $paths = Read-ProjectPaths '輸入 Git 專案路徑（以分號分隔）'
-                    & $PSCommandPath -Mode Git -InstallStyle $style -ProjectPath $paths
-                }
-                'CVS' {
-                    $style = Select-InstallStyle
-                    $paths = Read-ProjectPaths '輸入 CVS 專案路徑（以分號分隔）'
-                    & $PSCommandPath -Mode CVS -InstallStyle $style -ProjectPath $paths
+                    & $PSCommandPath -Mode Global -InstallStyle $style -InstallRequestExecutionOptimizer:$installRequestExecutionOptimizer -InstallMattPocockSkills:$installMattPocockSkills -EnableDefaultModeRequestUserInput:$enableDefaultModeRequestUserInput
                 }
                 default { & $PSCommandPath -Mode $selection }
             }
@@ -59,22 +43,18 @@ if ($Mode -eq 'Interactive') {
     }
 }
 
-if ($Mode -in @('Backup', 'Restore', 'Update', 'Uninstall')) {
+if ($Mode -in @('Backup', 'Restore', 'Uninstall')) {
     $actionScript = Join-Path $ScriptRoot ("{0}.ps1" -f $Mode.ToLowerInvariant())
     if (-not (Test-Path -LiteralPath $actionScript -PathType Leaf)) { throw "管理功能不存在：$actionScript" }
-    if ($Mode -eq 'Update') {
-        & $actionScript -SkipRepositoryPull:$SkipRepositoryPull -SkipGlobal:$SkipGlobal -SkipRegisteredProjects:$SkipRegisteredProjects -SkipCcusageInstall:$SkipCcusageInstall
-    } else {
-        & $actionScript
-    }
+    & $actionScript
     return
 }
 
 if ($Force) { $InstallStyle = 'Replace' }
 $Force = $InstallStyle -eq 'Replace'
-$targets = @(Resolve-Targets $Mode $ProjectPath -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput)
-$preflight = if ($Mode -eq 'Global') { Join-Path $HOME '.codex' } else { $targets[0].Root }
-Test-Prerequisites $Mode $preflight
+$targets = @(Resolve-GlobalTargets -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput)
+$preflight = Join-Path $HOME '.codex'
+Test-Prerequisites 'Global' $preflight
 foreach ($target in $targets) { Test-DirectoryWritable -Path $target.Root }
 
 New-Item -ItemType Directory -Path $BackupBase -Force | Out-Null
@@ -90,9 +70,9 @@ try {
 
     $transactionRoot = Join-Path $BackupBase ((Get-Date -Format 'yyyyMMdd-HHmmss-fff') + "-$($Mode.ToLowerInvariant())-transaction")
     $transaction = New-FileTransaction -Root $transactionRoot -Mode "Install-$Mode"
-    $ccusageBefore = if ($Mode -eq 'Global') { Get-CcusageState } else { $null }
+    $ccusageBefore = Get-CcusageState
     $context7KeyWasPresent = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable('CONTEXT7_API_KEY', 'User'))
-    $context7MayCreate = $Mode -eq 'Global' -and (-not $SkipContext7Key) -and (-not $context7KeyWasPresent)
+    $context7MayCreate = (-not $SkipContext7Key) -and (-not $context7KeyWasPresent)
 
     Save-TransactionMetadata -Transaction $transaction -Metadata @{
         Mode = $Mode
@@ -103,16 +83,14 @@ try {
         Context7KeyCreatedNow = $false
     }
 
-    $registration = $null
-    $registrations = New-Object 'System.Collections.Generic.List[object]'
     $results = New-Object 'System.Collections.Generic.List[object]'
 
     try {
+        $obsoleteProjects = Remove-ObsoleteProjectSettings -Transaction $transaction
         foreach ($target in $targets) { [void]$results.Add((Install-Target $target $transaction -Force:$Force)) }
         $external = $null
 
-        if ($Mode -eq 'Global') {
-            $global = @($results | Where-Object Mode -eq 'Global' | Select-Object -First 1)[0]
+        $global = @($results | Where-Object Mode -eq 'Global' | Select-Object -First 1)[0]
             $contextState = Set-Context7Key -Skip:$SkipContext7Key -PreviousManifest $global.Previous
             Save-TransactionMetadata -Transaction $transaction -Metadata @{
                 Context7KeyCreatedNow = [bool]$contextState.CreatedNow
@@ -135,7 +113,7 @@ try {
                 $installedByPackage = [bool]$old.InstalledByPackage
             }
 
-            $external = [ordered]@{
+        $external = [ordered]@{
                 PowerShellProfiles = @($ccusage.ProfileStates)
                 Ccusage = [ordered]@{
                     Managed = $installedByPackage
@@ -150,20 +128,10 @@ try {
                     CreatedByInstaller = [bool]$contextState.CreatedByInstaller
                     SecretStoredInRepository = $false
                 }
-            }
         }
 
         foreach ($result in $results) {
             Write-Manifest $result $transaction $(if ($result.Mode -eq 'Global') { $external } else { $null })
-        }
-
-        $projectResults = @($results | Where-Object { $_.Mode -in @('Git', 'CVS') })
-        if ($projectResults.Count -gt 0) {
-            $registryPath = Get-CodexProjectRegistryPath
-            Save-TransactionFile $transaction $registryPath
-            foreach ($project in $projectResults) {
-                [void]$registrations.Add((Register-CodexProject -Type $project.Mode -Path $project.Root))
-            }
         }
 
         Complete-FileTransaction -Transaction $transaction
@@ -181,20 +149,17 @@ try {
             Write-Host "類型：$($result.Mode)"
             Write-Host "檔案：$($result.Files.Count)（新增：$createdCount、更新：$updatedCount、未變更：$unchangedCount）"
         }
-        if ($Mode -eq 'Global') {
-            $packageStatus = if ([bool]$ccusage.PackageInstalledNow) { '已安裝 ccusage 套件' } elseif ([bool]$ccusageBefore.Installed) { '沿用既有 ccusage 套件' } else { '已略過 ccusage 套件' }
-            $commandStatus = if ([bool]$ccusage.CommandsUpdated) { '已更新 ccsessions、cdaily 指令' } else { 'ccsessions、cdaily 指令未變更' }
-            Write-Host "ccusage：$packageStatus；$commandStatus"
-        }
-        foreach ($registration in $registrations) { Write-Host "已登記專案：$($registration.Type) $($registration.Path)" }
+        $packageStatus = if ([bool]$ccusage.PackageInstalledNow) { '已安裝 ccusage 套件' } elseif ([bool]$ccusageBefore.Installed) { '沿用既有 ccusage 套件' } else { '已略過 ccusage 套件' }
+        $commandStatus = if ([bool]$ccusage.CommandsUpdated) { '已更新 ccsessions、cdaily 指令' } else { 'ccsessions、cdaily 指令未變更' }
+        Write-Host "ccusage：$packageStatus；$commandStatus"
+        Write-Host "舊專案設定：處理 $($obsoleteProjects.Projects) 個專案、移除 $($obsoleteProjects.FilesRemoved) 個檔案、更新 $($obsoleteProjects.FilesUpdated) 個檔案"
         Write-Host "交易備份：$transactionRoot"
-        if ($Mode -eq 'CVS') { Write-Host '請重新啟動 Codex，並使用 /hooks 檢閱及信任 CVS Hook。' }
-        else { Write-Host '請重新啟動 PowerShell 與 Codex，以載入設定、指令與 MCP。' }
+        Write-Host '請重新啟動 PowerShell 與 Codex，以載入設定、指令與 MCP。'
     } catch {
         $reason = $_.Exception.Message
         $rollbackErrors = New-Object 'System.Collections.Generic.List[string]'
         try { Undo-FileTransaction $transaction } catch { [void]$rollbackErrors.Add("File rollback failed: $($_.Exception.Message)") }
-        if ($Mode -eq 'Global' -and $null -ne $ccusageBefore) {
+        if ($null -ne $ccusageBefore) {
             try { Restore-CcusageState $ccusageBefore } catch { [void]$rollbackErrors.Add("ccusage rollback failed: $($_.Exception.Message)") }
         }
         if ($null -ne $contextState -and [bool]$contextState.CreatedNow) {
