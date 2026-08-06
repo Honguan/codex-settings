@@ -25,6 +25,29 @@ function Get-NotificationRoot {
     return Join-Path $HOME '.codex\state\notifications'
 }
 
+function Write-HookDiagnostic($InputObject, [string]$Result, [string]$Details) {
+    try {
+        $root = if ([string]::IsNullOrWhiteSpace($env:CODEX_SETTINGS_HOOK_LOG_ROOT)) { Join-Path $HOME '.codex\logs\hooks' } else { $env:CODEX_SETTINGS_HOOK_LOG_ROOT }
+        $sessionId = if ($null -eq $InputObject -or [string]::IsNullOrWhiteSpace([string]$InputObject.session_id)) { 'unknown' } else { [string]$InputObject.session_id }
+        $safeSessionId = [regex]::Replace($sessionId, '[^A-Za-z0-9._-]', '_')
+        $entry = [ordered]@{
+            timestamp = [DateTimeOffset]::Now.ToString('o')
+            event = if ($null -eq $InputObject) { '' } else { [string]$InputObject.hook_event_name }
+            handler = 'windows-notification'
+            notificationType = $Type
+            result = $Result
+            sessionId = $sessionId
+            turnId = if ($null -eq $InputObject) { '' } else { [string]$InputObject.turn_id }
+            tool = if ($null -eq $InputObject) { '' } else { [string]$InputObject.tool_name }
+            changedFileCount = 0
+            changedFiles = @()
+            details = $Details
+        }
+        New-Item -ItemType Directory -Path $root -Force | Out-Null
+        [IO.File]::AppendAllText((Join-Path $root ($safeSessionId + '.log')), (($entry | ConvertTo-Json -Compress) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+    } catch {}
+}
+
 function Get-Settings([string]$Root) {
     $defaults = [ordered]@{
         enabled = $true
@@ -113,6 +136,7 @@ function Show-BalloonFallback([string]$Title, [string]$Message, [string]$Notific
     } finally { $icon.Dispose() }
 }
 
+$inputObject = $null
 try {
     $inputObject = if ($Test) { [pscustomobject]@{} } else { Get-HookInput }
     if ($null -eq $inputObject) { $inputObject = [pscustomobject]@{} }
@@ -125,8 +149,16 @@ try {
     $root = Get-NotificationRoot
     $settings = Get-Settings -Root $root
     $settingName = $Type.Substring(0, 1).ToLowerInvariant() + $Type.Substring(1)
-    if (-not $Test -and (-not [bool]$settings.enabled -or -not [bool]$settings.$settingName)) { Write-HookResult; return }
-    if (Test-Duplicate -Root $root -InputObject $inputObject -NotificationType $Type -Seconds ([int]$settings.dedupeSeconds)) { Write-HookResult; return }
+    if (-not $Test -and (-not [bool]$settings.enabled -or -not [bool]$settings.$settingName)) {
+        Write-HookDiagnostic -InputObject $inputObject -Result 'disabled' -Details ''
+        Write-HookResult
+        return
+    }
+    if (Test-Duplicate -Root $root -InputObject $inputObject -NotificationType $Type -Seconds ([int]$settings.dedupeSeconds)) {
+        Write-HookDiagnostic -InputObject $inputObject -Result 'deduplicated' -Details ''
+        Write-HookResult
+        return
+    }
 
     $project = (Resolve-ProjectName -InputObject $inputObject -ExplicitName $ProjectName) -replace '[\r\n\t]+', ' '
     if ($project.Length -gt 80) { $project = $project.Substring(0, 80) }
@@ -149,6 +181,9 @@ try {
             catch { if ([bool]$settings.sound) { [Console]::Error.Write([char]7) } }
         }
     }
-} catch { }
+    Write-HookDiagnostic -InputObject $inputObject -Result 'success' -Details ''
+} catch {
+    Write-HookDiagnostic -InputObject $inputObject -Result 'error' -Details $_.Exception.Message
+}
 
 Write-HookResult

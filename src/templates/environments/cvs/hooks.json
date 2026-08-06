@@ -9,8 +9,7 @@
             "type": "command",
             "command": "pwsh -NoProfile -Command '& (Join-Path $HOME \".codex/hooks/preserve-line-endings.ps1\") -Mode Track'",
             "commandWindows": "pwsh.exe -NoProfile -ExecutionPolicy Bypass -Command \"& (Join-Path $HOME '.codex\\hooks\\preserve-line-endings.ps1') -Mode Track\"",
-            "timeout": 60,
-            "statusMessage": "Recording original line endings"
+            "timeout": 60
           }
         ]
       }
@@ -23,8 +22,7 @@
             "type": "command",
             "command": "pwsh -NoProfile -Command '& (Join-Path $HOME \".codex/hooks/preserve-line-endings.ps1\") -Mode Restore'",
             "commandWindows": "pwsh.exe -NoProfile -ExecutionPolicy Bypass -Command \"& (Join-Path $HOME '.codex\\hooks\\preserve-line-endings.ps1') -Mode Restore\"",
-            "timeout": 60,
-            "statusMessage": "Restoring original line endings"
+            "timeout": 60
           }
         ]
       }
@@ -36,8 +34,7 @@
             "type": "command",
             "command": "pwsh -NoProfile -Command '& (Join-Path $HOME \".codex/hooks/preserve-line-endings.ps1\") -Mode Finalize'",
             "commandWindows": "pwsh.exe -NoProfile -ExecutionPolicy Bypass -Command \"& (Join-Path $HOME '.codex\\hooks\\preserve-line-endings.ps1') -Mode Finalize\"",
-            "timeout": 60,
-            "statusMessage": "Finalizing original line endings"
+            "timeout": 60
           }
         ]
       }

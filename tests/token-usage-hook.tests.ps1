@@ -3,16 +3,21 @@ $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $hookScript = Join-Path $repositoryRoot 'src\templates\core\hooks\show-turn-token-usage.ps1'
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('codex-settings-token-usage-' + [guid]::NewGuid().ToString('N'))
 $stateRoot = Join-Path $testRoot 'state'
+$diagnosticRoot = Join-Path $testRoot 'logs'
 $snapshotPath = Join-Path $testRoot 'snapshot.json'
+$rolloutPath = Join-Path $testRoot 'rollout.jsonl'
 $mockPath = Join-Path $testRoot 'mock-ccsessions.ps1'
+$retryMarkerPath = Join-Path $testRoot 'retry.marker'
 
 function Set-Snapshot([string]$SessionId, [long]$InputTokens, [long]$CachedInputTokens, [long]$CacheWriteTokens, [long]$OutputTokens, [long]$TotalTokens, [decimal]$CostUsd, [string[]]$Models = @('gpt-5.6-sol')) {
     $value = [ordered]@{ success = $true; sessionId = $SessionId; models = $Models; inputTokens = $InputTokens; cachedInputTokens = $CachedInputTokens; cacheWriteTokens = $CacheWriteTokens; outputTokens = $OutputTokens; totalTokens = $TotalTokens; costUsd = $CostUsd }
     [IO.File]::WriteAllText($snapshotPath, ($value | ConvertTo-Json -Compress), [Text.UTF8Encoding]::new($false))
 }
 
-function Invoke-TokenHook([string]$SessionId, [string]$TurnId) {
-    $inputText = [ordered]@{ session_id = $SessionId; turn_id = $TurnId; cwd = $repositoryRoot; hook_event_name = 'Stop'; stop_hook_active = $false } | ConvertTo-Json -Compress
+function Invoke-TokenHook([string]$SessionId, [string]$TurnId, [hashtable]$AdditionalInput = @{}) {
+    $inputObject = [ordered]@{ session_id = $SessionId; turn_id = $TurnId; cwd = $repositoryRoot; hook_event_name = 'Stop'; stop_hook_active = $false }
+    foreach ($property in $AdditionalInput.GetEnumerator()) { $inputObject[$property.Key] = $property.Value }
+    $inputText = $inputObject | ConvertTo-Json -Depth 8 -Compress
     $startInfo = [Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = 'pwsh'
     foreach ($argument in @('-NoLogo', '-NoProfile', '-File', $hookScript)) { $startInfo.ArgumentList.Add($argument) }
@@ -32,11 +37,64 @@ function Invoke-TokenHook([string]$SessionId, [string]$TurnId) {
 }
 
 try {
+    $hooksTemplate = Get-Content -LiteralPath (Join-Path $repositoryRoot 'src\templates\core\hooks.json') -Raw | ConvertFrom-Json
+    $tokenHook = @($hooksTemplate.hooks.Stop | Where-Object { ($_.hooks | ConvertTo-Json -Depth 8 -Compress) -match 'show-turn-token-usage\.ps1' })[0]
+    if ($null -eq $tokenHook -or $tokenHook.hooks[0].PSObject.Properties.Name -contains 'statusMessage') { throw 'Token Hook 不應持續顯示執行狀態。' }
+
     New-Item -ItemType Directory -Path $testRoot -Force | Out-Null
-    [IO.File]::WriteAllText($mockPath, "param([string]`$SessionId)`r`nGet-Content -LiteralPath `$env:CODEX_SETTINGS_CCSESSIONS_SNAPSHOT -Raw`r`n", [Text.UTF8Encoding]::new($false))
+    $mockContent = @'
+param([string]$SessionId)
+if (-not [string]::IsNullOrWhiteSpace($env:CODEX_SETTINGS_CCSESSIONS_RETRY_MARKER) -and -not (Test-Path -LiteralPath $env:CODEX_SETTINGS_CCSESSIONS_RETRY_MARKER)) {
+    [IO.File]::WriteAllText($env:CODEX_SETTINGS_CCSESSIONS_RETRY_MARKER, 'first attempt')
+    Write-Output 'usage not ready'
+    exit 0
+}
+Get-Content -LiteralPath $env:CODEX_SETTINGS_CCSESSIONS_SNAPSHOT -Raw
+'@
+    [IO.File]::WriteAllText($mockPath, $mockContent, [Text.UTF8Encoding]::new($false))
     $env:CODEX_SETTINGS_TOKEN_USAGE_STATE_ROOT = $stateRoot
+    $env:CODEX_SETTINGS_HOOK_LOG_ROOT = $diagnosticRoot
     $env:CODEX_SETTINGS_CCSESSIONS_TEST_COMMAND = $mockPath
     $env:CODEX_SETTINGS_CCSESSIONS_SNAPSHOT = $snapshotPath
+
+    $sessionRealtime = '019fd65b-39b0-7d60-99fc-deb094690001'
+    Set-Snapshot -SessionId $sessionRealtime -InputTokens 999000 -CachedInputTokens 888000 -CacheWriteTokens 777000 -OutputTokens 666000 -TotalTokens 3330000 -CostUsd 9.99
+    $realtime = Invoke-TokenHook -SessionId $sessionRealtime -TurnId 'turn-realtime' -AdditionalInput @{
+        last_token_usage = [ordered]@{ input_tokens = 4321; cached_input_tokens = 1234; cache_write_input_tokens = 345; output_tokens = 567; reasoning_output_tokens = 89; total_tokens = 6567 }
+    }
+    foreach ($expected in @('Input           4.32K', 'Output          567', 'Cache           1.23K', 'Total           6.57K')) {
+        if (-not $realtime.systemMessage.Contains($expected)) { throw "Stop payload 即時 Token 未優先使用：$expected" }
+    }
+    $realtimeDiagnostic = Get-Content -LiteralPath (Join-Path $diagnosticRoot ($sessionRealtime + '.log')) -Raw | ConvertFrom-Json
+    if ($realtimeDiagnostic.event -ne 'Stop' -or $realtimeDiagnostic.handler -ne 'turn-token-usage' -or $realtimeDiagnostic.result -ne 'success' -or $realtimeDiagnostic.details -notmatch 'source=realtime') {
+        throw 'Token Hook 未寫入可診斷的執行紀錄。'
+    }
+
+    $sessionTranscript = '019fd65b-39b0-7d60-99fc-deb094690002'
+    Set-Snapshot -SessionId $sessionTranscript -InputTokens 999000 -CachedInputTokens 888000 -CacheWriteTokens 777000 -OutputTokens 666000 -TotalTokens 3330000 -CostUsd 9.99
+    $rolloutEvent = [ordered]@{
+        type = 'event_msg'
+        payload = [ordered]@{
+            type = 'token_count'
+            info = [ordered]@{
+                last_token_usage = [ordered]@{ input_tokens = 2468; cached_input_tokens = 1357; cache_write_input_tokens = 246; output_tokens = 579; reasoning_output_tokens = 0; total_tokens = 4650 }
+                total_token_usage = [ordered]@{ input_tokens = 999000; cached_input_tokens = 888000; cache_write_input_tokens = 777000; output_tokens = 666000; reasoning_output_tokens = 0; total_tokens = 3330000 }
+                model_context_window = 272000
+            }
+        }
+    }
+    [IO.File]::WriteAllText($rolloutPath, ($rolloutEvent | ConvertTo-Json -Depth 8 -Compress), [Text.UTF8Encoding]::new($false))
+    $fromTranscript = Invoke-TokenHook -SessionId $sessionTranscript -TurnId 'turn-transcript' -AdditionalInput @{ transcript_path = $rolloutPath }
+    foreach ($expected in @('Input           2.47K', 'Output          579', 'Cache           1.36K', 'Total           4.65K')) {
+        if (-not $fromTranscript.systemMessage.Contains($expected)) { throw "rollout token_count 未優先使用：$expected" }
+    }
+
+    $sessionRetry = '019fd65b-39b0-7d60-99fc-deb094690003'
+    Set-Snapshot -SessionId $sessionRetry -InputTokens 8765 -CachedInputTokens 4321 -CacheWriteTokens 123 -OutputTokens 987 -TotalTokens 14073 -CostUsd 0.02
+    $env:CODEX_SETTINGS_CCSESSIONS_RETRY_MARKER = $retryMarkerPath
+    $retried = Invoke-TokenHook -SessionId $sessionRetry -TurnId 'turn-retry'
+    Remove-Item Env:\CODEX_SETTINGS_CCSESSIONS_RETRY_MARKER
+    if (-not (Test-Path -LiteralPath $retryMarkerPath) -or -not $retried.systemMessage.Contains('Input           8.77K')) { throw 'ccsessions 資料延遲時未重試一次。' }
 
     $sessionA = '019fd65b-39b0-7d60-99fc-deb09469413b'
     Set-Snapshot -SessionId $sessionA -InputTokens 120000 -CachedInputTokens 80000 -CacheWriteTokens 20000 -OutputTokens 12000 -TotalTokens 212000 -CostUsd 0.18
@@ -66,7 +124,7 @@ try {
     $other = Invoke-TokenHook -SessionId $sessionB -TurnId 'turn-b1'
     if ($other.systemMessage -notmatch 'Token usage since session start') { throw '不同 Session 未使用獨立基準。' }
     $sessionStates = @(Get-ChildItem -LiteralPath $stateRoot -Filter '*.json' | Where-Object Name -ne 'settings.json')
-    if ($sessionStates.Count -ne 2) { throw "多 Session 狀態檔數量錯誤：$($sessionStates.Count)" }
+    if ($sessionStates.Count -ne 5) { throw "多 Session 狀態檔數量錯誤：$($sessionStates.Count)" }
 
     $stateA = @($sessionStates | Where-Object { (Get-Content -LiteralPath $_.FullName -Raw | ConvertFrom-Json).sessionId -eq $sessionA })[0]
     [IO.File]::WriteAllText($stateA.FullName, '{invalid', [Text.UTF8Encoding]::new($false))
@@ -84,7 +142,9 @@ try {
     Write-Host 'Turn token usage hook tests passed.'
 } finally {
     Remove-Item Env:\CODEX_SETTINGS_TOKEN_USAGE_STATE_ROOT -ErrorAction SilentlyContinue
+    Remove-Item Env:\CODEX_SETTINGS_HOOK_LOG_ROOT -ErrorAction SilentlyContinue
     Remove-Item Env:\CODEX_SETTINGS_CCSESSIONS_TEST_COMMAND -ErrorAction SilentlyContinue
     Remove-Item Env:\CODEX_SETTINGS_CCSESSIONS_SNAPSHOT -ErrorAction SilentlyContinue
+    Remove-Item Env:\CODEX_SETTINGS_CCSESSIONS_RETRY_MARKER -ErrorAction SilentlyContinue
     if (Test-Path -LiteralPath $testRoot) { Remove-Item -LiteralPath $testRoot -Recurse -Force }
 }

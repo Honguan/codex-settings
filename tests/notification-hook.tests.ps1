@@ -5,6 +5,7 @@ $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('codex-settings-notification-'
 $projectRoot = Join-Path $testRoot 'SampleProject'
 $stateRoot = Join-Path $testRoot 'state'
 $logPath = Join-Path $testRoot 'notifications.jsonl'
+$diagnosticRoot = Join-Path $testRoot 'hook-logs'
 
 function Invoke-NotificationHook([string]$Type, [string]$EventName, [string]$TurnId, [string]$LastMessage = '') {
     $inputText = [ordered]@{
@@ -35,6 +36,7 @@ try {
     $env:CODEX_SETTINGS_NOTIFICATION_STATE_ROOT = $stateRoot
     $env:CODEX_SETTINGS_NOTIFICATION_TEST_MODE = '1'
     $env:CODEX_SETTINGS_NOTIFICATION_TEST_LOG = $logPath
+    $env:CODEX_SETTINGS_HOOK_LOG_ROOT = $diagnosticRoot
 
     Invoke-NotificationHook -Type Completed -EventName Stop -TurnId 'turn-1' -LastMessage '工作完成。'
     Invoke-NotificationHook -Type Completed -EventName Stop -TurnId 'turn-1' -LastMessage '工作完成。'
@@ -53,11 +55,14 @@ try {
     [IO.File]::WriteAllText($settingsPath, ($settings | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
     Invoke-NotificationHook -Type Completed -EventName Stop -TurnId 'turn-5' -LastMessage '再次完成。'
     if (@(Get-Content -LiteralPath $logPath).Count -ne 4) { throw '停用完成通知後仍產生通知。' }
+    $diagnostics = @(Get-Content -LiteralPath (Join-Path $diagnosticRoot 'session-a.log') | ForEach-Object { $_ | ConvertFrom-Json })
+    if ($diagnostics.Count -ne 6 -or @($diagnostics | Where-Object result -eq 'success').Count -ne 4 -or @($diagnostics | Where-Object result -eq 'deduplicated').Count -ne 1 -or @($diagnostics | Where-Object result -eq 'disabled').Count -ne 1) { throw '通知 Hook 診斷結果不完整。' }
 
     Write-Host 'Windows notification hook tests passed.'
 } finally {
     Remove-Item Env:\CODEX_SETTINGS_NOTIFICATION_STATE_ROOT -ErrorAction SilentlyContinue
     Remove-Item Env:\CODEX_SETTINGS_NOTIFICATION_TEST_MODE -ErrorAction SilentlyContinue
     Remove-Item Env:\CODEX_SETTINGS_NOTIFICATION_TEST_LOG -ErrorAction SilentlyContinue
+    Remove-Item Env:\CODEX_SETTINGS_HOOK_LOG_ROOT -ErrorAction SilentlyContinue
     if (Test-Path -LiteralPath $testRoot) { Remove-Item -LiteralPath $testRoot -Recurse -Force }
 }

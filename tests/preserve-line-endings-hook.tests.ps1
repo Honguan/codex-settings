@@ -4,6 +4,7 @@ $hookScript = Join-Path $repositoryRoot 'src\templates\environments\cvs\hooks\pr
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('codex-settings-line-endings-' + [guid]::NewGuid().ToString('N'))
 $projectRoot = Join-Path $testRoot 'project'
 $stateRoot = Join-Path $testRoot 'state'
+$diagnosticRoot = Join-Path $testRoot 'logs'
 
 function Write-TestBytes([string]$Name, [byte[]]$Bytes) {
     $path = Join-Path $projectRoot $Name
@@ -26,6 +27,7 @@ function Invoke-Hook([ValidateSet('Track', 'Restore', 'Finalize')][string]$Mode,
     $startInfo.RedirectStandardOutput = $true
     $startInfo.RedirectStandardError = $true
     $startInfo.Environment['CODEX_SETTINGS_LINE_ENDING_STATE_ROOT'] = $stateRoot
+    $startInfo.Environment['CODEX_SETTINGS_HOOK_LOG_ROOT'] = $diagnosticRoot
     $process = [Diagnostics.Process]::Start($startInfo)
     $process.StandardInput.Write($InputText)
     $process.StandardInput.Close()
@@ -48,6 +50,13 @@ function New-HookInput([string]$EventName, [string]$SessionId, [string]$ToolName
 }
 
 try {
+    $hooksTemplate = Get-Content -LiteralPath (Join-Path $repositoryRoot 'src\templates\environments\cvs\hooks.json') -Raw | ConvertFrom-Json
+    foreach ($eventName in @('PreToolUse', 'PostToolUse')) {
+        $entry = @($hooksTemplate.hooks.$eventName)[0]
+        if ($entry.matcher -ne '*' -or $entry.hooks[0].PSObject.Properties.Name -contains 'statusMessage') { throw "$eventName matcher 或 UI 狀態設定錯誤。" }
+    }
+    if (@($hooksTemplate.hooks.Stop)[0].hooks[0].PSObject.Properties.Name -contains 'statusMessage') { throw 'Stop Hook 不應持續顯示執行狀態。' }
+
     New-Item -ItemType Directory -Path (Join-Path $projectRoot 'CVS'), $stateRoot -Force | Out-Null
     $trackedFiles = @('crlf.txt', 'lf.txt', 'no-final.txt', 'with-final.txt', 'utf8-bom.txt', 'ansi.txt', 'unchanged.txt', 'binary.bin', '.codex\ignored.txt')
     $entries = @($trackedFiles | Where-Object { $_ -notmatch '\\' } | ForEach-Object { "/$_/1.1///" }) + 'D/.codex////'
@@ -91,6 +100,10 @@ try {
     $postInput = New-HookInput -EventName PostToolUse -SessionId $sessionA -ToolName exec -Command $execCommand
     Invoke-Hook -Mode Restore -SessionId $sessionA -InputText $postInput | Out-Null
     if (-not (Test-Path -LiteralPath $statePathA -PathType Leaf)) { throw 'PostToolUse 過早清理 session 狀態檔。' }
+    $restoreDiagnostic = @(Get-Content -LiteralPath (Join-Path $diagnosticRoot 'session-A.log') | ForEach-Object { $_ | ConvertFrom-Json }) | Where-Object { $_.mode -eq 'Restore' } | Select-Object -Last 1
+    if ($restoreDiagnostic.event -ne 'PostToolUse' -or $restoreDiagnostic.handler -ne 'preserve-line-endings' -or $restoreDiagnostic.result -ne 'success' -or $restoreDiagnostic.changedFileCount -ne 6 -or @($restoreDiagnostic.changedFiles).Count -ne 6) {
+        throw '換行 Hook 未寫入可診斷的還原紀錄。'
+    }
 
     Assert-Bytes 'crlf.txt' ([Text.Encoding]::ASCII.GetBytes("before`r`nend`r`nadded1`r`nadded2`r`nadded3`r`n"))
     Assert-Bytes 'lf.txt' ([Text.Encoding]::ASCII.GetBytes("before`nend`nadded1`nadded2`nadded3`n"))

@@ -128,6 +128,29 @@ function Get-StatePath([string]$SessionId) {
     return Join-Path $stateRoot ($safeName + '.json')
 }
 
+function Write-HookDiagnostic($InputObject, [string]$Result, [string[]]$ChangedFiles, [string]$Details) {
+    try {
+        $root = if ([string]::IsNullOrWhiteSpace($env:CODEX_SETTINGS_HOOK_LOG_ROOT)) { Join-Path $HOME '.codex\logs\hooks' } else { $env:CODEX_SETTINGS_HOOK_LOG_ROOT }
+        $sessionId = if ($null -eq $InputObject) { 'unknown' } else { [string]$InputObject.session_id }
+        $safeSessionId = [regex]::Replace($sessionId, '[^A-Za-z0-9._-]', '_')
+        $entry = [ordered]@{
+            timestamp = [DateTimeOffset]::Now.ToString('o')
+            event = if ($null -eq $InputObject) { $Mode } else { [string]$InputObject.hook_event_name }
+            handler = 'preserve-line-endings'
+            mode = $Mode
+            result = $Result
+            sessionId = $sessionId
+            turnId = if ($null -eq $InputObject) { '' } else { [string]$InputObject.turn_id }
+            tool = if ($null -eq $InputObject) { '' } else { [string]$InputObject.tool_name }
+            changedFileCount = @($ChangedFiles).Count
+            changedFiles = @($ChangedFiles)
+            details = $Details
+        }
+        New-Item -ItemType Directory -Path $root -Force | Out-Null
+        [IO.File]::AppendAllText((Join-Path $root ($safeSessionId + '.log')), (($entry | ConvertTo-Json -Depth 8 -Compress) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+    } catch {}
+}
+
 function Save-InitialState($InputObject) {
     $statePath = Get-StatePath -SessionId ([string]$InputObject.session_id)
     if (Test-Path -LiteralPath $statePath -PathType Leaf) { return }
@@ -164,6 +187,7 @@ function Save-InitialState($InputObject) {
 function Restore-InitialState($InputObject, [Collections.Generic.List[string]]$Warnings, [switch]$Cleanup) {
     $statePath = Get-StatePath -SessionId ([string]$InputObject.session_id)
     if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) { return }
+    $changedFiles = [Collections.Generic.List[string]]::new()
     try {
         $state = [IO.File]::ReadAllText($statePath) | ConvertFrom-Json -ErrorAction Stop
         $root = [IO.Path]::GetFullPath([string]$state.projectRoot).TrimEnd('\', '/')
@@ -186,7 +210,10 @@ function Restore-InitialState($InputObject, [Collections.Generic.List[string]]$W
                 }
                 $finalStyle = if ([string]$original.lineEnding -in @('CRLF', 'LF')) { [string]$original.lineEnding } elseif ([string]$original.finalNewlineStyle -in @('CRLF', 'LF')) { [string]$original.finalNewlineStyle } else { 'LF' }
                 $restored = Set-FinalNewlineBytes -Bytes $restored -FinalNewline ([bool]$original.finalNewline) -Style $finalStyle
-                if (-not [Linq.Enumerable]::SequenceEqual([byte[]]$bytes, [byte[]]$restored)) { [IO.File]::WriteAllBytes($path, $restored) }
+                if (-not [Linq.Enumerable]::SequenceEqual([byte[]]$bytes, [byte[]]$restored)) {
+                    [IO.File]::WriteAllBytes($path, $restored)
+                    $changedFiles.Add($path)
+                }
             } catch {
                 $Warnings.Add("Failed to restore line endings for $($property.Name): $($_.Exception.Message)")
             }
@@ -194,9 +221,12 @@ function Restore-InitialState($InputObject, [Collections.Generic.List[string]]$W
     } finally {
         if ($Cleanup) { Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue }
     }
+    return $changedFiles.ToArray()
 }
 
 $warnings = [Collections.Generic.List[string]]::new()
+$inputObject = $null
+$changedFiles = @()
 try {
     $inputText = [Console]::In.ReadToEnd()
     if ([string]::IsNullOrWhiteSpace($inputText)) { throw 'Hook input JSON is empty.' }
@@ -206,15 +236,17 @@ try {
         if ([string]::IsNullOrWhiteSpace([string]$inputObject.cwd)) { throw 'Hook input is missing cwd.' }
         Save-InitialState -InputObject $inputObject
     } else {
-        Restore-InitialState -InputObject $inputObject -Warnings $warnings -Cleanup:($Mode -eq 'Finalize')
+        $changedFiles = @(Restore-InitialState -InputObject $inputObject -Warnings $warnings -Cleanup:($Mode -eq 'Finalize'))
     }
 } catch {
     $warnings.Add("Line-ending $($Mode.ToLowerInvariant()) failed: $($_.Exception.Message)")
 }
 
 if ($warnings.Count -eq 0) {
+    Write-HookDiagnostic -InputObject $inputObject -Result 'success' -ChangedFiles $changedFiles -Details ''
     [Console]::Out.WriteLine('{}')
 } else {
+    Write-HookDiagnostic -InputObject $inputObject -Result 'error' -ChangedFiles $changedFiles -Details ($warnings -join '; ')
     [Console]::Out.WriteLine(([ordered]@{ systemMessage = ($warnings -join [Environment]::NewLine) } | ConvertTo-Json -Compress))
 }
 exit 0
