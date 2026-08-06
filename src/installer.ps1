@@ -151,6 +151,8 @@ try {
 
         Complete-FileTransaction -Transaction $transaction
 
+        & (Join-Path $globalRoot 'hooks\show-codex-notification.ps1') -Type Completed -Test | Out-Null
+
         Write-Host ''
         Write-Host '安裝完成。'
         Write-Host "方式：$InstallStyle"
@@ -172,6 +174,7 @@ try {
         Write-Host '  cdaily [天數]：查看每日 Token 與費用統計。'
         Write-Host "舊專案設定：處理 $($obsoleteProjects.Projects) 個專案、移除 $($obsoleteProjects.FilesRemoved) 個檔案、更新 $($obsoleteProjects.FilesUpdated) 個檔案"
         Write-Host "交易備份：$transactionRoot"
+        Write-Host 'Windows 通知：已送出安裝測試通知。'
         Write-Host '請重新啟動 PowerShell 與 Codex，以載入設定、指令與 MCP。'
     } catch {
         $reason = $_.Exception.Message

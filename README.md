@@ -7,6 +7,7 @@ Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 ## 主要功能
 
 - 安裝或更新全域 `AGENTS.md`、`config.toml` 與權限規則。
+- 安裝全域 Windows 通知 Hook，分別提示任務完成、等待權限與等待回答。
 - 在全域安裝流程選擇 Git 或 CVS，合併對應的全域 AGENTS 與 Rules。
 - 安裝 Context7、Playwright MCP 設定。
 - 安裝或更新 `ccusage`，並新增或更新 `ccsessions`（Session 用量）與 `cdaily`（每日用量）指令。
@@ -46,6 +47,8 @@ Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 - CVS：加入 CVS 專屬 AGENTS、Rules 與全域換行保護 Hooks。`PreToolUse` 依 session 記錄 CVS 追蹤檔的原始狀態，`PostToolUse` 在每次工具完成後立即恢復，`Stop` 負責最終補漏與清理。
 
 換行保護使用 wildcard matcher，因此直接 `apply_patch`、code mode 的 `exec → tools.apply_patch`、Shell、MCP 與其他本機工具都使用同一份修改前基準。它只處理雜湊實際改變的檔案，精確恢復原本的 CRLF／LF、檔尾換行與 BOM，不會重新編碼文字；session 狀態在完成後自動清除。
+
+Windows 通知使用 `PermissionRequest`、`request_user_input` 的 `PreToolUse` 與 `Stop` 官方事件，依專案名稱顯示不同標題與提示音。同一 session、turn 與類型在短時間內只顯示一次；設定位於 `~/.codex/state/notifications/settings.json`，可停用全部或個別通知。可執行 `~/.codex/hooks/show-codex-notification.ps1 -Type Completed -Test` 測試通知流程。
 
 安裝成功後會將選擇記錄為預設專案體系。下次互動安裝按 Enter，或非互動安裝未提供 `-DevelopmentEnvironment` 時，會沿用上次的 Git／CVS 選擇。
 

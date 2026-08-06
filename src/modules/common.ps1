@@ -389,12 +389,20 @@ function Merge-TomlTemplate {
 $script:ManagedLineEndingHookSignaturePattern = '(?i)((?:crlf-updated-files|normalize-cvs-crlf|preserve-line-endings)\.ps1|Converting updated files? to CRLF|Normalizing updated files to CRLF|Finalizing CRLF normalization|CodexSettings CRLF (?:track|finalize)|Restoring original line endings)'
 $script:PreserveLineEndingHookSignaturePattern = '(?i)(preserve-line-endings\.ps1|Restoring original line endings)'
 $script:LegacyCrlfHookSignaturePattern = '(?i)((?:crlf-updated-files|normalize-cvs-crlf)\.ps1|Converting updated files? to CRLF|Normalizing updated files to CRLF|Finalizing CRLF normalization|CodexSettings CRLF (?:track|finalize))'
+$script:ManagedGlobalHookSignaturePattern = '(?i)(show-codex-notification\.ps1|CodexSettings Windows notification)'
 
 function Test-ManagedLineEndingHookEntry {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)]$Entry)
 
     return (($Entry | ConvertTo-Json -Depth 20 -Compress) -match $script:ManagedLineEndingHookSignaturePattern)
+}
+
+function Test-ManagedGlobalHookEntry {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)]$Entry)
+
+    return (($Entry | ConvertTo-Json -Depth 20 -Compress) -match $script:ManagedGlobalHookSignaturePattern)
 }
 
 function Remove-ManagedLineEndingHooksJson {
@@ -425,6 +433,31 @@ function Merge-LineEndingHooksJson {
     $cleaned = Remove-ManagedLineEndingHooksJson -Content $ExistingContent
     $existing = if ([string]::IsNullOrWhiteSpace($cleaned)) { [pscustomobject]@{ hooks = [pscustomobject]@{} } } else { $cleaned | ConvertFrom-Json -ErrorAction Stop }
     if ($null -eq $existing.hooks) { $existing | Add-Member -NotePropertyName hooks -NotePropertyValue ([pscustomobject]@{}) -Force }
+    $template = $TemplateContent | ConvertFrom-Json -ErrorAction Stop
+    foreach ($property in @($template.hooks.PSObject.Properties)) {
+        $current = if ($existing.hooks.PSObject.Properties.Name -contains $property.Name) { @($existing.hooks.PSObject.Properties[$property.Name].Value) } else { @() }
+        $existing.hooks | Add-Member -NotePropertyName $property.Name -NotePropertyValue (@($current) + @($property.Value)) -Force
+    }
+    return ($existing | ConvertTo-Json -Depth 30)
+}
+
+function Merge-HooksJson {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ExistingContent,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$TemplateContent,
+        [switch]$RemoveManagedGlobalHooks
+    )
+
+    $existing = if ([string]::IsNullOrWhiteSpace($ExistingContent)) { [pscustomobject]@{ hooks = [pscustomobject]@{} } } else { $ExistingContent | ConvertFrom-Json -ErrorAction Stop }
+    if ($null -eq $existing.hooks) { $existing | Add-Member -NotePropertyName hooks -NotePropertyValue ([pscustomobject]@{}) -Force }
+    if ($RemoveManagedGlobalHooks) {
+        foreach ($property in @($existing.hooks.PSObject.Properties)) {
+            $filtered = @($property.Value | Where-Object { -not (Test-ManagedGlobalHookEntry $_) })
+            if ($filtered.Count -eq 0) { $existing.hooks.PSObject.Properties.Remove($property.Name) }
+            else { $existing.hooks | Add-Member -NotePropertyName $property.Name -NotePropertyValue $filtered -Force }
+        }
+    }
     $template = $TemplateContent | ConvertFrom-Json -ErrorAction Stop
     foreach ($property in @($template.hooks.PSObject.Properties)) {
         $current = if ($existing.hooks.PSObject.Properties.Name -contains $property.Name) { @($existing.hooks.PSObject.Properties[$property.Name].Value) } else { @() }

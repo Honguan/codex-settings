@@ -176,7 +176,11 @@ function Get-InstallTemplateEntries($Target) {
         if ($Target.Mode -eq 'Global') {
             $environmentSource = Join-Path $Target.EnvironmentTemplate $relative
             if (Test-Path -LiteralPath $environmentSource -PathType Leaf) {
-                $content = $content.TrimEnd() + "`r`n`r`n" + [IO.File]::ReadAllText($environmentSource).Trim()
+                if ($relative.Replace('\', '/') -eq 'hooks.json') {
+                    $content = Merge-HooksJson -ExistingContent $content -TemplateContent ([IO.File]::ReadAllText($environmentSource))
+                } else {
+                    $content = $content.TrimEnd() + "`r`n`r`n" + [IO.File]::ReadAllText($environmentSource).Trim()
+                }
             }
         }
         [void]$entries.Add([pscustomobject]@{ RelativePath = $relative; Content = $content })
@@ -299,6 +303,9 @@ function Assert-GlobalLineEndingHook([ValidateSet('Git', 'CVS')][string]$Develop
     $restoreHookCount = 0
     $finalizeHookCount = 0
     $legacyHookCount = 0
+    $notificationQuestionHookCount = 0
+    $notificationPermissionHookCount = 0
+    $notificationCompletedHookCount = 0
     if (-not [string]::IsNullOrWhiteSpace($hookContent)) {
         $hookObject = $hookContent | ConvertFrom-Json -ErrorAction Stop
         if ($null -ne $hookObject.hooks) {
@@ -311,11 +318,20 @@ function Assert-GlobalLineEndingHook([ValidateSet('Git', 'CVS')][string]$Develop
                         if ($property.Name -eq 'Stop') { $finalizeHookCount++ }
                     }
                     if ($entryJson -match $script:LegacyCrlfHookSignaturePattern) { $legacyHookCount++ }
+                    if ($entryJson -match $script:ManagedGlobalHookSignaturePattern) {
+                        if ($property.Name -eq 'PreToolUse') { $notificationQuestionHookCount++ }
+                        if ($property.Name -eq 'PermissionRequest') { $notificationPermissionHookCount++ }
+                        if ($property.Name -eq 'Stop') { $notificationCompletedHookCount++ }
+                    }
                 }
             }
         }
     }
     $preserveScriptCount = if (Test-Path -LiteralPath (Join-Path $Root 'hooks\preserve-line-endings.ps1') -PathType Leaf) { 1 } else { 0 }
+    $notificationScriptCount = if (Test-Path -LiteralPath (Join-Path $Root 'hooks\show-codex-notification.ps1') -PathType Leaf) { 1 } else { 0 }
+    if ($notificationQuestionHookCount -ne 1 -or $notificationPermissionHookCount -ne 1 -or $notificationCompletedHookCount -ne 1 -or $notificationScriptCount -ne 1) {
+        throw "Windows 通知安裝檢查失敗：QuestionHookCount=$notificationQuestionHookCount PermissionHookCount=$notificationPermissionHookCount CompletedHookCount=$notificationCompletedHookCount NotificationScriptCount=$notificationScriptCount"
+    }
     if ($DevelopmentEnvironment -eq 'CVS') {
         if ($trackHookCount -ne 1 -or $restoreHookCount -ne 1 -or $finalizeHookCount -ne 1 -or $preserveScriptCount -ne 1 -or $legacyHookCount -ne 0) {
             throw "CVS 換行保護安裝檢查失敗：TrackHookCount=$trackHookCount RestoreHookCount=$restoreHookCount FinalizeHookCount=$finalizeHookCount PreserveLineEndingScriptCount=$preserveScriptCount LegacyCrlfHookCount=$legacyHookCount"
@@ -497,7 +513,10 @@ function Install-Target($Target, $Transaction, [switch]$Force) {
                     $configBase = Remove-ManagedBlock -Content $existing -StartMarker '# >>> CODEX-SETTINGS: >>>' -EndMarker '# <<< CODEX-SETTINGS: <<<'
                     $merged = Merge-TomlTemplate $configBase $template $strategy.Start $strategy.End $state.NewLine
                 }
-                'managed-hooks' { $merged = Merge-LineEndingHooksJson -ExistingContent $existing -TemplateContent $template }
+                'managed-hooks' {
+                    $withoutLineEndingHooks = Remove-ManagedLineEndingHooksJson -Content $existing
+                    $merged = Merge-HooksJson -ExistingContent $withoutLineEndingHooks -TemplateContent $template -RemoveManagedGlobalHooks
+                }
             }
             if ($isOptionalFeatureConfig) { $merged = Add-DefaultModeRequestUserInputFeature -Content $merged -NewLine $state.NewLine }
             Write-TextFileState $destination $merged $state.Encoding
