@@ -25,10 +25,10 @@ Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 
 ## 一鍵安裝
 
-下載 Release 中含版本號的單一檔案，例如 `CodexSettings-Setup-v1.8.5.cmd`，不需解壓縮，直接執行：
+下載 Release 中含版本號的單一檔案，例如 `CodexSettings-Setup-v1.8.6.cmd`，不需解壓縮，直接執行：
 
 ```powershell
-.\CodexSettings-Setup-v1.8.5.cmd
+.\CodexSettings-Setup-v1.8.6.cmd
 ```
 
 安裝器會在 `%TEMP%` 解開內嵌程式、執行後立即清理；全域安裝成功後會直接關閉，不再返回選單或等待按鍵。從原始碼執行時則使用根目錄的 `Install.cmd`。
@@ -206,10 +206,10 @@ cdaily 30                        # 顯示最近 30 天的每日統計
 確認版本後再建立對應的 Git tag。GitHub Actions 僅接受完整的 `v主版.次版.修訂版` 標籤。
 
 ```powershell
-.\tools\build-installer.ps1 -Version v1.8.5
+.\tools\build-installer.ps1 -Version v1.8.6
 ```
 
-輸出為唯一的 `dist\CodexSettings-Setup-v1.8.5.cmd`，內嵌所有必要模組與範本。正式發佈時，檔名版本會直接取自 Git tag。
+輸出為唯一的 `dist\CodexSettings-Setup-v1.8.6.cmd`，內嵌所有必要模組與範本。正式發佈時，檔名版本會直接取自 Git tag。
 
 原始碼依職責整理為：
 
