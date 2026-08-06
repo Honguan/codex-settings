@@ -34,14 +34,22 @@ function Select-InstallStyle {
     }
 }
 
-function Select-DevelopmentEnvironment {
+function Get-DefaultDevelopmentEnvironment([string]$Root) {
+    $manifest = Get-Manifest -Root $Root
+    $recorded = if ($null -ne $manifest) { [string]$manifest.DevelopmentEnvironment } else { '' }
+    if ($recorded -in @('Git', 'CVS')) { return $recorded }
+    return 'Git'
+}
+
+function Select-DevelopmentEnvironment([ValidateSet('Git', 'CVS')][string]$Default = 'Git') {
     Write-Host ''
     Write-Host '開發環境（設定會安裝到全域）'
-    Write-Host '[1] Git（預設）'
-    Write-Host '[2] CVS（包含全域 CRLF Hook）'
+    Write-Host $(if ($Default -eq 'Git') { '[1] Git（目前預設）' } else { '[1] Git' })
+    Write-Host $(if ($Default -eq 'CVS') { '[2] CVS（目前預設，包含全域 CRLF Hook）' } else { '[2] CVS（包含全域 CRLF Hook）' })
 
-    switch (Read-Host '請選擇 [1]') {
-        '' { return 'Git' }
+    $defaultOption = if ($Default -eq 'CVS') { '2' } else { '1' }
+    switch (Read-Host "請選擇 [$defaultOption]") {
+        '' { return $Default }
         '1' { return 'Git' }
         '2' { return 'CVS' }
         default { throw '開發環境選項無效。' }
@@ -174,7 +182,7 @@ function Get-Strategy([string]$ModeName, [string]$RelativePath) {
     if ($normalized -eq 'rules/default.rules' -or $normalized.EndsWith('/rules/default.rules')) {
         return [pscustomobject]@{ Name = 'managed-block'; Start = "# >>> CODEX-SETTINGS:$ModeName:RULES >>>"; End = "# <<< CODEX-SETTINGS:$ModeName:RULES <<<" }
     }
-    if ($normalized.EndsWith('/hooks.json')) { return [pscustomobject]@{ Name = 'managed-hooks'; Start = $null; End = $null } }
+    if ($normalized -eq 'hooks.json' -or $normalized.EndsWith('/hooks.json')) { return [pscustomobject]@{ Name = 'managed-hooks'; Start = $null; End = $null } }
     return [pscustomobject]@{ Name = 'replace'; Start = $null; End = $null }
 }
 
@@ -389,7 +397,13 @@ function Install-Target($Target, $Transaction, [switch]$Force) {
         } else {
             $existing = if ($owned -and $null -ne $previous -and [int]$previous.Version -lt 2) { '' } else { $state.Content }
             switch ($strategy.Name) {
-                'managed-block' { $merged = Merge-ManagedBlock $existing $template $strategy.Start $strategy.End $state.NewLine }
+                'managed-block' {
+                    if ($relative.Replace('\', '/').EndsWith('AGENTS.md')) {
+                        $merged = Merge-ManagedMarkdownBlock $existing $template $strategy.Start $strategy.End $state.NewLine
+                    } else {
+                        $merged = Merge-ManagedBlock $existing $template $strategy.Start $strategy.End $state.NewLine
+                    }
+                }
                 'managed-toml' { $merged = Merge-TomlTemplate $existing $template $strategy.Start $strategy.End $state.NewLine }
                 'managed-hooks' { $merged = Merge-HooksJson $existing $template }
             }

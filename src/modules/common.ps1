@@ -224,6 +224,72 @@ function Merge-ManagedBlock {
     return $base.TrimEnd() + $NewLine + $NewLine + $block + $NewLine
 }
 
+function Get-MarkdownTopLevelSections {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Content)
+
+    $matches = [regex]::Matches($Content, '(?m)^#\s+(.+?)\s*\r?$')
+    $sections = New-Object 'System.Collections.Generic.List[object]'
+    for ($index = 0; $index -lt $matches.Count; $index++) {
+        $start = $matches[$index].Index
+        $end = if ($index + 1 -lt $matches.Count) { $matches[$index + 1].Index } else { $Content.Length }
+        [void]$sections.Add([pscustomobject]@{
+            Heading = $matches[$index].Groups[1].Value.Trim()
+            Start = $start
+            Length = $end - $start
+            Content = $Content.Substring($start, $end - $start)
+        })
+    }
+    return $sections.ToArray()
+}
+
+function Remove-DuplicateManagedMarkdownSections {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ExistingContent,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ManagedContent
+    )
+
+    $managedSections = @{}
+    foreach ($section in @(Get-MarkdownTopLevelSections -Content $ManagedContent)) {
+        $managedSections[$section.Heading] = $section
+    }
+    $existingSections = @(Get-MarkdownTopLevelSections -Content $ExistingContent)
+    $overlappingHeadings = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($section in $existingSections) {
+        if ($managedSections.ContainsKey($section.Heading)) { [void]$overlappingHeadings.Add($section.Heading) }
+    }
+
+    $output = [Text.StringBuilder]::new()
+    $position = 0
+    foreach ($section in $existingSections) {
+        if (-not $managedSections.ContainsKey($section.Heading)) { continue }
+        $existingNormalized = ($section.Content -replace '\r\n?', "`n").Trim()
+        $managedNormalized = ([string]$managedSections[$section.Heading].Content -replace '\r\n?', "`n").Trim()
+        if ($overlappingHeadings.Count -lt 2 -and $existingNormalized -ne $managedNormalized) { continue }
+
+        [void]$output.Append($ExistingContent.Substring($position, $section.Start - $position))
+        $position = $section.Start + $section.Length
+    }
+    [void]$output.Append($ExistingContent.Substring($position))
+    return $output.ToString().TrimEnd()
+}
+
+function Merge-ManagedMarkdownBlock {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ExistingContent,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ManagedContent,
+        [Parameter(Mandatory = $true)][string]$StartMarker,
+        [Parameter(Mandatory = $true)][string]$EndMarker,
+        [string]$NewLine = "`r`n"
+    )
+
+    $base = Remove-ManagedBlock -Content $ExistingContent -StartMarker $StartMarker -EndMarker $EndMarker
+    $base = Remove-DuplicateManagedMarkdownSections -ExistingContent $base -ManagedContent $ManagedContent
+    return Merge-ManagedBlock -ExistingContent $base -ManagedContent $ManagedContent -StartMarker $StartMarker -EndMarker $EndMarker -NewLine $NewLine
+}
+
 function Get-TomlShape {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Content)

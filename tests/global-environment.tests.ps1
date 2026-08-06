@@ -23,6 +23,45 @@ function Install-TestEnvironment([ValidateSet('Git', 'CVS')][string]$Environment
 }
 
 try {
+    if ((Get-DefaultDevelopmentEnvironment -Root $globalRoot) -ne 'Git') { throw 'First installation must default to Git.' }
+    New-Item -ItemType Directory -Path $globalRoot -Force | Out-Null
+    $existingHooks = [ordered]@{
+        description = 'User hooks'
+        hooks = [ordered]@{
+            SessionStart = @(
+                [ordered]@{
+                    hooks = @(
+                        [ordered]@{
+                            type = 'command'
+                            command = 'custom-session-start.ps1'
+                        }
+                    )
+                }
+            )
+        }
+    }
+    Write-JsonFileAtomic -Path (Join-Path $globalRoot 'hooks.json') -Value $existingHooks -Depth 10
+    $legacyAgents = [IO.File]::ReadAllText((Join-Path $script:ScriptRoot 'templates\core\AGENTS.md')).TrimEnd()
+    $legacyAgents = $legacyAgents.Replace(
+        '- Preserve existing architecture, coding style, naming, and structure unless current requirements change them.',
+        '- Preserve existing architecture, coding style, naming, structure, and backward compatibility.'
+    )
+    $legacyAgents = [regex]::Replace($legacyAgents, '(?ms)^# Architecture\r?\n.*?(?=^# File Handling)', '')
+    $legacyAgents += "`r`n`r`n# User Custom Rules`r`n`r`n- Preserve this custom rule.`r`n"
+    [IO.File]::WriteAllText((Join-Path $globalRoot 'AGENTS.md'), $legacyAgents, [Text.UTF8Encoding]::new($false))
+
+    Install-TestEnvironment -Environment CVS
+    $agents = Get-Content -LiteralPath (Join-Path $globalRoot 'AGENTS.md') -Raw
+    foreach ($heading in @('Communication', 'Code Changes', 'Architecture', 'File Handling', 'Validation')) {
+        if ([regex]::Matches($agents, "(?m)^# $([regex]::Escape($heading))\s*$").Count -ne 1) { throw "Safe merge duplicated or omitted the AGENTS.md section: $heading" }
+    }
+    if ($agents -notmatch '(?m)^# User Custom Rules\s*$') { throw 'Safe merge removed a custom AGENTS.md section.' }
+    if ($agents -match 'and backward compatibility\.') { throw 'Safe merge did not update a legacy AGENTS.md section.' }
+    $installedHooks = Get-Content -LiteralPath (Join-Path $globalRoot 'hooks.json') -Raw | ConvertFrom-Json
+    if (@($installedHooks.hooks.SessionStart).Count -ne 1) { throw 'CVS installation did not preserve the unmanaged user hook.' }
+    if (@($installedHooks.hooks.PostToolUse).Count -ne 1 -or @($installedHooks.hooks.Stop).Count -ne 1) { throw 'CVS installation did not add its managed hooks.' }
+    if ((Get-DefaultDevelopmentEnvironment -Root $globalRoot) -ne 'CVS') { throw 'CVS was not recorded as the default project system.' }
+
     Install-TestEnvironment -Environment Git
     $agents = Get-Content -LiteralPath (Join-Path $globalRoot 'AGENTS.md') -Raw
     $rules = Get-Content -LiteralPath (Join-Path $globalRoot 'rules\default.rules') -Raw
@@ -31,6 +70,7 @@ try {
     if ($rules -notmatch 'Git project rules supplement' -or $rules -match 'CVS project rules supplement') { throw 'Git rules composition is invalid.' }
     if ($config -notmatch 'project_root_markers = \["\.git", "CVS"\]' -or $config -match '\.codex-root') { throw 'Global project root markers are invalid.' }
     if (Test-Path -LiteralPath (Join-Path $globalRoot 'hooks\normalize-cvs-crlf.ps1')) { throw 'Git environment installed the CVS CRLF hook.' }
+    if ((Get-DefaultDevelopmentEnvironment -Root $globalRoot) -ne 'Git') { throw 'Git was not recorded as the default project system.' }
 
     Install-TestEnvironment -Environment CVS
     $agents = Get-Content -LiteralPath (Join-Path $globalRoot 'AGENTS.md') -Raw
@@ -38,6 +78,9 @@ try {
     if ($agents -notmatch '# Communication' -or $agents -notmatch '# CVS Project Rules' -or $agents -match '# Git Project Rules') { throw 'CVS AGENTS.md composition is invalid.' }
     if ($rules -notmatch 'CVS project rules supplement' -or $rules -match 'Git project rules supplement') { throw 'CVS rules composition is invalid.' }
     Assert-GlobalEnvironmentInstallation -DevelopmentEnvironment CVS -Root $globalRoot
+    $installedHooks = Get-Content -LiteralPath (Join-Path $globalRoot 'hooks.json') -Raw | ConvertFrom-Json
+    if (@($installedHooks.hooks.SessionStart).Count -ne 1) { throw 'CVS installation did not preserve the unmanaged user hook.' }
+    if (@($installedHooks.hooks.PostToolUse).Count -ne 1 -or @($installedHooks.hooks.Stop).Count -ne 1) { throw 'CVS installation did not add its managed hooks.' }
 
     $outsideCvs = Join-Path $testRoot 'ordinary-directory'
     New-Item -ItemType Directory -Path $outsideCvs -Force | Out-Null
@@ -72,6 +115,18 @@ try {
     Install-TestEnvironment -Environment Git
     Assert-GlobalEnvironmentInstallation -DevelopmentEnvironment Git -Root $globalRoot
     if (Test-Path -LiteralPath (Join-Path $globalRoot 'hooks\normalize-cvs-crlf.ps1')) { throw 'Switching to Git did not remove the global CVS hook.' }
+
+    $script:capturedEnvironmentPrompt = ''
+    function Read-Host([string]$Prompt) {
+        $script:capturedEnvironmentPrompt = $Prompt
+        return ''
+    }
+    try {
+        if ((Select-DevelopmentEnvironment -Default CVS) -ne 'CVS') { throw 'Blank selection did not reuse the recorded CVS default.' }
+        if ($script:capturedEnvironmentPrompt -ne '請選擇 [2]') { throw 'CVS default was not shown in the selection prompt.' }
+    } finally {
+        Remove-Item -LiteralPath Function:\Read-Host -ErrorAction SilentlyContinue
+    }
 
     Write-Host 'Global development environment tests passed.'
 } finally {

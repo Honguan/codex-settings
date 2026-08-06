@@ -42,12 +42,15 @@ Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 
 選擇「全域安裝／更新」後會選擇開發環境：
 
-- Git（預設）：加入 Git 專屬 AGENTS 與 Rules，並移除全域 CVS CRLF Hook。
+- Git（首次安裝預設）：加入 Git 專屬 AGENTS 與 Rules，並移除全域 CVS CRLF Hook。
 - CVS：加入 CVS 專屬 AGENTS、Rules 與全域 CRLF Hook。Hook 只在目前目錄屬於 CVS 工作副本時執行。
+
+安裝成功後會將選擇記錄為預設專案體系。下次互動安裝按 Enter，或非互動安裝未提供 `-DevelopmentEnvironment` 時，會沿用上次的 Git／CVS 選擇。
 
 非互動安裝：
 
 ```powershell
+.\Install.cmd -Mode Global
 .\Install.cmd -Mode Global -DevelopmentEnvironment Git
 .\Install.cmd -Mode Global -DevelopmentEnvironment CVS
 ```
@@ -151,6 +154,24 @@ cdaily
 
 ## 發佈一鍵安裝包
 
+版本使用 `v主版.次版.修訂版` 格式，依本次變更中影響最大的類型升版：
+
+| 變更類型 | 升版規則 | 範例（目前為 `v1.3.4`） |
+| --- | --- | --- |
+| 大架構修正 | 主版本 `+1.0.0`，次版與修訂版歸零 | `v2.0.0` |
+| 主功能修改 | 次版本 `+0.1.0`，修訂版歸零 | `v1.4.0` |
+| 小功能或錯誤修正 | 修訂版本 `+0.0.1` | `v1.3.5` |
+
+同一版本包含多種類型時採最高層級，不重複累加。可用下列指令依最新 Git tag 計算下一版：
+
+```powershell
+.\tools\plan-release.ps1 -ChangeType Architecture
+.\tools\plan-release.ps1 -ChangeType Feature
+.\tools\plan-release.ps1 -ChangeType Fix
+```
+
+確認版本後再建立對應的 Git tag。GitHub Actions 僅接受完整的 `v主版.次版.修訂版` 標籤。
+
 ```powershell
 .\tools\build-installer.ps1
 ```
@@ -167,7 +188,8 @@ src\
 └─ templates\
 tests\
 tools\
-└─ build-installer.ps1
+├─ build-installer.ps1
+└─ plan-release.ps1
 ```
 
-推送 `v*` Git tag 時，GitHub Actions 會建立同名 Release 附件。
+推送符合 `v主版.次版.修訂版` 的 Git tag 時，GitHub Actions 會建立同名 Release 附件。

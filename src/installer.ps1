@@ -8,7 +8,7 @@ param(
     [switch]$InstallMattPocockSkills,
     [switch]$EnableDefaultModeRequestUserInput,
     [ValidateSet('Git', 'CVS')]
-    [string]$DevelopmentEnvironment = 'Git',
+    [string]$DevelopmentEnvironment,
     [switch]$Force,
     [ValidateSet('Merge', 'Replace')]
     [string]$InstallStyle = 'Merge'
@@ -19,6 +19,10 @@ $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $BackupBase = Join-Path $env:LOCALAPPDATA 'CodexSettingsBackup'
 . (Join-Path $ScriptRoot 'modules\common.ps1')
 . (Join-Path $ScriptRoot 'modules\installation.ps1')
+$globalRoot = Join-Path $HOME '.codex'
+if ([string]::IsNullOrWhiteSpace($DevelopmentEnvironment)) {
+    $DevelopmentEnvironment = Get-DefaultDevelopmentEnvironment -Root $globalRoot
+}
 
 if ($Mode -eq 'Interactive') {
     while ($true) {
@@ -29,11 +33,12 @@ if ($Mode -eq 'Interactive') {
             switch ($selection) {
                 'Global' {
                     $style = Select-InstallStyle
-                    $developmentEnvironment = Select-DevelopmentEnvironment
+                    $developmentEnvironment = Select-DevelopmentEnvironment -Default $DevelopmentEnvironment
                     $installRequestExecutionOptimizer = Select-OptionalGlobalSkill
                     $installMattPocockSkills = Select-OptionalMattPocockSkills
                     $enableDefaultModeRequestUserInput = Select-OptionalDefaultModeRequestUserInput
                     & $PSCommandPath -Mode Global -InstallStyle $style -DevelopmentEnvironment $developmentEnvironment -InstallRequestExecutionOptimizer:$installRequestExecutionOptimizer -InstallMattPocockSkills:$installMattPocockSkills -EnableDefaultModeRequestUserInput:$enableDefaultModeRequestUserInput
+                    $DevelopmentEnvironment = Get-DefaultDevelopmentEnvironment -Root $globalRoot
                 }
                 default { & $PSCommandPath -Mode $selection }
             }
@@ -57,7 +62,7 @@ if ($Mode -in @('Backup', 'Restore', 'Uninstall')) {
 if ($Force) { $InstallStyle = 'Replace' }
 $Force = $InstallStyle -eq 'Replace'
 $targets = @(Resolve-GlobalTargets -DevelopmentEnvironment $DevelopmentEnvironment -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput)
-$preflight = Join-Path $HOME '.codex'
+$preflight = $globalRoot
 Test-Prerequisites 'Global' $preflight
 foreach ($target in $targets) { Test-DirectoryWritable -Path $target.Root }
 
@@ -143,7 +148,7 @@ try {
         Write-Host ''
         Write-Host '安裝完成。'
         Write-Host "方式：$InstallStyle"
-        Write-Host "開發環境：$DevelopmentEnvironment（全域）"
+        Write-Host "預設專案體系：$DevelopmentEnvironment（已記錄於全域設定）"
         Write-Host "目標：$($results.Count)"
         foreach ($result in $results) {
             $changedCount = @($result.Files | Where-Object Changed).Count

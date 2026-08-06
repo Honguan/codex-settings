@@ -13,6 +13,12 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v6
+      - name: Validate release tag
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF_NAME -notmatch '^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') {
+            throw "Invalid release tag: $env:GITHUB_REF_NAME. Expected vMAJOR.MINOR.PATCH."
+          }
       - name: Validate installer
         shell: pwsh
         run: |
