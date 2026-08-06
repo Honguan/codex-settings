@@ -18,9 +18,15 @@ function ConvertFrom-HookInputJson([string]$Text) {
         $originalError = $_
         $pattern = '(?s)(?<prefix>"last_assistant_message"\s*:\s*)".*"(?<suffix>\s*}\s*)$'
         $sanitized = [regex]::Replace($Text, $pattern, '${prefix}null${suffix}')
-        if ($sanitized -eq $Text) { throw $originalError }
-        try { return $sanitized | ConvertFrom-Json -ErrorAction Stop }
-        catch { throw $originalError }
+        if ($sanitized -ne $Text) {
+            try { return $sanitized | ConvertFrom-Json -ErrorAction Stop } catch {}
+        }
+        $messageProperty = @([regex]::Matches($Text, ',\s*"last_assistant_message"\s*:'))[-1]
+        if ($null -ne $messageProperty) {
+            $prefix = $Text.Substring(0, $messageProperty.Index).TrimEnd()
+            try { return ($prefix + '}') | ConvertFrom-Json -ErrorAction Stop } catch {}
+        }
+        throw $originalError
     }
 }
 
@@ -102,6 +108,28 @@ function Get-CvsTrackedFiles([string]$Root) {
                 if ($path.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase) -and (Test-Path -LiteralPath $path -PathType Container)) { $directories.Enqueue($path) }
             }
         }
+    }
+    return @($files)
+}
+
+function Test-CvsTrackedFile([string]$Path) {
+    $entriesPath = Join-Path (Split-Path -Parent $Path) 'CVS\Entries'
+    if (-not (Test-Path -LiteralPath $entriesPath -PathType Leaf)) { return $false }
+    $name = [IO.Path]::GetFileName($Path)
+    return @([IO.File]::ReadAllLines($entriesPath) -match ('^/' + [regex]::Escape($name) + '/')).Count -gt 0
+}
+
+function Get-HookCandidateFiles($InputObject, [string]$Root) {
+    $files = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $canonicalRoot = [IO.Path]::GetFullPath($Root).TrimEnd('\', '/')
+    $rootPrefix = $canonicalRoot + [IO.Path]::DirectorySeparatorChar
+    $command = ([string]$InputObject.tool_input.command).Replace('\n', "`n")
+    foreach ($match in [regex]::Matches($command, '(?m)^\*\*\* (?:Update|Add|Delete) File:\s*(?<path>[^\r\n]+)$')) {
+        $candidate = $match.Groups['path'].Value.Trim().Replace('\\', '\')
+        try {
+            $path = if ([IO.Path]::IsPathRooted($candidate)) { [IO.Path]::GetFullPath($candidate) } else { [IO.Path]::GetFullPath((Join-Path ([string]$InputObject.cwd) $candidate)) }
+            if ($path.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase) -and (Test-CvsTrackedFile -Path $path)) { [void]$files.Add($path) }
+        } catch {}
     }
     return @($files)
 }
@@ -209,39 +237,60 @@ function Save-InitialState($InputObject) {
 
 function Restore-InitialState($InputObject, [Collections.Generic.List[string]]$Warnings, [switch]$Cleanup) {
     $statePath = Get-StatePath -SessionId ([string]$InputObject.session_id)
-    if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) { return }
     $changedFiles = [Collections.Generic.List[string]]::new()
-    try {
-        $state = [IO.File]::ReadAllText($statePath) | ConvertFrom-Json -ErrorAction Stop
-        $root = [IO.Path]::GetFullPath([string]$state.projectRoot).TrimEnd('\', '/')
-        $rootPrefix = $root + [IO.Path]::DirectorySeparatorChar
-        foreach ($property in @($state.files.PSObject.Properties)) {
+    $root = Get-CvsRoot -StartPath ([string]$InputObject.cwd)
+    if (Test-Path -LiteralPath $statePath -PathType Leaf) {
+        try {
+            $state = [IO.File]::ReadAllText($statePath) | ConvertFrom-Json -ErrorAction Stop
+            $root = [IO.Path]::GetFullPath([string]$state.projectRoot).TrimEnd('\', '/')
+            $rootPrefix = $root + [IO.Path]::DirectorySeparatorChar
+            foreach ($property in @($state.files.PSObject.Properties)) {
+                try {
+                    $path = [IO.Path]::GetFullPath([string]$property.Name)
+                    if (-not $path.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) { continue }
+                    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+                    $bytes = [IO.File]::ReadAllBytes($path)
+                    if (Test-BinaryBytes -Bytes $bytes) { continue }
+                    $original = $property.Value
+                    if ((Get-Sha256 -Bytes $bytes) -eq [string]$original.sha256) { continue }
+
+                    $restored = Restore-BomBytes -Bytes $bytes -OriginalBom ([string]$original.bom)
+                    $restoreStyle = if ([string]$original.lineEnding -eq 'MIXED') { [string]$original.preferredLineEnding } else { [string]$original.lineEnding }
+                    if ($restoreStyle -in @('CRLF', 'LF')) {
+                        $restored = Convert-LineEndingBytes -Bytes $restored -Style $restoreStyle
+                    }
+                    $finalStyle = if ($restoreStyle -in @('CRLF', 'LF')) { $restoreStyle } elseif ([string]$original.finalNewlineStyle -in @('CRLF', 'LF')) { [string]$original.finalNewlineStyle } else { 'LF' }
+                    $restored = Set-FinalNewlineBytes -Bytes $restored -FinalNewline ([bool]$original.finalNewline) -Style $finalStyle
+                    if (-not [Linq.Enumerable]::SequenceEqual([byte[]]$bytes, [byte[]]$restored)) {
+                        [IO.File]::WriteAllBytes($path, $restored)
+                        $changedFiles.Add($path)
+                    }
+                } catch {
+                    $Warnings.Add("Failed to restore line endings for $($property.Name): $($_.Exception.Message)")
+                }
+            }
+        } finally {
+            if ($Cleanup) { Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue }
+        }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($root)) {
+        foreach ($path in Get-HookCandidateFiles -InputObject $InputObject -Root $root) {
             try {
-                $path = [IO.Path]::GetFullPath([string]$property.Name)
-                if (-not $path.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) { continue }
                 if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
                 $bytes = [IO.File]::ReadAllBytes($path)
                 if (Test-BinaryBytes -Bytes $bytes) { continue }
-                $original = $property.Value
-                if ((Get-Sha256 -Bytes $bytes) -eq [string]$original.sha256) { continue }
-
-                $restored = Restore-BomBytes -Bytes $bytes -OriginalBom ([string]$original.bom)
-                $restoreStyle = if ([string]$original.lineEnding -eq 'MIXED') { [string]$original.preferredLineEnding } else { [string]$original.lineEnding }
-                if ($restoreStyle -in @('CRLF', 'LF')) {
-                    $restored = Convert-LineEndingBytes -Bytes $restored -Style $restoreStyle
-                }
-                $finalStyle = if ($restoreStyle -in @('CRLF', 'LF')) { $restoreStyle } elseif ([string]$original.finalNewlineStyle -in @('CRLF', 'LF')) { [string]$original.finalNewlineStyle } else { 'LF' }
-                $restored = Set-FinalNewlineBytes -Bytes $restored -FinalNewline ([bool]$original.finalNewline) -Style $finalStyle
+                $lineEndings = Get-LineEndingState -Bytes $bytes
+                if ($lineEndings.Style -ne 'MIXED') { continue }
+                $restored = Convert-LineEndingBytes -Bytes $bytes -Style $lineEndings.PreferredStyle
                 if (-not [Linq.Enumerable]::SequenceEqual([byte[]]$bytes, [byte[]]$restored)) {
                     [IO.File]::WriteAllBytes($path, $restored)
-                    $changedFiles.Add($path)
+                    if (-not $changedFiles.Contains($path)) { $changedFiles.Add($path) }
                 }
             } catch {
-                $Warnings.Add("Failed to restore line endings for $($property.Name): $($_.Exception.Message)")
+                $Warnings.Add("Failed to repair mixed line endings for $path`: $($_.Exception.Message)")
             }
         }
-    } finally {
-        if ($Cleanup) { Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue }
     }
     return $changedFiles.ToArray()
 }
