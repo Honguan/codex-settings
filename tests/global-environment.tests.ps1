@@ -116,6 +116,7 @@ try {
     $rules = Get-Content -LiteralPath (Join-Path $globalRoot 'rules\default.rules') -Raw
     $config = Get-Content -LiteralPath (Join-Path $globalRoot 'config.toml') -Raw
     if ($agents -notmatch '# Communication' -or $agents -notmatch '# Git Project Rules' -or $agents -match '# CVS Project Rules') { throw 'Git AGENTS.md composition is invalid.' }
+    if ([regex]::Matches($agents, '(?m)^## Issue Completion Workflow\s*$').Count -ne 1 -or $agents -notmatch 'Fixes #<issue-number>' -or $agents -notmatch 'only after the fixing commit is on the default branch') { throw 'Git Issue completion workflow is missing or duplicated.' }
     if ([regex]::Matches($rules, 'Git project rules supplement').Count -ne 1 -or [regex]::Matches($rules, 'CVS project rules supplement').Count -ne 0) { throw 'Git rules contain duplicate or conflicting project-type settings.' }
     if ($config -notmatch 'project_root_markers = \["\.git", "CVS"\]' -or $config -match '\.codex-root') { throw 'Global project root markers are invalid.' }
     if ((Get-DefaultDevelopmentEnvironment -Root $globalRoot) -ne 'Git') { throw 'Git was not recorded as the default project system.' }
@@ -127,6 +128,7 @@ try {
     $agents = Get-Content -LiteralPath (Join-Path $globalRoot 'AGENTS.md') -Raw
     $rules = Get-Content -LiteralPath (Join-Path $globalRoot 'rules\default.rules') -Raw
     if ($agents -notmatch '# Communication' -or $agents -notmatch '# CVS Project Rules' -or $agents -match '# Git Project Rules') { throw 'CVS AGENTS.md composition is invalid.' }
+    if ($agents -match '(?m)^## Issue Completion Workflow\s*$') { throw 'CVS installation retained Git Issue completion instructions.' }
     if ([regex]::Matches($rules, 'CVS project rules supplement').Count -ne 1 -or [regex]::Matches($rules, 'Git project rules supplement').Count -ne 0) { throw 'CVS rules contain duplicate or conflicting project-type settings.' }
     $installedHooks = Get-Content -LiteralPath (Join-Path $globalRoot 'hooks.json') -Raw | ConvertFrom-Json
     if (@($installedHooks.hooks.SessionStart).Count -ne 1) { throw 'CVS installation did not preserve the unmanaged user hook.' }

@@ -23,6 +23,15 @@ These rules supplement the global rules.
   - Documentation: `docs: <short description>`
   - Maintenance or settings: `chore: <short description>`
 
+## Issue Completion Workflow
+
+- When fixing a GitHub Issue, read its number, title, body, acceptance criteria, and relevant comments before changing code.
+- Complete the fix and relevant validation before staging. If validation fails, do not commit or close the Issue.
+- Stage and commit only files related to that Issue. The commit body must contain `Fixes #<issue-number>`; avoid combining unrelated Issues in one commit.
+- Close the Issue only after the fixing commit is on the default branch. A commit on a feature branch must leave the Issue open until it is merged.
+- After an authorized push to the default branch, verify that GitHub closed the Issue. If automatic closing fails, report the error instead of claiming completion.
+- Add at most one concise completion comment containing the commit hash and validation summary. Before repeating the workflow, check the existing commit and Issue state to avoid duplicate commits, comments, or close operations.
+
 ## Explicit Authorization Required
 
 - Never push, force-push, open or modify a pull request, merge, publish a release, create a tag, delete a branch, or modify remote issues unless the user explicitly requests that action.

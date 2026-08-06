@@ -42,7 +42,7 @@ Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 
 選擇「全域安裝／更新」後會選擇開發環境：
 
-- Git（首次安裝預設）：加入 Git 專屬 AGENTS 與 Rules。
+- Git（首次安裝預設）：加入 Git 專屬 AGENTS、Rules 與 Issue 完成工作流；修正必須先驗證、以 `Fixes #N` 提交，且進入預設分支後才能關閉 Issue。
 - CVS：加入 CVS 專屬 AGENTS、Rules 與全域換行保護 Hooks。`PreToolUse` 依 session 記錄 CVS 追蹤檔的原始狀態，`PostToolUse` 在每次工具完成後立即恢復，`Stop` 負責最終補漏與清理。
 
 換行保護使用 wildcard matcher，因此直接 `apply_patch`、code mode 的 `exec → tools.apply_patch`、Shell、MCP 與其他本機工具都使用同一份修改前基準。它只處理雜湊實際改變的檔案，精確恢復原本的 CRLF／LF、檔尾換行與 BOM，不會重新編碼文字；session 狀態在完成後自動清除。
