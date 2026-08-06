@@ -57,13 +57,15 @@ try {
     }
     if (@($hooksTemplate.hooks.Stop)[0].hooks[0].PSObject.Properties.Name -contains 'statusMessage') { throw 'Stop Hook 不應持續顯示執行狀態。' }
 
-    New-Item -ItemType Directory -Path (Join-Path $projectRoot 'CVS'), $stateRoot -Force | Out-Null
-    $trackedFiles = @('crlf.txt', 'lf.txt', 'no-final.txt', 'with-final.txt', 'utf8-bom.txt', 'ansi.txt', 'unchanged.txt', 'binary.bin', '.codex\ignored.txt')
+    New-Item -ItemType Directory -Path (Join-Path $testRoot 'CVS'), (Join-Path $projectRoot 'CVS'), $stateRoot -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $testRoot 'CVS\Entries'), '', [Text.Encoding]::ASCII)
+    $trackedFiles = @('crlf.txt', 'lf.txt', 'mixed.txt', 'no-final.txt', 'with-final.txt', 'utf8-bom.txt', 'ansi.txt', 'unchanged.txt', 'binary.bin', '.codex\ignored.txt')
     $entries = @($trackedFiles | Where-Object { $_ -notmatch '\\' } | ForEach-Object { "/$_/1.1///" }) + 'D/.codex////'
     [IO.File]::WriteAllLines((Join-Path $projectRoot 'CVS\Entries'), $entries, [Text.Encoding]::ASCII)
 
     Write-TestBytes 'crlf.txt' ([Text.Encoding]::ASCII.GetBytes("before`r`nend`r`n"))
     Write-TestBytes 'lf.txt' ([Text.Encoding]::ASCII.GetBytes("before`nend`n"))
+    Write-TestBytes 'mixed.txt' ([Text.Encoding]::ASCII.GetBytes("before`r`nmiddle`r`nend`n"))
     Write-TestBytes 'no-final.txt' ([Text.Encoding]::ASCII.GetBytes("before`r`nend"))
     Write-TestBytes 'with-final.txt' ([Text.Encoding]::ASCII.GetBytes("before`nend`n"))
     Write-TestBytes 'utf8-bom.txt' ([byte[]](0xEF, 0xBB, 0xBF) + [Text.Encoding]::UTF8.GetBytes("before`r`nend`r`n"))
@@ -83,14 +85,16 @@ try {
     if (-not (Test-Path -LiteralPath $statePathA -PathType Leaf)) { throw 'PreToolUse 未建立 session 狀態檔。' }
     $firstStateContent = Get-Content -LiteralPath $statePathA -Raw
     $stateA = $firstStateContent | ConvertFrom-Json
-    if (@($stateA.files.PSObject.Properties).Count -ne 7) { throw 'PreToolUse 未正確記錄 CVS 追蹤檔或錯誤包含管理目錄。' }
+    if (@($stateA.files.PSObject.Properties).Count -ne 8) { throw 'PreToolUse 未正確記錄 CVS 追蹤檔或錯誤包含管理目錄。' }
     $crlfState = $stateA.files.PSObject.Properties[(Join-Path $projectRoot 'crlf.txt')].Value
+    $mixedState = $stateA.files.PSObject.Properties[(Join-Path $projectRoot 'mixed.txt')].Value
     $noFinalState = $stateA.files.PSObject.Properties[(Join-Path $projectRoot 'no-final.txt')].Value
     $bomState = $stateA.files.PSObject.Properties[(Join-Path $projectRoot 'utf8-bom.txt')].Value
-    if ($crlfState.lineEnding -ne 'CRLF' -or -not [bool]$crlfState.finalNewline -or $noFinalState.finalNewline -ne $false -or $bomState.bom -ne 'UTF8-BOM') { throw 'PreToolUse 狀態內容不完整或錯誤。' }
+    if ($crlfState.lineEnding -ne 'CRLF' -or $mixedState.lineEnding -ne 'MIXED' -or $mixedState.preferredLineEnding -ne 'CRLF' -or -not [bool]$crlfState.finalNewline -or $noFinalState.finalNewline -ne $false -or $bomState.bom -ne 'UTF8-BOM') { throw 'PreToolUse 狀態內容不完整或錯誤。' }
 
     Write-TestBytes 'crlf.txt' ([Text.Encoding]::ASCII.GetBytes("before`r`nend`r`nadded1`nadded2`nadded3`n"))
     Write-TestBytes 'lf.txt' ([Text.Encoding]::ASCII.GetBytes("before`nend`nadded1`r`nadded2`r`nadded3`r`n"))
+    Write-TestBytes 'mixed.txt' ([Text.Encoding]::ASCII.GetBytes("before`r`nmiddle`nend`nadded`n"))
     Write-TestBytes 'no-final.txt' ([Text.Encoding]::ASCII.GetBytes("before`r`nend`r`nadded`n"))
     Write-TestBytes 'with-final.txt' ([Text.Encoding]::ASCII.GetBytes("before`nend`r`n`r`n"))
     Write-TestBytes 'utf8-bom.txt' ([Text.Encoding]::UTF8.GetBytes("before`r`nend`nadded`n"))
@@ -101,12 +105,13 @@ try {
     Invoke-Hook -Mode Restore -SessionId $sessionA -InputText $postInput | Out-Null
     if (-not (Test-Path -LiteralPath $statePathA -PathType Leaf)) { throw 'PostToolUse 過早清理 session 狀態檔。' }
     $restoreDiagnostic = @(Get-Content -LiteralPath (Join-Path $diagnosticRoot 'session-A.log') | ForEach-Object { $_ | ConvertFrom-Json }) | Where-Object { $_.mode -eq 'Restore' } | Select-Object -Last 1
-    if ($restoreDiagnostic.event -ne 'PostToolUse' -or $restoreDiagnostic.handler -ne 'preserve-line-endings' -or $restoreDiagnostic.result -ne 'success' -or $restoreDiagnostic.changedFileCount -ne 6 -or @($restoreDiagnostic.changedFiles).Count -ne 6) {
+    if ($restoreDiagnostic.event -ne 'PostToolUse' -or $restoreDiagnostic.handler -ne 'preserve-line-endings' -or $restoreDiagnostic.result -ne 'success' -or $restoreDiagnostic.changedFileCount -ne 7 -or @($restoreDiagnostic.changedFiles).Count -ne 7) {
         throw '換行 Hook 未寫入可診斷的還原紀錄。'
     }
 
     Assert-Bytes 'crlf.txt' ([Text.Encoding]::ASCII.GetBytes("before`r`nend`r`nadded1`r`nadded2`r`nadded3`r`n"))
     Assert-Bytes 'lf.txt' ([Text.Encoding]::ASCII.GetBytes("before`nend`nadded1`nadded2`nadded3`n"))
+    Assert-Bytes 'mixed.txt' ([Text.Encoding]::ASCII.GetBytes("before`r`nmiddle`r`nend`r`nadded`r`n"))
     Assert-Bytes 'no-final.txt' ([Text.Encoding]::ASCII.GetBytes("before`r`nend`r`nadded"))
     Assert-Bytes 'with-final.txt' ([Text.Encoding]::ASCII.GetBytes("before`nend`n"))
     Assert-Bytes 'utf8-bom.txt' ([byte[]](0xEF, 0xBB, 0xBF) + [Text.Encoding]::UTF8.GetBytes("before`r`nend`r`nadded`r`n"))
@@ -126,13 +131,21 @@ try {
     if (-not (Test-Path -LiteralPath (Join-Path $stateRoot 'session-B.json'))) { throw '不同 session 未建立獨立狀態檔。' }
 
     Write-TestBytes 'crlf.txt' ([Text.Encoding]::ASCII.GetBytes("before`r`nend`r`nadded1`nfinal`n"))
-    $restoreInput = New-HookInput -EventName Stop -SessionId $sessionA
-    Invoke-Hook -Mode Finalize -SessionId $sessionA -InputText $restoreInput | Out-Null
+    $malformedStopInput = [ordered]@{
+        session_id = $sessionA
+        cwd = $projectRoot
+        hook_event_name = 'Stop'
+        stop_hook_active = $false
+        last_assistant_message = '已刪除 "activity_config.php" 註解'
+    } | ConvertTo-Json -Compress
+    $malformedStopInput = $malformedStopInput.Replace('\"activity_config.php\"', '"activity_config.php"')
+    Invoke-Hook -Mode Finalize -SessionId $sessionA -InputText $malformedStopInput | Out-Null
     if (Test-Path -LiteralPath $statePathA) { throw 'Stop Hook 未清理完成的 session 狀態檔。' }
     if (-not (Test-Path -LiteralPath (Join-Path $stateRoot 'session-B.json'))) { throw 'Stop Hook 誤刪其他 session 狀態檔。' }
 
     Assert-Bytes 'crlf.txt' ([Text.Encoding]::ASCII.GetBytes("before`r`nend`r`nadded1`r`nfinal`r`n"))
     Assert-Bytes 'lf.txt' ([Text.Encoding]::ASCII.GetBytes("before`nend`nadded1`nadded2`nadded3`n"))
+    Assert-Bytes 'mixed.txt' ([Text.Encoding]::ASCII.GetBytes("before`r`nmiddle`r`nend`r`nadded`r`n"))
     Assert-Bytes 'no-final.txt' ([Text.Encoding]::ASCII.GetBytes("before`r`nend`r`nadded`r`nsecond"))
     Assert-Bytes 'with-final.txt' ([Text.Encoding]::ASCII.GetBytes("before`nend`n"))
     Assert-Bytes 'utf8-bom.txt' ([byte[]](0xEF, 0xBB, 0xBF) + [Text.Encoding]::UTF8.GetBytes("before`r`nend`r`nadded`r`n"))

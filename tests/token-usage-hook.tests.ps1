@@ -14,10 +14,10 @@ function Set-Snapshot([string]$SessionId, [long]$InputTokens, [long]$CachedInput
     [IO.File]::WriteAllText($snapshotPath, ($value | ConvertTo-Json -Compress), [Text.UTF8Encoding]::new($false))
 }
 
-function Invoke-TokenHook([string]$SessionId, [string]$TurnId, [hashtable]$AdditionalInput = @{}) {
+function Invoke-TokenHook([string]$SessionId, [string]$TurnId, [hashtable]$AdditionalInput = @{}, [string]$RawInput) {
     $inputObject = [ordered]@{ session_id = $SessionId; turn_id = $TurnId; cwd = $repositoryRoot; hook_event_name = 'Stop'; stop_hook_active = $false }
     foreach ($property in $AdditionalInput.GetEnumerator()) { $inputObject[$property.Key] = $property.Value }
-    $inputText = $inputObject | ConvertTo-Json -Depth 8 -Compress
+    $inputText = if ([string]::IsNullOrWhiteSpace($RawInput)) { $inputObject | ConvertTo-Json -Depth 8 -Compress } else { $RawInput }
     $startInfo = [Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = 'pwsh'
     foreach ($argument in @('-NoLogo', '-NoProfile', '-File', $hookScript)) { $startInfo.ArgumentList.Add($argument) }
@@ -100,6 +100,22 @@ Get-Content -LiteralPath $env:CODEX_SETTINGS_CCSESSIONS_SNAPSHOT -Raw
         if (-not $fromTranscript.reason.Contains($expected)) { throw "rollout token_count 未優先使用：$expected" }
     }
 
+    $sessionMalformed = '019fd65b-39b0-7d60-99fc-deb094690004'
+    $malformedInput = [ordered]@{
+        session_id = $sessionMalformed
+        turn_id = 'turn-malformed-message'
+        cwd = $repositoryRoot
+        transcript_path = $rolloutPath
+        hook_event_name = 'Stop'
+        stop_hook_active = $false
+        last_assistant_message = '已刪除 "activity_config.php" 註解'
+    } | ConvertTo-Json -Compress
+    $malformedInput = $malformedInput.Replace('\"activity_config.php\"', '"activity_config.php"')
+    $fromMalformedInput = Invoke-TokenHook -SessionId $sessionMalformed -TurnId 'turn-malformed-message' -RawInput $malformedInput
+    if ([string]$fromMalformedInput.systemMessage -match 'Token usage unavailable' -or -not $fromMalformedInput.reason.Contains('Input           2.47K')) {
+        throw 'Stop payload 的 last_assistant_message 含未跳脫引號時，未顯示 rollout 使用率。'
+    }
+
     $sessionRetry = '019fd65b-39b0-7d60-99fc-deb094690003'
     Set-Snapshot -SessionId $sessionRetry -InputTokens 8765 -CachedInputTokens 4321 -CacheWriteTokens 123 -OutputTokens 987 -TotalTokens 14073 -CostUsd 0.02
     $env:CODEX_SETTINGS_CCSESSIONS_RETRY_MARKER = $retryMarkerPath
@@ -135,7 +151,7 @@ Get-Content -LiteralPath $env:CODEX_SETTINGS_CCSESSIONS_SNAPSHOT -Raw
     $other = Invoke-TokenHook -SessionId $sessionB -TurnId 'turn-b1'
     if ($other.reason -notmatch 'Token usage since session start') { throw '不同 Session 未使用獨立基準。' }
     $sessionStates = @(Get-ChildItem -LiteralPath $stateRoot -Filter '*.json' | Where-Object Name -ne 'settings.json')
-    if ($sessionStates.Count -ne 5) { throw "多 Session 狀態檔數量錯誤：$($sessionStates.Count)" }
+    if ($sessionStates.Count -ne 6) { throw "多 Session 狀態檔數量錯誤：$($sessionStates.Count)" }
 
     $stateA = @($sessionStates | Where-Object { (Get-Content -LiteralPath $_.FullName -Raw | ConvertFrom-Json).sessionId -eq $sessionA })[0]
     [IO.File]::WriteAllText($stateA.FullName, '{invalid', [Text.UTF8Encoding]::new($false))
