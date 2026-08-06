@@ -23,6 +23,10 @@ try {
     $hookConfiguration = Get-Content -Raw -LiteralPath $hooksTemplate | ConvertFrom-Json
     $matcher = [string]$hookConfiguration.hooks.PostToolUse[0].matcher
     if ('exec' -notmatch $matcher) { throw "PostToolUse matcher does not include exec: $matcher" }
+    $windowsHookCommand = [string]$hookConfiguration.hooks.PostToolUse[0].hooks[0].commandWindows
+    if ($windowsHookCommand -notmatch '^pwsh\.exe\s' -or $windowsHookCommand -notmatch 'ExecutionPolicy Bypass') {
+        throw 'Windows Hook must use PowerShell 7 with the bypass execution policy.'
+    }
 
     $paths = @('A.php', 'B.php', 'C.php') | ForEach-Object { Join-Path $projectRoot $_ }
     foreach ($path in $paths) {
@@ -34,6 +38,20 @@ try {
     [IO.File]::WriteAllText($untouchedPath, "<?php`necho 'untouched';`n", (New-Object Text.UTF8Encoding($false)))
 
     $post = @{ tool_input = @{ file_path = $paths[0] } } | ConvertTo-Json -Compress
+    Push-Location $projectRoot
+    try {
+        $windowsPostOutput = @(($post | & cmd.exe /d /s /c $windowsHookCommand) 2>&1)
+        $windowsPostExitCode = $LASTEXITCODE
+    }
+    finally {
+        Pop-Location
+    }
+    if ($windowsPostExitCode -ne 0) {
+        throw "Windows PostToolUse wrapper exited with code $windowsPostExitCode. Output: $($windowsPostOutput -join "`n")"
+    }
+    if (($windowsPostOutput -join "`n") -notmatch 'CRLF tracked files: 1') {
+        throw 'Windows PostToolUse wrapper did not add the expected file to state.'
+    }
     $directOutput = @(($post | & $pwsh -NoProfile -ExecutionPolicy Bypass -File $hookPath) 2>&1)
     if (($directOutput -join "`n") -notmatch 'CRLF tracked files: 1') { throw 'Direct apply_patch target was not reported.' }
     $post | & $pwsh -NoProfile -ExecutionPolicy Bypass -File $hookPath | Out-Null
