@@ -9,6 +9,8 @@ $globalRoot = Join-Path $testRoot '.codex'
 $hooksPath = Join-Path $globalRoot 'hooks.json'
 $mockPath = Join-Path $testRoot 'mock-app-server.ps1'
 $capturePath = Join-Path $testRoot 'trust-request.json'
+$codexShimPath = Join-Path $testRoot 'codex.cmd'
+$originalPath = $env:PATH
 
 try {
     $installerSource = Get-Content -LiteralPath (Join-Path $script:ScriptRoot 'installer.ps1') -Raw
@@ -65,8 +67,20 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
         throw 'Hook trust update did not use the supported config/batchWrite shape.'
     }
 
+    $pwshPath = (Get-Command pwsh -ErrorAction Stop).Source
+    $shimSource = "@echo off`r`n`"$pwshPath`" -NoLogo -NoProfile -File `"$mockPath`" %*`r`n"
+    [IO.File]::WriteAllText($codexShimPath, $shimSource, [Text.ASCIIEncoding]::new())
+    Remove-Item Env:\CODEX_SETTINGS_APP_SERVER_TEST_COMMAND
+    $env:PATH = $testRoot
+
+    $shimResult = Set-CodexSettingsHookTrust -Root $globalRoot -Cwd $repositoryRoot
+    if ($shimResult.TrustedCount -ne 2 -or -not [bool]$shimResult.Verified) {
+        throw 'Installer did not start and verify Hooks through the resolved codex.cmd shim.'
+    }
+
     Write-Host 'Managed hook trust tests passed.'
 } finally {
+    $env:PATH = $originalPath
     Remove-Item Env:\CODEX_SETTINGS_APP_SERVER_TEST_COMMAND -ErrorAction SilentlyContinue
     Remove-Item Env:\CODEX_SETTINGS_TEST_GLOBAL_ROOT -ErrorAction SilentlyContinue
     Remove-Item Env:\CODEX_SETTINGS_TEST_HOOKS_PATH -ErrorAction SilentlyContinue

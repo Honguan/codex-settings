@@ -534,9 +534,24 @@ function Set-CodexSettingsHookTrust([string]$Root, [string]$Cwd = (Get-Location)
         $startInfo.FileName = (Get-Command pwsh -ErrorAction Stop).Source
         foreach ($argument in @('-NoLogo', '-NoProfile', '-File', $env:CODEX_SETTINGS_APP_SERVER_TEST_COMMAND)) { $startInfo.ArgumentList.Add($argument) }
     } else {
-        [void](Get-Command codex -ErrorAction Stop)
-        $startInfo.FileName = 'codex'
-        foreach ($argument in @('app-server', '--stdio')) { $startInfo.ArgumentList.Add($argument) }
+        $codexCommand = Get-Command codex -ErrorAction Stop
+        $codexPath = [string]$codexCommand.Source
+        if ([string]::IsNullOrWhiteSpace($codexPath)) { throw 'Codex command does not resolve to an executable file.' }
+
+        switch ([IO.Path]::GetExtension($codexPath).ToLowerInvariant()) {
+            { $_ -in @('.cmd', '.bat') } {
+                $startInfo.FileName = $env:ComSpec
+                foreach ($argument in @('/d', '/s', '/c', 'call', $codexPath, 'app-server', '--stdio')) { $startInfo.ArgumentList.Add($argument) }
+            }
+            '.ps1' {
+                $startInfo.FileName = (Get-Command pwsh -ErrorAction Stop).Source
+                foreach ($argument in @('-NoLogo', '-NoProfile', '-File', $codexPath, 'app-server', '--stdio')) { $startInfo.ArgumentList.Add($argument) }
+            }
+            default {
+                $startInfo.FileName = $codexPath
+                foreach ($argument in @('app-server', '--stdio')) { $startInfo.ArgumentList.Add($argument) }
+            }
+        }
     }
     $startInfo.UseShellExecute = $false
     $startInfo.CreateNoWindow = $true
