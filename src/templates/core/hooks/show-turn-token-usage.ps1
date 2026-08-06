@@ -293,8 +293,7 @@ try {
     [void]$lines.Add('────────────────────────────')
     Write-HookDiagnostic -HookInput $inputObject -Result 'success' -Details ("source={0}; displayedDelta={1}" -f $current.source, $isDelta)
     $usageText = $lines -join [Environment]::NewLine
-    $continuation = "在目前回覆後另起一段，原樣輸出以下使用率資訊，不要加入其他文字：$([Environment]::NewLine)$([Environment]::NewLine)$usageText"
-    Write-HookOutput ([pscustomobject]@{ decision = 'block'; reason = $continuation })
+    Write-HookOutput ([pscustomobject]@{ systemMessage = $usageText })
 } catch {
     $reason = if ($_.Exception.Message -match 'ccsessions not found') { 'ccsessions not found' } elseif ($_.Exception.Message -match 'session ID') { 'session ID could not be resolved' } else { 'usage data could not be read' }
     Write-HookDiagnostic -HookInput $inputObject -Result 'error' -Details $_.Exception.Message
