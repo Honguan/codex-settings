@@ -4,6 +4,7 @@ function Select-Mode {
     Write-Host '========================='
     Write-Host '安裝與更新'
     Write-Host '[1] 全域設定：Codex、MCP、ccusage 指令'
+    Write-Host '專案開發環境（會合併通用與專屬 AGENTS.md 規則）'
     Write-Host '[2] Git 專案設定'
     Write-Host '[3] CVS 專案設定'
     Write-Host '[4] 更新：全域設定與已登記專案'
@@ -183,8 +184,14 @@ function Test-Owned($Entry, [string]$Path) {
 
 function Get-Strategy([string]$ModeName, [string]$RelativePath) {
     $normalized = $RelativePath.Replace('\', '/')
-    if ($normalized -eq 'AGENTS.md' -or $normalized.EndsWith('/AGENTS.md') -or $normalized -eq 'agent.md' -or $normalized.EndsWith('/agent.md')) {
-        return [pscustomobject]@{ Name = 'managed-block'; Start = "<!-- >>> CODEX-SETTINGS:$ModeName:AGENTS >>> -->"; End = "<!-- <<< CODEX-SETTINGS:$ModeName:AGENTS <<< -->" }
+    if ($normalized -eq 'AGENTS.md' -or $normalized.EndsWith('/AGENTS.md')) {
+        if ($ModeName -in @('Git', 'CVS')) {
+            return [pscustomobject]@{ Name = 'managed-block'; Start = '<!-- >>> CODEX-SETTINGS:PROJECT:AGENTS >>> -->'; End = '<!-- <<< CODEX-SETTINGS:PROJECT:AGENTS <<< -->' }
+        }
+        return [pscustomobject]@{ Name = 'managed-block'; Start = '<!-- >>> CODEX-SETTINGS: >>> -->'; End = '<!-- <<< CODEX-SETTINGS: <<< -->' }
+    }
+    if ($normalized -eq 'agent.md' -or $normalized.EndsWith('/agent.md')) {
+        return [pscustomobject]@{ Name = 'managed-block'; Start = '<!-- >>> CODEX-SETTINGS: >>> -->'; End = '<!-- <<< CODEX-SETTINGS: <<< -->' }
     }
     if ($normalized -eq 'config.toml') {
         return [pscustomobject]@{ Name = 'managed-toml'; Start = "# >>> CODEX-SETTINGS:$ModeName:CONFIG >>>"; End = "# <<< CODEX-SETTINGS:$ModeName:CONFIG <<<" }
@@ -194,6 +201,25 @@ function Get-Strategy([string]$ModeName, [string]$RelativePath) {
     }
     if ($normalized.EndsWith('/hooks.json')) { return [pscustomobject]@{ Name = 'managed-hooks'; Start = $null; End = $null } }
     return [pscustomobject]@{ Name = 'replace'; Start = $null; End = $null }
+}
+
+function Get-ProjectAgentsTemplateContent($Target, [string]$SourcePath, [string]$RelativePath, [string]$NewLine) {
+    $specific = [IO.File]::ReadAllText($SourcePath)
+    if ($Target.Mode -notin @('Git', 'CVS') -or $RelativePath.Replace('\', '/') -ne 'AGENTS.md') { return $specific }
+
+    $commonPath = Join-Path $ScriptRoot 'templates\global\AGENTS.md'
+    if (-not (Test-Path -LiteralPath $commonPath -PathType Leaf)) { throw "找不到通用 AGENTS.md 範本：$commonPath" }
+    $common = [IO.File]::ReadAllText($commonPath)
+    $normalize = { param([string]$Content) [regex]::Replace($Content.Trim(), "`r?`n", $NewLine) }
+    return (& $normalize $common) + $NewLine + $NewLine + (& $normalize $specific)
+}
+
+function Remove-LegacyProjectAgentsBlocks([string]$Content) {
+    $Content = Remove-ManagedBlock -Content $Content -StartMarker '<!-- >>> CODEX-SETTINGS: >>> -->' -EndMarker '<!-- <<< CODEX-SETTINGS: <<< -->'
+    foreach ($mode in @('Git', 'CVS')) {
+        $Content = Remove-ManagedBlock -Content $Content -StartMarker "<!-- >>> CODEX-SETTINGS:${mode}:AGENTS >>> -->" -EndMarker "<!-- <<< CODEX-SETTINGS:${mode}:AGENTS <<< -->"
+    }
+    return $Content
 }
 
 function Update-GitIgnore([string]$Root, $Transaction, [string[]]$ManagedPaths) {
@@ -320,7 +346,7 @@ function Install-Target($Target, $Transaction, [switch]$Force) {
         $strategy = Get-Strategy $Target.Mode $relative
         $beforeHash = if ($state.Exists) { (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash } else { $null }
         Save-TransactionFile -Transaction $Transaction -Path $destination
-        $template = [IO.File]::ReadAllText($source.FullName)
+        $template = Get-ProjectAgentsTemplateContent -Target $Target -SourcePath $source.FullName -RelativePath $relative -NewLine $state.NewLine
         $isOptionalFeatureConfig = $Target.Mode -eq 'Global' -and $relative -eq 'config.toml' -and [bool]$Target.EnableDefaultModeRequestUserInput
         if ($isOptionalFeatureConfig) { $template = Add-DefaultModeRequestUserInputFeature -Content $template -NewLine $state.NewLine }
 
@@ -337,6 +363,9 @@ function Install-Target($Target, $Transaction, [switch]$Force) {
             else { Copy-FileAtomic -Source $source.FullName -Destination $destination }
         } else {
             $existing = if ($owned -and $null -ne $previous -and [int]$previous.Version -lt 2) { '' } else { $state.Content }
+            if ($Target.Mode -in @('Git', 'CVS') -and $relative.Replace('\', '/') -eq 'AGENTS.md') {
+                $existing = Remove-LegacyProjectAgentsBlocks $existing
+            }
             switch ($strategy.Name) {
                 'managed-block' { $merged = Merge-ManagedBlock $existing $template $strategy.Start $strategy.End $state.NewLine }
                 'managed-toml' { $merged = Merge-TomlTemplate $existing $template $strategy.Start $strategy.End $state.NewLine }

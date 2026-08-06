@@ -43,6 +43,8 @@ Windows 上的 Codex 全域、Git 專案與 CVS 專案設定管理工具。
 2. 雙擊 `Install.cmd`。
 3. 在選單選擇安裝、更新、備份、還原或移除。
 
+安裝專案時先選擇 Git 或 CVS 開發環境；安裝器會在專案根目錄建立唯一的 `AGENTS.md`，合併通用規則與所選環境的專屬規則。
+
 安裝器會清楚列出兩種安裝方式：
 
 - **安全合併（預設、建議）**：僅更新本工具管理的內容，保留其他設定；在安裝方式選單直接按 Enter 即選擇此項。
@@ -111,7 +113,7 @@ npx codex-model-router install --global --set-default
 
 ### 安全合併
 
-- `agent.md`、Rules 使用管理區塊。
+- 專案根目錄的 `AGENTS.md`、Rules 使用管理區塊；`AGENTS.md` 會合併通用規則與所選 Git／CVS 專屬規則。
 - `config.toml` 保留既有頂層鍵與 MCP 區段。
 - CVS `hooks.json` 保留其他 Hook。
 - 安裝或更新時會移除全域及 CVS 專案中的舊版 CRLF Hook，只保留 CVS 專案的單一 `PostToolUse` 與單一 `Stop`；SOLUNA 與自訂 Hook 不受影響。

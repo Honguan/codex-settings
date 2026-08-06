@@ -57,7 +57,10 @@ function global:ccsessions {
     }
 
     function Get-Activity($Row) {
-        try { return [DateTimeOffset]::Parse([string]$Row.lastActivity) }
+        $value = $Row.lastActivity
+        if ($value -is [DateTimeOffset]) { return $value }
+        if ($value -is [DateTime]) { return [DateTimeOffset]::new($value) }
+        try { return [DateTimeOffset]::Parse([string]$value) }
         catch { return [DateTimeOffset]::MinValue }
     }
 
@@ -94,7 +97,7 @@ function global:ccsessions {
         }
         $activity = Get-Activity $Row
         if ($activity -ne [DateTimeOffset]::MinValue -and $Row.sessionFile) {
-            $dir = Join-Path "$env:USERPROFILE\.codex\sessions" $activity.ToLocalTime().ToString('yyyy\MM\dd')
+            $dir = Join-Path "$env:USERPROFILE\.codex\sessions" ([TimeZoneInfo]::ConvertTimeBySystemTimeZoneId($activity, 'Taipei Standard Time')).ToString('yyyy\MM\dd')
             [void]$candidates.Add((Join-Path $dir ([string]$Row.sessionFile)))
         }
         foreach ($path in $candidates) {
@@ -232,7 +235,7 @@ function global:ccsessions {
                 Cache          = Format-TokenCount $_.cacheReadTokens
                 Total          = Format-TokenCount $_.totalTokens
                 Cost           = Format-Cost $_.costUSD
-                Time           = if ((Get-Activity $_) -eq [DateTimeOffset]::MinValue) { '' } else { (Get-Activity $_).ToLocalTime().ToString('MM-dd HH:mm') }
+                Time           = if ((Get-Activity $_) -eq [DateTimeOffset]::MinValue) { '' } else { ([TimeZoneInfo]::ConvertTimeBySystemTimeZoneId((Get-Activity $_), 'Taipei Standard Time')).ToString('MM-dd HH:mm') }
             }
         })
         $totals = Get-SessionTotals $Rows
