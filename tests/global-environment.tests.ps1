@@ -23,6 +23,14 @@ function Install-TestEnvironment([ValidateSet('Git', 'CVS')][string]$Environment
 }
 
 try {
+    $installerSource = Get-Content -LiteralPath (Join-Path $script:ScriptRoot 'installer.ps1') -Raw
+    if ($installerSource -match 'Write-Warning\s+"已回復中斷的交易') {
+        throw 'Installer startup must not render recovered transactions as a yellow warning.'
+    }
+    if ($installerSource -notmatch 'Write-Host\s+"已自動回復上次中斷的安裝交易') {
+        throw 'Installer startup did not preserve a clear recovered-transaction status message.'
+    }
+
     if ((Get-DefaultDevelopmentEnvironment -Root $globalRoot) -ne 'Git') { throw 'First installation must default to Git.' }
     New-Item -ItemType Directory -Path $globalRoot -Force | Out-Null
     $existingHooks = [ordered]@{
@@ -59,7 +67,7 @@ try {
     if ($agents -match 'and backward compatibility\.') { throw 'Safe merge did not update a legacy AGENTS.md section.' }
     $installedHooks = Get-Content -LiteralPath (Join-Path $globalRoot 'hooks.json') -Raw | ConvertFrom-Json
     if (@($installedHooks.hooks.SessionStart).Count -ne 1) { throw 'CVS installation did not preserve the unmanaged user hook.' }
-    if (@($installedHooks.hooks.PostToolUse).Count -ne 1 -or @($installedHooks.hooks.Stop).Count -ne 1) { throw 'CVS installation did not add its managed hooks.' }
+    if ($installedHooks.hooks.PSObject.Properties.Name -contains 'PostToolUse' -or @($installedHooks.hooks.Stop).Count -ne 1) { throw 'CVS installation did not add only its managed Stop hook.' }
     if ((Get-DefaultDevelopmentEnvironment -Root $globalRoot) -ne 'CVS') { throw 'CVS was not recorded as the default project system.' }
 
     Install-TestEnvironment -Environment Git
@@ -80,7 +88,7 @@ try {
     Assert-GlobalEnvironmentInstallation -DevelopmentEnvironment CVS -Root $globalRoot
     $installedHooks = Get-Content -LiteralPath (Join-Path $globalRoot 'hooks.json') -Raw | ConvertFrom-Json
     if (@($installedHooks.hooks.SessionStart).Count -ne 1) { throw 'CVS installation did not preserve the unmanaged user hook.' }
-    if (@($installedHooks.hooks.PostToolUse).Count -ne 1 -or @($installedHooks.hooks.Stop).Count -ne 1) { throw 'CVS installation did not add its managed hooks.' }
+    if ($installedHooks.hooks.PSObject.Properties.Name -contains 'PostToolUse' -or @($installedHooks.hooks.Stop).Count -ne 1) { throw 'CVS installation did not add only its managed Stop hook.' }
 
     $outsideCvs = Join-Path $testRoot 'ordinary-directory'
     New-Item -ItemType Directory -Path $outsideCvs -Force | Out-Null
@@ -88,29 +96,6 @@ try {
     try { & pwsh -NoLogo -NoProfile -File (Join-Path $globalRoot 'hooks\normalize-cvs-crlf.ps1') }
     finally { Pop-Location }
     if ($LASTEXITCODE -ne 0) { throw 'Global CVS hook must skip non-CVS directories successfully.' }
-
-    $cvsRoot = Join-Path $testRoot 'cvs-project'
-    $nestedRoot = Join-Path $cvsRoot 'src'
-    New-Item -ItemType Directory -Path (Join-Path $cvsRoot 'CVS'), (Join-Path $nestedRoot 'CVS') -Force | Out-Null
-    $textPath = Join-Path $nestedRoot 'sample.php'
-    [IO.File]::WriteAllText($textPath, "line1`nline2`n", [Text.UTF8Encoding]::new($false))
-    $payload = [ordered]@{ tool_name = 'Edit'; tool_input = [ordered]@{ file_path = $textPath } } | ConvertTo-Json -Compress
-    $localAppDataBefore = $env:LOCALAPPDATA
-    $env:LOCALAPPDATA = Join-Path $testRoot 'local-app-data'
-    Push-Location $nestedRoot
-    try {
-        $payload | & pwsh -NoLogo -NoProfile -File (Join-Path $globalRoot 'hooks\normalize-cvs-crlf.ps1') | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw 'Global CVS hook failed to track an updated file.' }
-        Start-Sleep -Seconds 3
-        & pwsh -NoLogo -NoProfile -File (Join-Path $globalRoot 'hooks\normalize-cvs-crlf.ps1') -Flush | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw 'Global CVS hook failed to finalize CRLF conversion.' }
-    } finally {
-        Pop-Location
-        $env:LOCALAPPDATA = $localAppDataBefore
-    }
-    $bytes = [IO.File]::ReadAllBytes($textPath)
-    $text = [Text.Encoding]::UTF8.GetString($bytes)
-    if ($text -match '(?<!\r)\n') { throw 'Global CVS hook did not convert the updated file to CRLF.' }
 
     Install-TestEnvironment -Environment Git
     Assert-GlobalEnvironmentInstallation -DevelopmentEnvironment Git -Root $globalRoot

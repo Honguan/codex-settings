@@ -117,6 +117,8 @@ try {
     elseif ([bool]$packageBefore.Installed) { Write-Host "偵測到 ccusage $($packageBefore.Version)；略過套件重複安裝。" }
     else { Write-Host '已略過 ccusage 套件安裝。' }
     Write-Host (if (@($profileTargets | Where-Object Changed).Count -gt 0) { '已更新 ccsessions、cdaily 指令。' } else { 'ccsessions、cdaily 指令已是最新內容，未改寫 Profile。' })
+    Write-Host '  ccsessions [數量或 Session ID]：查看 Session 的模型、Token、費用與台北時間。'
+    Write-Host '  cdaily [天數]：查看每日 Token 與費用統計。'
     Write-Host "PowerShell 版本：$($PSVersionTable.PSVersion)"
     foreach ($profileTarget in $profileTargets) { Write-Host "設定檔：$($profileTarget.Path)" }
     foreach ($profileTarget in $profileTargets) {

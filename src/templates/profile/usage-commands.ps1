@@ -14,11 +14,11 @@ function global:ccsessions {
 
     function Invoke-CcusageJson {
         if (Get-Command npx -ErrorAction SilentlyContinue) {
-            $commandContext.Text = 'npx --yes ccusage@latest codex session --json'
-            $output = & npx --yes 'ccusage@latest' codex session --json 2>&1
+            $commandContext.Text = 'npx --yes ccusage@latest codex session --timezone Asia/Taipei --json'
+            $output = & npx --yes 'ccusage@latest' codex session --timezone 'Asia/Taipei' --json 2>&1
         } elseif (Get-Command ccusage -ErrorAction SilentlyContinue) {
-            $commandContext.Text = 'ccusage codex session --json'
-            $output = & ccusage codex session --json 2>&1
+            $commandContext.Text = 'ccusage codex session --timezone Asia/Taipei --json'
+            $output = & ccusage codex session --timezone 'Asia/Taipei' --json 2>&1
         } else {
             throw 'Neither npx nor ccusage is available. Install Node.js and run the codex-settings global installer.'
         }
@@ -77,7 +77,7 @@ function global:ccsessions {
 
     function Format-SessionId([string]$Id) {
         if ([string]::IsNullOrWhiteSpace($Id)) { return '' }
-        if ($Id.Length -gt 6) { return $Id.Substring($Id.Length - 6) }
+        if ($Id.Length -gt 17) { return $Id.Substring(0, 8) + '...' + $Id.Substring($Id.Length - 6) }
         return $Id
     }
 
@@ -235,7 +235,7 @@ function global:ccsessions {
                 Cache          = Format-TokenCount $_.cacheReadTokens
                 Total          = Format-TokenCount $_.totalTokens
                 Cost           = Format-Cost $_.costUSD
-                Time           = if ((Get-Activity $_) -eq [DateTimeOffset]::MinValue) { '' } else { ([TimeZoneInfo]::ConvertTimeBySystemTimeZoneId((Get-Activity $_), 'Taipei Standard Time')).ToString('MM-dd HH:mm') }
+                Time           = if ((Get-Activity $_) -eq [DateTimeOffset]::MinValue) { '' } else { ([TimeZoneInfo]::ConvertTimeBySystemTimeZoneId((Get-Activity $_), 'Taipei Standard Time')).ToString('MM-dd hh:mm tt', [Globalization.CultureInfo]::InvariantCulture) }
             }
         })
         $totals = Get-SessionTotals $Rows

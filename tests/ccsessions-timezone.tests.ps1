@@ -16,12 +16,24 @@ if ($source -notmatch 'Taipei Standard Time') {
 . $profileTemplate
 function global:npx {
     $global:LASTEXITCODE = 0
-    '{"sessions":[{"sessionId":"11111111-1111-1111-1111-111111111111","lastActivity":"2026-01-01T00:30:00Z","models":"gpt-5","inputTokens":1,"outputTokens":2,"reasoningOutputTokens":3,"cacheReadTokens":4,"totalTokens":10,"costUSD":0.01}]}'
+    $global:CcSessionsNpxArguments = @($args)
+    '{"sessions":[{"sessionId":"019fd1f8-4928-7432-9697-8070ae4a87a2","lastActivity":"2026-01-01T00:30:00Z","models":{"gpt-5.6-sol":{},"gpt-5.6-terra":{}},"inputTokens":1,"outputTokens":2,"reasoningOutputTokens":3,"cacheReadTokens":4,"totalTokens":10,"costUSD":0.01}]}'
 }
 
 $output = @(& ccsessions 1 6>&1 | Out-String)
-if (($output -join "`n") -notmatch '01-01 08:30') {
+$outputText = $output -join "`n"
+if ($outputText -notmatch '019fd1f8\.\.\.4a87a2') {
+    throw "ccsessions did not render the abbreviated session ID. Output: $outputText"
+}
+$modelLines = @([regex]::Split($outputText, "`r?`n") | Where-Object { $_ -match 'gpt-5\.6-(sol|terra)' })
+if ($modelLines.Count -ne 2 -or $modelLines[0] -notmatch 'gpt-5\.6-sol' -or $modelLines[1] -notmatch 'gpt-5\.6-terra') {
+    throw "ccsessions did not render switched models on separate lines. Output: $outputText"
+}
+if ($outputText -notmatch '01-01 08:30 AM') {
     throw "ccsessions did not render the Taipei time. Output: $($output -join "`n")"
+}
+if (($global:CcSessionsNpxArguments -join ' ') -notmatch '--timezone Asia/Taipei') {
+    throw "ccsessions did not request the Taipei timezone. Arguments: $($global:CcSessionsNpxArguments -join ' ')"
 }
 
 Write-Host 'ccsessions Taipei timezone tests passed.'

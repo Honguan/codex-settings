@@ -2,7 +2,7 @@ function Select-Mode {
     Write-Host ''
     Write-Host 'Codex Settings 一鍵安裝器'
     Write-Host '========================='
-    Write-Host '[1] 全域安裝／更新：Codex、MCP、技能、ccusage 指令'
+    Write-Host '[1] 全域安裝／更新：Codex、MCP、技能、ccusage 套件、ccsessions、cdaily'
     Write-Host ''
     Write-Host '備份與管理'
     Write-Host '[2] 備份目前設定'
@@ -64,10 +64,49 @@ function Select-OptionalGlobalSkill {
     return $selection -in @('y', 'Y', 'yes', 'YES')
 }
 
-function Select-OptionalMattPocockSkills {
+function Get-MattPocockSkillNames {
+    return @(
+        'setup-matt-pocock-skills',
+        'grill-with-docs',
+        'to-spec',
+        'to-tickets',
+        'implement',
+        'tdd',
+        'code-review',
+        'diagnosing-bugs',
+        'handoff',
+        'wait-what'
+    )
+}
+
+function Get-MattPocockSkillsArguments {
+    $arguments = @('--yes', 'skills@latest', 'add', 'mattpocock/skills', '-g', '-a', 'codex', '-y')
+    foreach ($name in Get-MattPocockSkillNames) { $arguments += @('--skill', $name) }
+    return $arguments
+}
+
+function Test-MattPocockSkillsInstalled([string]$AgentsRoot = (Join-Path $HOME '.agents')) {
+    $lockPath = Join-Path $AgentsRoot '.skill-lock.json'
+    if (-not (Test-Path -LiteralPath $lockPath -PathType Leaf)) { return $false }
+    try { $lock = Get-Content -LiteralPath $lockPath -Raw | ConvertFrom-Json -ErrorAction Stop }
+    catch { return $false }
+    if ($null -eq $lock.skills) { return $false }
+
+    foreach ($entry in $lock.skills.PSObject.Properties) {
+        if ([string]$entry.Value.source -eq 'mattpocock/skills') { return $true }
+    }
+    return $false
+}
+
+function Select-OptionalMattPocockSkills([bool]$AlreadyInstalled = (Test-MattPocockSkillsInstalled)) {
     Write-Host ''
     Write-Host '選用全域技能：mattpocock/skills'
-    Write-Host '會安裝到 Codex 使用者層級，並在下一步由原始安裝器選擇技能。'
+    Write-Host "預設技能（10 個）：$((Get-MattPocockSkillNames) -join '、')"
+    if ($AlreadyInstalled) {
+        Write-Host '已偵測到既有安裝，本次會自動更新以上技能。'
+        return $true
+    }
+    Write-Host '尚未安裝；選擇安裝後會加入 Codex 使用者層級。'
     $selection = Read-Host '要安裝嗎？[y/N]'
     return $selection -in @('y', 'Y', 'yes', 'YES')
 }
@@ -234,7 +273,7 @@ function Assert-GlobalEnvironmentInstallation([ValidateSet('Git', 'CVS')][string
         if ($counts.Total -ne 0 -or $scriptCount -ne 0) { throw 'Git 全域設定仍包含 CVS CRLF Hook。' }
         return
     }
-    if ($counts.PostToolUse -ne 1 -or $counts.Stop -ne 1 -or $scriptCount -ne 1) {
+    if ($counts.PostToolUse -ne 0 -or $counts.Stop -ne 1 -or $scriptCount -ne 1) {
         throw 'CVS 全域 CRLF Hook 安裝檢查失敗。'
     }
 }

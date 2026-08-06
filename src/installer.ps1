@@ -61,6 +61,9 @@ if ($Mode -in @('Backup', 'Restore', 'Uninstall')) {
 
 if ($Force) { $InstallStyle = 'Replace' }
 $Force = $InstallStyle -eq 'Replace'
+if (-not $InstallMattPocockSkills -and (Test-MattPocockSkillsInstalled)) {
+    $InstallMattPocockSkills = $true
+}
 $targets = @(Resolve-GlobalTargets -DevelopmentEnvironment $DevelopmentEnvironment -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput)
 $preflight = $globalRoot
 Test-Prerequisites 'Global' $preflight
@@ -75,7 +78,7 @@ $contextState = $null
 try {
     $operationLock = Enter-CodexSettingsLock
     $recovered = @(Repair-PendingTransactions -BackupRoot $BackupBase)
-    foreach ($path in $recovered) { Write-Warning "已回復中斷的交易：$path" }
+    if ($recovered.Count -gt 0) { Write-Host "已自動回復上次中斷的安裝交易：$($recovered.Count) 筆。" }
 
     $transactionRoot = Join-Path $BackupBase ((Get-Date -Format 'yyyyMMdd-HHmmss-fff') + "-$($Mode.ToLowerInvariant())-transaction")
     $transaction = New-FileTransaction -Root $transactionRoot -Mode "Install-$Mode"
@@ -109,9 +112,12 @@ try {
             foreach ($profilePath in $profilePaths) { Save-TransactionFile $transaction $profilePath }
             $ccusage = & (Join-Path $ScriptRoot 'modules\ccusage.ps1') -SkipPackageInstall:$SkipCcusageInstall -PackageState $ccusageBefore -PassThru
             if ($InstallMattPocockSkills) {
-                Write-Host '正在安裝 mattpocock/skills；請依提示選擇要加入的技能。'
-                & npx --yes 'skills@latest' add 'mattpocock/skills' --global --agent codex
+                $mattPocockSkillNames = @(Get-MattPocockSkillNames)
+                Write-Host "正在安裝或更新 mattpocock/skills 預設技能（$($mattPocockSkillNames.Count) 個）。"
+                $skillsArguments = @(Get-MattPocockSkillsArguments)
+                & npx @skillsArguments
                 if ($LASTEXITCODE -ne 0) { throw "mattpocock/skills 安裝失敗，結束碼：$LASTEXITCODE" }
+                Write-Host "mattpocock/skills：已安裝或更新 $($mattPocockSkillNames.Count) 個預設全域技能。"
             }
 
             $original = $ccusageBefore
@@ -162,6 +168,8 @@ try {
         $packageStatus = if ([bool]$ccusage.PackageInstalledNow) { '已安裝 ccusage 套件' } elseif ([bool]$ccusageBefore.Installed) { '沿用既有 ccusage 套件' } else { '已略過 ccusage 套件' }
         $commandStatus = if ([bool]$ccusage.CommandsUpdated) { '已更新 ccsessions、cdaily 指令' } else { 'ccsessions、cdaily 指令未變更' }
         Write-Host "ccusage：$packageStatus；$commandStatus"
+        Write-Host '  ccsessions [數量或 Session ID]：查看 Session 的模型、Token、費用與台北時間。'
+        Write-Host '  cdaily [天數]：查看每日 Token 與費用統計。'
         Write-Host "舊專案設定：處理 $($obsoleteProjects.Projects) 個專案、移除 $($obsoleteProjects.FilesRemoved) 個檔案、更新 $($obsoleteProjects.FilesUpdated) 個檔案"
         Write-Host "交易備份：$transactionRoot"
         Write-Host '請重新啟動 PowerShell 與 Codex，以載入設定、指令與 MCP。'

@@ -21,7 +21,7 @@ These rules supplement the global rules.
 - Never run, propose, schedule, or mark `cvs add` as completed.
 - Leave new files untracked and report CVS addition as a user-managed follow-up.
 - CRLF normalization is owned exclusively by the global `~/.codex/hooks/normalize-cvs-crlf.ps1` Hook.
-- Never run or propose a manual line-ending conversion command; rely on the PostToolUse Hook after edits.
+- Never run or propose a manual line-ending conversion command; rely on the Stop Hook when Codex finishes.
 - Begin with read-only inspection and use the smallest target required by the request.
 
 ## CVS Update
@@ -53,7 +53,7 @@ Stop immediately when the preview or result contains `C`, an error, an unexpecte
 - Inspect existing SQL, bindings, indexes, and execution plans before changing query logic.
 - Prefer CVS read-only commands before any write operation.
 - Never run or propose `cvs add`; leave new-file registration to the user.
-- Never run or propose manual CRLF conversion commands; the CVS PostToolUse Hook is the single line-ending normalizer.
+- Never run or propose manual CRLF conversion commands; the CVS Stop Hook is the single line-ending normalizer.
 - Make the smallest change that satisfies the request.
 - Run only validation relevant to the modified code.
 - Report modified files, implemented logic, checks, and unresolved limitations.

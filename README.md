@@ -9,7 +9,7 @@ Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 - 安裝或更新全域 `AGENTS.md`、`config.toml` 與權限規則。
 - 在全域安裝流程選擇 Git 或 CVS，合併對應的全域 AGENTS 與 Rules。
 - 安裝 Context7、Playwright MCP 設定。
-- 安裝或更新 `ccusage`，並維護 `ccsessions`、`cdaily` 指令。
+- 安裝或更新 `ccusage`，並新增或更新 `ccsessions`（Session 用量）與 `cdaily`（每日用量）指令。
 - 選用 `request-execution-optimizer` 與 `mattpocock/skills`。
 - 安全合併既有設定，並提供交易備份、中斷回復、備份、還原及移除。
 - 首次執行新版安裝器時，自動清除舊登記專案內由本工具管理的設定。
@@ -43,7 +43,9 @@ Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 選擇「全域安裝／更新」後會選擇開發環境：
 
 - Git（首次安裝預設）：加入 Git 專屬 AGENTS 與 Rules，並移除全域 CVS CRLF Hook。
-- CVS：加入 CVS 專屬 AGENTS、Rules 與全域 CRLF Hook。Hook 只在目前目錄屬於 CVS 工作副本時執行。
+- CVS：加入 CVS 專屬 AGENTS、Rules 與全域 CRLF Stop Hook。Codex 完成工作時，Hook 會用 `cvs -qn update` 掃描目前工作副本的 `M`、`A`、`C` 文字檔並轉為 CRLF。
+
+Stop Hook 會處理工作副本當下的全部 `M`、`A`、`C` 檔案，因此可能包含 Codex 啟動前已存在的異動。
 
 安裝成功後會將選擇記錄為預設專案體系。下次互動安裝按 Enter，或非互動安裝未提供 `-DevelopmentEnvironment` 時，會沿用上次的 Git／CVS 選擇。
 
@@ -67,7 +69,7 @@ Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 # 安裝 request-execution-optimizer
 .\Install.cmd -Mode Global -InstallRequestExecutionOptimizer
 
-# 啟動 mattpocock/skills 安裝器
+# 安裝或更新 mattpocock/skills 的 10 個預設全域技能
 .\Install.cmd -Mode Global -InstallMattPocockSkills
 
 # 在 config.toml 啟用預設 request_user_input 功能
@@ -102,7 +104,26 @@ Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 └─ .codex-settings-manifest.json
 ```
 
-選用技能安裝到 `%USERPROFILE%\.codex\skills`。`ccsessions` 與 `cdaily` 的受管理區塊寫入目前使用者的 PowerShell Profile。
+`request-execution-optimizer` 安裝到 `%USERPROFILE%\.codex\skills`。`ccsessions` 與 `cdaily` 的受管理區塊寫入目前使用者的 PowerShell Profile。
+
+`mattpocock/skills` 會安裝到 Codex 的全域技能目錄。首次安裝會詢問且預設為 `N`；只要偵測到曾由 `mattpocock/skills` 安裝任一全域技能，後續執行安裝器就會自動安裝或更新下列 10 個預設技能：
+
+- `setup-matt-pocock-skills`
+- `grill-with-docs`
+- `to-spec`
+- `to-tickets`
+- `implement`
+- `tdd`
+- `code-review`
+- `diagnosing-bugs`
+- `handoff`
+- `wait-what`
+
+安裝器會以非互動模式執行：
+
+```powershell
+npx --yes skills@latest add mattpocock/skills -g -a codex -y --skill setup-matt-pocock-skills --skill grill-with-docs --skill to-spec --skill to-tickets --skill implement --skill tdd --skill code-review --skill diagnosing-bugs --skill handoff --skill wait-what
+```
 
 ## 安全機制
 
@@ -145,12 +166,15 @@ Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 - 使用 `-SkipCcusageInstall`：不安裝套件，只新增或更新 Profile 指令。
 
 ```powershell
-ccsessions
-ccsessions -Since 2026-08-01 -Until 2026-08-06
-cdaily
+ccsessions                       # 顯示最近 10 筆 Session
+ccsessions 20                    # 顯示最近 20 筆 Session
+ccsessions 019fd1f8...4a87a2     # 顯示指定 Session
+cdaily                           # 顯示最近 7 天的每日統計
+cdaily 30                        # 顯示最近 30 天的每日統計
 ```
 
-`ccsessions` 的時間會以台北時區顯示。
+- `ccsessions [數量或 Session ID]`：顯示 Session ID、使用模型、Token、費用與台北時間；同一 Session 切換過的模型會分行顯示。
+- `cdaily [天數]`：顯示指定天數內每天的模型、Token 與費用統計，預設為 7 天。
 
 ## 發佈一鍵安裝包
 
@@ -173,10 +197,10 @@ cdaily
 確認版本後再建立對應的 Git tag。GitHub Actions 僅接受完整的 `v主版.次版.修訂版` 標籤。
 
 ```powershell
-.\tools\build-installer.ps1 -Version v1.3.2
+.\tools\build-installer.ps1 -Version v1.4.0
 ```
 
-輸出為唯一的 `dist\CodexSettings-Setup-v1.3.2.cmd`，內嵌所有必要模組與範本。正式發佈時，檔名版本會直接取自 Git tag。
+輸出為唯一的 `dist\CodexSettings-Setup-v1.4.0.cmd`，內嵌所有必要模組與範本。正式發佈時，檔名版本會直接取自 Git tag。
 
 原始碼依職責整理為：
 
