@@ -29,11 +29,11 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
         }
         'hooks/list' {
             $status = if ($trusted) { 'trusted' } else { 'untrusted' }
-            $hooks = @(
-                @{ key = "$($env:CODEX_SETTINGS_TEST_HOOKS_PATH):session_start:0:0"; sourcePath = $env:CODEX_SETTINGS_TEST_HOOKS_PATH; command = 'custom-session-start.ps1'; currentHash = 'sha256:custom'; trustStatus = 'untrusted'; enabled = $true },
-                @{ key = "$($env:CODEX_SETTINGS_TEST_HOOKS_PATH):stop:0:0"; sourcePath = $env:CODEX_SETTINGS_TEST_HOOKS_PATH; command = 'pwsh show-turn-token-usage.ps1'; currentHash = 'sha256:token'; trustStatus = $status; enabled = $true },
-                @{ key = "$($env:CODEX_SETTINGS_TEST_HOOKS_PATH):post_tool_use:0:0"; sourcePath = $env:CODEX_SETTINGS_TEST_HOOKS_PATH; command = 'pwsh preserve-line-endings.ps1 -Mode Restore'; currentHash = 'sha256:line-ending'; trustStatus = $status; enabled = $true }
-            )
+            $hooks = if ($env:CODEX_SETTINGS_TEST_NO_MANAGED_HOOKS -eq '1') { @() } else { @(
+                    @{ key = "$($env:CODEX_SETTINGS_TEST_HOOKS_PATH):session_start:0:0"; sourcePath = $env:CODEX_SETTINGS_TEST_HOOKS_PATH; command = 'custom-session-start.ps1'; currentHash = 'sha256:custom'; trustStatus = 'untrusted'; enabled = $true },
+                    @{ key = "$($env:CODEX_SETTINGS_TEST_HOOKS_PATH):stop:0:0"; sourcePath = $env:CODEX_SETTINGS_TEST_HOOKS_PATH; command = 'pwsh show-turn-token-usage.ps1'; currentHash = 'sha256:token'; trustStatus = $status; enabled = $true },
+                    @{ key = "$($env:CODEX_SETTINGS_TEST_HOOKS_PATH):post_tool_use:0:0"; sourcePath = $env:CODEX_SETTINGS_TEST_HOOKS_PATH; command = 'pwsh preserve-line-endings.ps1 -Mode Restore'; currentHash = 'sha256:line-ending'; trustStatus = $status; enabled = $true }
+                ) }
             $result = @{ data = @(@{ cwd = $env:CODEX_SETTINGS_TEST_CWD; hooks = $hooks; warnings = @(); errors = @() }) }
             [Console]::Out.WriteLine((@{ id = $request.id; result = $result } | ConvertTo-Json -Depth 10 -Compress))
         }
@@ -78,6 +78,12 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
         throw 'Installer did not start and verify Hooks through the resolved codex.cmd shim.'
     }
 
+    $env:CODEX_SETTINGS_TEST_NO_MANAGED_HOOKS = '1'
+    $emptyResult = Set-CodexSettingsHookTrust -Root $globalRoot -Cwd $repositoryRoot
+    if ($emptyResult.TrustedCount -ne 0 -or $emptyResult.UpdatedCount -ne 0 -or -not [bool]$emptyResult.Verified) {
+        throw 'Installer did not accept an installation without managed Hooks.'
+    }
+
     Write-Host 'Managed hook trust tests passed.'
 } finally {
     $env:PATH = $originalPath
@@ -86,5 +92,6 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
     Remove-Item Env:\CODEX_SETTINGS_TEST_HOOKS_PATH -ErrorAction SilentlyContinue
     Remove-Item Env:\CODEX_SETTINGS_TEST_CAPTURE_PATH -ErrorAction SilentlyContinue
     Remove-Item Env:\CODEX_SETTINGS_TEST_CWD -ErrorAction SilentlyContinue
+    Remove-Item Env:\CODEX_SETTINGS_TEST_NO_MANAGED_HOOKS -ErrorAction SilentlyContinue
     if (Test-Path -LiteralPath $testRoot) { Remove-Item -LiteralPath $testRoot -Recurse -Force }
 }

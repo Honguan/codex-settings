@@ -8,6 +8,7 @@ param(
     [switch]$InstallMattPocockSkills,
     [switch]$EnableDefaultModeRequestUserInput,
     [Nullable[bool]]$InstallWindowsNotifications,
+    [Nullable[bool]]$InstallTokenUsageInterface,
     [ValidateSet('Git', 'CVS')]
     [string]$DevelopmentEnvironment,
     [switch]$Force,
@@ -39,7 +40,8 @@ if ($Mode -eq 'Interactive') {
                     $installMattPocockSkills = Select-OptionalMattPocockSkills
                     $enableDefaultModeRequestUserInput = Select-OptionalDefaultModeRequestUserInput
                     $installWindowsNotifications = Select-OptionalWindowsNotifications -AlreadyInstalled:(Test-WindowsNotificationsInstalled -Root $globalRoot)
-                    & $PSCommandPath -Mode Global -InstallStyle $style -DevelopmentEnvironment $developmentEnvironment -InstallRequestExecutionOptimizer:$installRequestExecutionOptimizer -InstallMattPocockSkills:$installMattPocockSkills -EnableDefaultModeRequestUserInput:$enableDefaultModeRequestUserInput -InstallWindowsNotifications:$installWindowsNotifications
+                    $installTokenUsageInterface = Select-OptionalTokenUsageInterface -AlreadyInstalled:(Test-TokenUsageInterfaceInstalled -Root $globalRoot)
+                    & $PSCommandPath -Mode Global -InstallStyle $style -DevelopmentEnvironment $developmentEnvironment -InstallRequestExecutionOptimizer:$installRequestExecutionOptimizer -InstallMattPocockSkills:$installMattPocockSkills -EnableDefaultModeRequestUserInput:$enableDefaultModeRequestUserInput -InstallWindowsNotifications:$installWindowsNotifications -InstallTokenUsageInterface:$installTokenUsageInterface
                     exit 0
                 }
                 default { & $PSCommandPath -Mode $selection }
@@ -69,7 +71,10 @@ if (-not $InstallMattPocockSkills -and (Test-MattPocockSkillsInstalled)) {
 if ($null -eq $InstallWindowsNotifications) {
     $InstallWindowsNotifications = Test-WindowsNotificationsInstalled -Root $globalRoot
 }
-$targets = @(Resolve-GlobalTargets -DevelopmentEnvironment $DevelopmentEnvironment -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput -InstallWindowsNotifications ([bool]$InstallWindowsNotifications))
+if ($null -eq $InstallTokenUsageInterface) {
+    $InstallTokenUsageInterface = Test-TokenUsageInterfaceInstalled -Root $globalRoot
+}
+$targets = @(Resolve-GlobalTargets -DevelopmentEnvironment $DevelopmentEnvironment -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput -InstallWindowsNotifications ([bool]$InstallWindowsNotifications) -InstallTokenUsageInterface ([bool]$InstallTokenUsageInterface))
 $preflight = $globalRoot
 Test-Prerequisites 'Global' $preflight
 foreach ($target in $targets) { Test-DirectoryWritable -Path $target.Root }
@@ -191,6 +196,7 @@ try {
         Write-Host "Hook 信任：已驗證 $($hookTrust.TrustedCount) 個、更新 $($hookTrust.UpdatedCount) 個。"
         Write-Host "交易備份：$transactionRoot"
         Write-Host $(if ([bool]$InstallWindowsNotifications) { 'Windows 通知：已安裝，並送出測試通知。' } else { 'Windows 通知：未安裝。' })
+        Write-Host $(if ([bool]$InstallTokenUsageInterface) { 'Token 使用率介面：已安裝。' } else { 'Token 使用率介面：未安裝。' })
         Write-Host '請重新啟動 PowerShell 與 Codex，以載入設定、指令與 MCP。'
     } catch {
         $reason = $_.Exception.Message

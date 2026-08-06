@@ -40,7 +40,7 @@ Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 3. 還原備份
 4. 移除受管理設定
 
-安全合併是預設安裝方式，會保留未受管理的既有內容。完整覆蓋只應在確定要用範本取代目標設定時使用。
+主選單直接按 Enter 會預設選擇 `[1]`。安全合併是預設安裝方式，會保留未受管理的既有內容。完整覆蓋只應在確定要用範本取代目標設定時使用。
 
 選擇「全域安裝／更新」後會選擇開發環境：
 
@@ -49,9 +49,9 @@ Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 
 換行保護使用 wildcard matcher，因此直接 `apply_patch`、code mode 的 `exec → tools.apply_patch`、Shell、MCP 與其他本機工具都使用同一份修改前基準。它只處理雜湊實際改變的檔案，精確恢復原本的 CRLF／LF、檔尾換行與 BOM，不會重新編碼文字；session 狀態在完成後自動清除。
 
-安裝器會單獨詢問是否安裝 Windows 通知：首次安裝預設為否，已安裝時預設保留並更新；選擇不安裝會移除受管理通知，但保留 Token 與其他自訂 Hook。通知使用 `PermissionRequest`、`request_user_input` 的 `PreToolUse` 與 `Stop` 官方事件，依專案名稱顯示不同標題與提示音。同一 session、turn 與類型在短時間內只顯示一次；設定位於 `~/.codex/state/notifications/settings.json`，可停用全部或個別通知。可執行 `~/.codex/hooks/show-codex-notification.ps1 -Type Completed -Test` 測試通知流程。
+安裝器會單獨詢問是否安裝 Windows 通知：首次安裝預設為否，已安裝時預設保留並更新；選擇不安裝會移除受管理通知，但保留使用率介面與其他自訂 Hook。通知使用 `PermissionRequest`、`request_user_input` 的 `PreToolUse` 與 `Stop` 官方事件，依專案名稱顯示不同標題與提示音。同一 session、turn 與類型在短時間內只顯示一次；設定位於 `~/.codex/state/notifications/settings.json`，可停用全部或個別通知。可執行 `~/.codex/hooks/show-codex-notification.ps1 -Type Completed -Test` 測試通知流程。
 
-每輪 Token 統計優先讀取 Stop payload 的 `last_token_usage`；未提供時讀取目前 rollout 的最新 `token_count`，最後才以相同 Session ID 呼叫 `ccsessions -Json` 作為後備，不會改用其他 Session。顯示順序為 Session、Model、Input、Output、Cache、Total、Cache hit rate、Cost、Estimated usage；即時資料顯示本輪數值，`ccsessions` 資料則從第二次起顯示差值，Token 以 K／M／B 縮寫。即時事件未提供模型與費用時不會捏造數值，待 `ccsessions` 可讀取後才顯示。`Cache` 顯示快取讀取 Token；快取命中率仍以 `Cache read ÷ (Cache read + Cache write + Input)` 計算，估計消耗比例以每 US$1.30 = 1% 計算。狀態依 Session 分開儲存在 `~/.codex/state/token-usage`，相同 snapshot 不會重複顯示。Codex Hook 無法改寫既有 assistant 文字，因此統計透過 `systemMessage` 緊接在回覆後顯示；設定位於同目錄的 `settings.json`。Token 與 CVS 換行 Hook 不設定持續顯示的執行狀態，並將執行結果寫入 `~/.codex/logs/hooks/<session-id>.log`，包含事件、handler、session／turn、工具、已處理檔案與錯誤內容。安裝器會透過 Codex `app-server` 取得目前 Hook 雜湊，只信任並驗證本工具管理的 Token、通知及換行保護 Hook，不會信任使用者自訂 Hook。
+每輪 Token 使用率介面也會單獨詢問：首次安裝預設為否，已安裝時預設保留並更新；選擇不安裝會移除受管理 Hook 與腳本。統計優先讀取 Stop payload 的 `last_token_usage`；未提供時讀取目前 rollout 的最新 `token_count`，最後才以相同 Session ID 呼叫 `ccsessions -Json` 作為後備，不會改用其他 Session。顯示順序為 Session、Model、Input、Output、Cache、Total、Cache hit rate、Cost、Estimated usage；即時資料顯示本輪數值，`ccsessions` 資料則從第二次起顯示差值，Token 以 K／M／B 縮寫。即時事件未提供模型與費用時不會捏造數值，待 `ccsessions` 可讀取後才顯示。`Cache` 顯示快取讀取 Token；快取命中率仍以 `Cache read ÷ (Cache read + Cache write + Input)` 計算，估計消耗比例以每 US$1.30 = 1% 計算。狀態依 Session 分開儲存在 `~/.codex/state/token-usage`，相同 snapshot 不會重複顯示。Codex Hook 無法改寫既有 assistant 文字，因此統計透過 `systemMessage` 緊接在回覆後顯示；設定位於同目錄的 `settings.json`。Token 與 CVS 換行 Hook 不設定持續顯示的執行狀態，並將執行結果寫入 `~/.codex/logs/hooks/<session-id>.log`，包含事件、handler、session／turn、工具、已處理檔案與錯誤內容。安裝器會透過 Codex `app-server` 取得目前 Hook 雜湊，只信任並驗證本工具管理的 Token、通知及換行保護 Hook，不會信任使用者自訂 Hook。
 
 安裝成功後會將選擇記錄為預設專案體系。下次互動安裝按 Enter，或非互動安裝未提供 `-DevelopmentEnvironment` 時，會沿用上次的 Git／CVS 選擇。
 
@@ -63,6 +63,8 @@ Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 .\Install.cmd -Mode Global -DevelopmentEnvironment CVS
 .\Install.cmd -Mode Global -InstallWindowsNotifications $true
 .\Install.cmd -Mode Global -InstallWindowsNotifications $false
+.\Install.cmd -Mode Global -InstallTokenUsageInterface $true
+.\Install.cmd -Mode Global -InstallTokenUsageInterface $false
 ```
 
 常用參數：

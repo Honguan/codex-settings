@@ -7,7 +7,7 @@ $script:ScriptRoot = Join-Path $repositoryRoot 'src'
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('codex-settings-global-environment-' + [guid]::NewGuid().ToString('N'))
 $globalRoot = Join-Path $testRoot '.codex'
 
-function Install-TestEnvironment([ValidateSet('Git', 'CVS')][string]$Environment, [bool]$InstallWindowsNotifications = $true) {
+function Install-TestEnvironment([ValidateSet('Git', 'CVS')][string]$Environment, [bool]$InstallWindowsNotifications = $true, [bool]$InstallTokenUsageInterface = $true) {
     $transaction = New-FileTransaction -Root (Join-Path $testRoot ("transaction-$Environment-" + [guid]::NewGuid().ToString('N'))) -Mode "Test-$Environment"
     $target = [pscustomobject]@{
         Mode = 'Global'
@@ -17,6 +17,7 @@ function Install-TestEnvironment([ValidateSet('Git', 'CVS')][string]$Environment
         Root = $globalRoot
         EnableDefaultModeRequestUserInput = $false
         InstallWindowsNotifications = $InstallWindowsNotifications
+        InstallTokenUsageInterface = $InstallTokenUsageInterface
     }
     $result = Install-Target -Target $target -Transaction $transaction
     Write-Manifest -Result $result -Transaction $transaction -External $null
@@ -157,6 +158,11 @@ try {
     if (Test-Path -LiteralPath (Join-Path $globalRoot 'hooks\show-codex-notification.ps1')) { throw 'Disabling Windows notifications retained the notification script.' }
     if (@($installedHooks.hooks.Stop | Where-Object { Test-ManagedTokenUsageHookEntry $_ }).Count -ne 1) { throw 'Disabling Windows notifications removed the turn token usage hook.' }
 
+    Install-TestEnvironment -Environment Git -InstallWindowsNotifications $false -InstallTokenUsageInterface $false
+    $installedHooks = Get-Content -LiteralPath (Join-Path $globalRoot 'hooks.json') -Raw | ConvertFrom-Json
+    if (@($installedHooks.hooks.PSObject.Properties.Value | ForEach-Object { @($_) } | Where-Object { Test-ManagedTokenUsageHookEntry $_ }).Count -ne 0) { throw 'Disabling the Token usage interface retained its managed Hook.' }
+    if (Test-Path -LiteralPath (Join-Path $globalRoot 'hooks\show-turn-token-usage.ps1')) { throw 'Disabling the Token usage interface retained its script.' }
+
     $script:notificationAnswer = ''
     $script:capturedNotificationPrompt = ''
     function Read-Host([string]$Prompt) {
@@ -168,6 +174,21 @@ try {
         if ($script:capturedNotificationPrompt -ne '要安裝嗎？[y/N]') { throw 'First-install notification prompt is invalid.' }
         if (-not (Select-OptionalWindowsNotifications -AlreadyInstalled:$true)) { throw 'Blank update selection must preserve Windows notifications.' }
         if ($script:capturedNotificationPrompt -ne '要繼續安裝嗎？[Y/n]') { throw 'Existing notification prompt is invalid.' }
+    } finally {
+        Remove-Item -LiteralPath Function:\Read-Host -ErrorAction SilentlyContinue
+    }
+
+    $script:usageInterfaceAnswer = ''
+    $script:capturedUsageInterfacePrompt = ''
+    function Read-Host([string]$Prompt) {
+        $script:capturedUsageInterfacePrompt = $Prompt
+        return $script:usageInterfaceAnswer
+    }
+    try {
+        if (Select-OptionalTokenUsageInterface -AlreadyInstalled:$false) { throw 'Blank first-install selection must not install the Token usage interface.' }
+        if ($script:capturedUsageInterfacePrompt -ne '要安裝嗎？[y/N]') { throw 'First-install Token usage interface prompt is invalid.' }
+        if (-not (Select-OptionalTokenUsageInterface -AlreadyInstalled:$true)) { throw 'Blank update selection must preserve the Token usage interface.' }
+        if ($script:capturedUsageInterfacePrompt -ne '要繼續安裝嗎？[Y/n]') { throw 'Existing Token usage interface prompt is invalid.' }
     } finally {
         Remove-Item -LiteralPath Function:\Read-Host -ErrorAction SilentlyContinue
     }

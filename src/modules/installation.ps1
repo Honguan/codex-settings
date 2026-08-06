@@ -10,7 +10,8 @@ function Select-Mode {
     Write-Host '[4] 移除受管理設定'
     Write-Host '[0] 結束'
 
-    switch (Read-Host '請選擇') {
+    switch (Read-Host '請選擇 [1]') {
+        '' { return 'Global' }
         '1' { return 'Global' }
         '2' { return 'Backup' }
         '3' { return 'Restore' }
@@ -145,6 +146,32 @@ function Select-OptionalWindowsNotifications([bool]$AlreadyInstalled = (Test-Win
     return $selection -in @('y', 'Y', 'yes', 'YES')
 }
 
+function Test-TokenUsageInterfaceInstalled([string]$Root = (Join-Path $HOME '.codex')) {
+    if (Test-Path -LiteralPath (Join-Path $Root 'hooks\show-turn-token-usage.ps1') -PathType Leaf) { return $true }
+    $hooksPath = Join-Path $Root 'hooks.json'
+    if (-not (Test-Path -LiteralPath $hooksPath -PathType Leaf)) { return $false }
+    try {
+        $hooksObject = Get-Content -LiteralPath $hooksPath -Raw | ConvertFrom-Json -ErrorAction Stop
+        foreach ($property in @($hooksObject.hooks.PSObject.Properties)) {
+            if (@($property.Value | Where-Object { Test-ManagedTokenUsageHookEntry $_ }).Count -gt 0) { return $true }
+        }
+    } catch { return $false }
+    return $false
+}
+
+function Select-OptionalTokenUsageInterface([bool]$AlreadyInstalled = (Test-TokenUsageInterfaceInstalled)) {
+    Write-Host ''
+    Write-Host '選用全域功能：每輪 Token 使用率介面'
+    if ($AlreadyInstalled) {
+        Write-Host '已偵測到既有受管理使用率介面；預設保留並更新。'
+        $selection = Read-Host '要繼續安裝嗎？[Y/n]'
+        return $selection -notin @('n', 'N', 'no', 'NO')
+    }
+    Write-Host '尚未安裝；選擇安裝後會在每輪回覆後顯示 Token 使用率。'
+    $selection = Read-Host '要安裝嗎？[y/N]'
+    return $selection -in @('y', 'Y', 'yes', 'YES')
+}
+
 function Assert-Command([string]$Name) {
     if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) { throw "在 PATH 中找不到 $Name。" }
 }
@@ -174,7 +201,7 @@ function Test-Prerequisites([string]$InstallMode, [string]$TargetPath) {
     if ($shape.Duplicates.Count -gt 0) { throw "內建 config.toml 無效：$($shape.Duplicates -join ', ')" }
 }
 
-function Resolve-GlobalTargets([ValidateSet('Git', 'CVS')][string]$DevelopmentEnvironment, [switch]$InstallRequestExecutionOptimizer, [switch]$EnableDefaultModeRequestUserInput, [bool]$InstallWindowsNotifications) {
+function Resolve-GlobalTargets([ValidateSet('Git', 'CVS')][string]$DevelopmentEnvironment, [switch]$InstallRequestExecutionOptimizer, [switch]$EnableDefaultModeRequestUserInput, [bool]$InstallWindowsNotifications, [bool]$InstallTokenUsageInterface) {
     $targets = New-Object 'System.Collections.Generic.List[object]'
     [void]$targets.Add([pscustomobject]@{
         Mode = 'Global'
@@ -184,6 +211,7 @@ function Resolve-GlobalTargets([ValidateSet('Git', 'CVS')][string]$DevelopmentEn
         Root = Join-Path $HOME '.codex'
         EnableDefaultModeRequestUserInput = [bool]$EnableDefaultModeRequestUserInput
         InstallWindowsNotifications = $InstallWindowsNotifications
+        InstallTokenUsageInterface = $InstallTokenUsageInterface
     })
     $skillsRoot = Join-Path $HOME '.codex\skills'
     $skillManifest = Join-Path $skillsRoot '.codex-settings-manifest.json'
@@ -199,11 +227,15 @@ function Get-InstallTemplateEntries($Target) {
     foreach ($source in Get-ChildItem -LiteralPath $Target.Template -Recurse -File) {
         $relative = $source.FullName.Substring($Target.Template.Length).TrimStart([char[]]'\/')
         if ($Target.Mode -eq 'Global' -and -not [bool]$Target.InstallWindowsNotifications -and $relative.Replace('\', '/') -eq 'hooks/show-codex-notification.ps1') { continue }
+        if ($Target.Mode -eq 'Global' -and -not [bool]$Target.InstallTokenUsageInterface -and $relative.Replace('\', '/') -eq 'hooks/show-turn-token-usage.ps1') { continue }
         [void]$globalPaths.Add($relative)
         $content = [IO.File]::ReadAllText($source.FullName)
         if ($Target.Mode -eq 'Global') {
             if (-not [bool]$Target.InstallWindowsNotifications -and $relative.Replace('\', '/') -eq 'hooks.json') {
                 $content = Remove-ManagedNotificationHooksJson -Content $content
+            }
+            if (-not [bool]$Target.InstallTokenUsageInterface -and $relative.Replace('\', '/') -eq 'hooks.json') {
+                $content = Remove-ManagedTokenUsageHooksJson -Content $content
             }
             $environmentSource = Join-Path $Target.EnvironmentTemplate $relative
             if (Test-Path -LiteralPath $environmentSource -PathType Leaf) {
@@ -327,7 +359,7 @@ function Remove-GlobalLineEndingHooks([string]$Root, $Transaction) {
     }
 }
 
-function Assert-GlobalLineEndingHook([ValidateSet('Git', 'CVS')][string]$DevelopmentEnvironment, [string]$Root, [bool]$InstallWindowsNotifications) {
+function Assert-GlobalLineEndingHook([ValidateSet('Git', 'CVS')][string]$DevelopmentEnvironment, [string]$Root, [bool]$InstallWindowsNotifications, [bool]$InstallTokenUsageInterface) {
     $hooksPath = Join-Path $Root 'hooks.json'
     $hookContent = if (Test-Path -LiteralPath $hooksPath -PathType Leaf) { [IO.File]::ReadAllText($hooksPath) } else { '' }
     $trackHookCount = 0
@@ -364,11 +396,12 @@ function Assert-GlobalLineEndingHook([ValidateSet('Git', 'CVS')][string]$Develop
     $notificationScriptCount = if (Test-Path -LiteralPath (Join-Path $Root 'hooks\show-codex-notification.ps1') -PathType Leaf) { 1 } else { 0 }
     $tokenUsageScriptCount = if (Test-Path -LiteralPath (Join-Path $Root 'hooks\show-turn-token-usage.ps1') -PathType Leaf) { 1 } else { 0 }
     $expectedNotificationCount = if ($InstallWindowsNotifications) { 1 } else { 0 }
+    $expectedTokenUsageCount = if ($InstallTokenUsageInterface) { 1 } else { 0 }
     if ($notificationQuestionHookCount -ne $expectedNotificationCount -or $notificationPermissionHookCount -ne $expectedNotificationCount -or $notificationCompletedHookCount -ne $expectedNotificationCount -or $notificationScriptCount -ne $expectedNotificationCount) {
         throw "Windows 通知安裝檢查失敗：Expected=$expectedNotificationCount QuestionHookCount=$notificationQuestionHookCount PermissionHookCount=$notificationPermissionHookCount CompletedHookCount=$notificationCompletedHookCount NotificationScriptCount=$notificationScriptCount"
     }
-    if ($tokenUsageHookCount -ne 1 -or $tokenUsageScriptCount -ne 1) {
-        throw "每輪 Token 統計安裝檢查失敗：TokenUsageHookCount=$tokenUsageHookCount TokenUsageScriptCount=$tokenUsageScriptCount"
+    if ($tokenUsageHookCount -ne $expectedTokenUsageCount -or $tokenUsageScriptCount -ne $expectedTokenUsageCount) {
+        throw "每輪 Token 統計安裝檢查失敗：Expected=$expectedTokenUsageCount TokenUsageHookCount=$tokenUsageHookCount TokenUsageScriptCount=$tokenUsageScriptCount"
     }
     if ($DevelopmentEnvironment -eq 'CVS') {
         if ($trackHookCount -ne 1 -or $restoreHookCount -ne 1 -or $finalizeHookCount -ne 1 -or $preserveScriptCount -ne 1 -or $legacyHookCount -ne 0) {
@@ -582,11 +615,14 @@ function Set-CodexSettingsHookTrust([string]$Root, [string]$Cwd = (Get-Location)
         if ($null -eq $cwdResult) { throw 'Codex app-server did not return Hook information for the installation directory.' }
         if (@($cwdResult.errors).Count -gt 0) { throw "Codex Hook discovery failed: $(@($cwdResult.errors) -join '; ')" }
 
-        $managedHooks = @($cwdResult.hooks | Where-Object {
+        $managedHooks = @(@($cwdResult.hooks) | Where-Object {
+            -not [string]::IsNullOrWhiteSpace([string]$_.sourcePath) -and
             [string]::Equals([IO.Path]::GetFullPath([string]$_.sourcePath), $hooksPath, [StringComparison]::OrdinalIgnoreCase) -and
             ((Test-ManagedGlobalHookEntry $_) -or (Test-ManagedLineEndingHookEntry $_))
         })
-        if ($managedHooks.Count -eq 0) { throw 'Codex app-server did not discover any Codex Settings Hooks.' }
+        if ($managedHooks.Count -eq 0) {
+            return [pscustomobject]@{ TrustedCount = 0; UpdatedCount = 0; Verified = $true }
+        }
 
         $pendingHooks = @($managedHooks | Where-Object { [string]$_.trustStatus -ne 'trusted' })
         if ($pendingHooks.Count -gt 0) {
@@ -615,7 +651,8 @@ function Set-CodexSettingsHookTrust([string]$Root, [string]$Cwd = (Get-Location)
         $process.StandardInput.Flush()
         $verifyResult = Read-CodexAppServerResponse -Process $process -RequestId 4
         $verifiedCwd = @($verifyResult.data | Where-Object { [IO.Path]::GetFullPath([string]$_.cwd) -eq [IO.Path]::GetFullPath($Cwd) } | Select-Object -First 1)[0]
-        $verifiedHooks = @($verifiedCwd.hooks | Where-Object {
+        $verifiedHooks = @(@($verifiedCwd.hooks) | Where-Object {
+            -not [string]::IsNullOrWhiteSpace([string]$_.sourcePath) -and
             [string]::Equals([IO.Path]::GetFullPath([string]$_.sourcePath), $hooksPath, [StringComparison]::OrdinalIgnoreCase) -and
             ((Test-ManagedGlobalHookEntry $_) -or (Test-ManagedLineEndingHookEntry $_))
         })
@@ -713,7 +750,7 @@ function Install-Target($Target, $Transaction, [switch]$Force) {
         }
     }
 
-    if ($Target.Mode -eq 'Global') { Assert-GlobalLineEndingHook -DevelopmentEnvironment $Target.DevelopmentEnvironment -Root $Target.Root -InstallWindowsNotifications ([bool]$Target.InstallWindowsNotifications) }
+    if ($Target.Mode -eq 'Global') { Assert-GlobalLineEndingHook -DevelopmentEnvironment $Target.DevelopmentEnvironment -Root $Target.Root -InstallWindowsNotifications ([bool]$Target.InstallWindowsNotifications) -InstallTokenUsageInterface ([bool]$Target.InstallTokenUsageInterface) }
 
     return [pscustomobject]@{ Mode = $Target.Mode; DevelopmentEnvironment = $Target.DevelopmentEnvironment; Root = $Target.Root; Previous = $previous; Files = $entries.ToArray() }
 }
