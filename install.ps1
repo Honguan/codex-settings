@@ -9,6 +9,7 @@ param(
     [switch]$SkipGlobal,
     [switch]$SkipRegisteredProjects,
     [switch]$InstallRequestExecutionOptimizer,
+    [switch]$InstallMattPocockSkills,
     [switch]$EnableDefaultModeRequestUserInput,
     [switch]$Force,
     [ValidateSet('Merge', 'Replace')]
@@ -32,9 +33,10 @@ if ($Mode -eq 'Interactive') {
                 'Global' {
                     $style = Select-InstallStyle
                     $installRequestExecutionOptimizer = Select-OptionalGlobalSkill
+                    $installMattPocockSkills = Select-OptionalMattPocockSkills
                     $enableDefaultModeRequestUserInput = Select-OptionalDefaultModeRequestUserInput
                     $paths = Select-GlobalProjectPaths
-                    & $PSCommandPath -Mode Global -InstallStyle $style -ProjectPath $paths -InstallRequestExecutionOptimizer:$installRequestExecutionOptimizer -EnableDefaultModeRequestUserInput:$enableDefaultModeRequestUserInput
+                    & $PSCommandPath -Mode Global -InstallStyle $style -ProjectPath $paths -InstallRequestExecutionOptimizer:$installRequestExecutionOptimizer -InstallMattPocockSkills:$installMattPocockSkills -EnableDefaultModeRequestUserInput:$enableDefaultModeRequestUserInput
                 }
                 'Git' {
                     $style = Select-InstallStyle
@@ -119,6 +121,11 @@ try {
             $profilePaths = @($PROFILE.CurrentUserAllHosts, $PROFILE.CurrentUserCurrentHost) | Select-Object -Unique
             foreach ($profilePath in $profilePaths) { Save-TransactionFile $transaction $profilePath }
             $ccusage = & (Join-Path $ScriptRoot 'install-ccusage.ps1') -SkipPackageInstall:$SkipCcusageInstall -PackageState $ccusageBefore -PassThru
+            if ($InstallMattPocockSkills) {
+                Write-Host '正在安裝 mattpocock/skills；請依提示選擇要加入的技能。'
+                & npx --yes 'skills@latest' add 'mattpocock/skills' --global --agent codex
+                if ($LASTEXITCODE -ne 0) { throw "mattpocock/skills 安裝失敗，結束碼：$LASTEXITCODE" }
+            }
 
             $original = $ccusageBefore
             $installedByPackage = [bool]$ccusage.PackageInstalledNow

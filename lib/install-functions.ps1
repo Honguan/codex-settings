@@ -50,6 +50,14 @@ function Select-OptionalGlobalSkill {
     return $selection -in @('y', 'Y', 'yes', 'YES')
 }
 
+function Select-OptionalMattPocockSkills {
+    Write-Host ''
+    Write-Host '選用全域技能：mattpocock/skills'
+    Write-Host '會安裝到 Codex 使用者層級，並在下一步由原始安裝器選擇技能。'
+    $selection = Read-Host '要安裝嗎？[y/N]'
+    return $selection -in @('y', 'Y', 'yes', 'YES')
+}
+
 function Select-OptionalDefaultModeRequestUserInput {
     Write-Host ''
     Write-Host '選用功能：預設啟用 request_user_input'

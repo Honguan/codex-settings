@@ -57,6 +57,7 @@ Windows 上的 Codex 全域、Git 專案與 CVS 專案設定管理工具。
 ```powershell
 & .\Install.cmd -Mode Global
 & .\Install.cmd -Mode Global -InstallRequestExecutionOptimizer
+& .\Install.cmd -Mode Global -InstallMattPocockSkills
 & .\Install.cmd -Mode Global -EnableDefaultModeRequestUserInput
 & .\Install.cmd -Mode Git -ProjectPath 'E:\Git\MyProject'
 & .\Install.cmd -Mode CVS -ProjectPath 'E:\CVS\MyProject'
@@ -65,6 +66,8 @@ Windows 上的 Codex 全域、Git 專案與 CVS 專案設定管理工具。
 若系統沒有 PowerShell 7，全域安裝會停止並顯示實際版本。
 
 互動式全域安裝也會詢問是否加入：
+
+- `mattpocock/skills`：安裝到 Codex 使用者層級，並由原始安裝器選擇要加入的技能。
 
 ```toml
 [features]
