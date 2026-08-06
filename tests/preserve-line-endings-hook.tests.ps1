@@ -3,99 +3,114 @@ $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $hookScript = Join-Path $repositoryRoot 'src\templates\environments\cvs\hooks\preserve-line-endings.ps1'
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('codex-settings-line-endings-' + [guid]::NewGuid().ToString('N'))
 $projectRoot = Join-Path $testRoot 'project'
-$binRoot = Join-Path $testRoot 'bin'
-$utf8NoBom = [Text.UTF8Encoding]::new($false)
+$stateRoot = Join-Path $testRoot 'state'
 
 function Write-TestBytes([string]$Name, [byte[]]$Bytes) {
-    [IO.File]::WriteAllBytes((Join-Path $projectRoot $Name), $Bytes)
+    $path = Join-Path $projectRoot $Name
+    New-Item -ItemType Directory -Path (Split-Path -Parent $path) -Force | Out-Null
+    [IO.File]::WriteAllBytes($path, $Bytes)
 }
 
 function Assert-Bytes([string]$Name, [byte[]]$Expected) {
     $actual = [IO.File]::ReadAllBytes((Join-Path $projectRoot $Name))
-    if (-not [Linq.Enumerable]::SequenceEqual([byte[]]$actual, [byte[]]$Expected)) {
-        throw "位元組內容不符：$Name"
-    }
+    if (-not [Linq.Enumerable]::SequenceEqual([byte[]]$actual, [byte[]]$Expected)) { throw "位元組內容不符：$Name" }
 }
 
-function Invoke-HookProcess([string]$WorkingDirectory, [string]$PathValue) {
+function Invoke-Hook([ValidateSet('Track', 'Restore')][string]$Mode, [string]$SessionId, [string]$InputText) {
     $startInfo = [Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = 'pwsh'
-    $startInfo.ArgumentList.Add('-NoLogo')
-    $startInfo.ArgumentList.Add('-NoProfile')
-    $startInfo.ArgumentList.Add('-File')
-    $startInfo.ArgumentList.Add($hookScript)
-    $startInfo.WorkingDirectory = $WorkingDirectory
+    foreach ($argument in @('-NoLogo', '-NoProfile', '-File', $hookScript, '-Mode', $Mode)) { $startInfo.ArgumentList.Add($argument) }
+    $startInfo.WorkingDirectory = $projectRoot
     $startInfo.UseShellExecute = $false
+    $startInfo.RedirectStandardInput = $true
     $startInfo.RedirectStandardOutput = $true
     $startInfo.RedirectStandardError = $true
-    $startInfo.Environment['PATH'] = $PathValue
+    $startInfo.Environment['CODEX_SETTINGS_LINE_ENDING_STATE_ROOT'] = $stateRoot
     $process = [Diagnostics.Process]::Start($startInfo)
+    $process.StandardInput.Write($InputText)
+    $process.StandardInput.Close()
     $stdout = $process.StandardOutput.ReadToEnd()
     $stderr = $process.StandardError.ReadToEnd()
     $process.WaitForExit()
-    return [pscustomobject]@{ ExitCode = $process.ExitCode; Stdout = $stdout; Stderr = $stderr }
+    if ($process.ExitCode -ne 0) { throw "$Mode Hook 結束碼不是 0：$($process.ExitCode) - $stderr" }
+    try { $output = $stdout | ConvertFrom-Json -ErrorAction Stop } catch { throw "$Mode Hook stdout 不是合法 JSON：$stdout" }
+    return [pscustomobject]@{ Output = $output; Stdout = $stdout; Stderr = $stderr }
+}
+
+function New-HookInput([string]$EventName, [string]$SessionId) {
+    return ([ordered]@{
+        session_id = $SessionId
+        cwd = $projectRoot
+        hook_event_name = $EventName
+        tool_name = 'apply_patch'
+        tool_input = [ordered]@{ command = '*** Begin Patch' }
+    } | ConvertTo-Json -Depth 5 -Compress)
 }
 
 try {
-    New-Item -ItemType Directory -Path (Join-Path $projectRoot 'CVS'), $binRoot -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $projectRoot 'CVS'), $stateRoot -Force | Out-Null
+    $trackedFiles = @('crlf.txt', 'lf.txt', 'no-final.txt', 'with-final.txt', 'utf8-bom.txt', 'ansi.txt', 'unchanged.txt', 'binary.bin', '.codex\ignored.txt')
+    $entries = @($trackedFiles | Where-Object { $_ -notmatch '\\' } | ForEach-Object { "/$_/1.1///" }) + 'D/.codex////'
+    [IO.File]::WriteAllLines((Join-Path $projectRoot 'CVS\Entries'), $entries, [Text.Encoding]::ASCII)
 
-    Write-TestBytes 'crlf-majority.txt' ([Text.Encoding]::ASCII.GetBytes("a`r`nb`r`nc`r`nd`n"))
-    Write-TestBytes 'lf-majority.txt' ([Text.Encoding]::ASCII.GetBytes("a`nb`nc`nd`r`n"))
-    Write-TestBytes 'pure-crlf.txt' ([Text.Encoding]::ASCII.GetBytes("a`r`nb`r`n"))
-    Write-TestBytes 'pure-lf.txt' ([Text.Encoding]::ASCII.GetBytes("a`nb`n"))
-    Write-TestBytes 'single-line.txt' ([Text.Encoding]::ASCII.GetBytes('single'))
-    Write-TestBytes 'ambiguous.txt' ([Text.Encoding]::ASCII.GetBytes("a`r`nb`n"))
-    Write-TestBytes 'utf8-bom.txt' ([byte[]](0xEF, 0xBB, 0xBF) + [Text.Encoding]::UTF8.GetBytes("a`r`nb`r`nc`n"))
-    Write-TestBytes 'ansi.txt' ([byte[]](0xE9, 0x0A, 0xE8, 0x0A, 0xE7, 0x0D, 0x0A))
+    Write-TestBytes 'crlf.txt' ([Text.Encoding]::ASCII.GetBytes("before`r`nend`r`n"))
+    Write-TestBytes 'lf.txt' ([Text.Encoding]::ASCII.GetBytes("before`nend`n"))
+    Write-TestBytes 'no-final.txt' ([Text.Encoding]::ASCII.GetBytes("before`r`nend"))
+    Write-TestBytes 'with-final.txt' ([Text.Encoding]::ASCII.GetBytes("before`nend`n"))
+    Write-TestBytes 'utf8-bom.txt' ([byte[]](0xEF, 0xBB, 0xBF) + [Text.Encoding]::UTF8.GetBytes("before`r`nend`r`n"))
+    Write-TestBytes 'ansi.txt' ([byte[]](0xE9, 0x0A, 0xE8, 0x0A))
+    Write-TestBytes 'unchanged.txt' ([Text.Encoding]::ASCII.GetBytes("same`r`n"))
     Write-TestBytes 'binary.bin' ([byte[]](0x00, 0x41, 0x0D, 0x0A, 0x42, 0x0A))
+    Write-TestBytes '.codex\ignored.txt' ([Text.Encoding]::ASCII.GetBytes("ignored`r`n"))
+    New-Item -ItemType Directory -Path (Join-Path $projectRoot '.codex\CVS') -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $projectRoot '.codex\CVS\Entries'), '/ignored.txt/1.1///', [Text.Encoding]::ASCII)
+    $unchangedTime = [IO.File]::GetLastWriteTimeUtc((Join-Path $projectRoot 'unchanged.txt'))
 
-    $pureCrlf = [IO.File]::ReadAllBytes((Join-Path $projectRoot 'pure-crlf.txt'))
-    $pureLf = [IO.File]::ReadAllBytes((Join-Path $projectRoot 'pure-lf.txt'))
-    $singleLine = [IO.File]::ReadAllBytes((Join-Path $projectRoot 'single-line.txt'))
-    $ambiguous = [IO.File]::ReadAllBytes((Join-Path $projectRoot 'ambiguous.txt'))
-    $binary = [IO.File]::ReadAllBytes((Join-Path $projectRoot 'binary.bin'))
+    $sessionA = 'session-A'
+    $trackInput = New-HookInput -EventName PreToolUse -SessionId $sessionA
+    Invoke-Hook -Mode Track -SessionId $sessionA -InputText $trackInput | Out-Null
+    $statePathA = Join-Path $stateRoot 'session-A.json'
+    if (-not (Test-Path -LiteralPath $statePathA -PathType Leaf)) { throw 'PreToolUse 未建立 session 狀態檔。' }
+    $firstStateContent = Get-Content -LiteralPath $statePathA -Raw
+    $stateA = $firstStateContent | ConvertFrom-Json
+    if (@($stateA.files.PSObject.Properties).Count -ne 7) { throw 'PreToolUse 未正確記錄 CVS 追蹤檔或錯誤包含管理目錄。' }
+    $crlfState = $stateA.files.PSObject.Properties[(Join-Path $projectRoot 'crlf.txt')].Value
+    $noFinalState = $stateA.files.PSObject.Properties[(Join-Path $projectRoot 'no-final.txt')].Value
+    $bomState = $stateA.files.PSObject.Properties[(Join-Path $projectRoot 'utf8-bom.txt')].Value
+    if ($crlfState.lineEnding -ne 'CRLF' -or -not [bool]$crlfState.finalNewline -or $noFinalState.finalNewline -ne $false -or $bomState.bom -ne 'UTF8-BOM') { throw 'PreToolUse 狀態內容不完整或錯誤。' }
 
-    $cvsOutput = @(
-        'M crlf-majority.txt',
-        'M lf-majority.txt',
-        'M pure-crlf.txt',
-        'M pure-lf.txt',
-        'A single-line.txt',
-        'C ambiguous.txt',
-        'M utf8-bom.txt',
-        'M ansi.txt',
-        'M binary.bin'
-    )
-    $cmdLines = @('@echo off') + @($cvsOutput | ForEach-Object { 'echo ' + $_ })
-    [IO.File]::WriteAllText((Join-Path $binRoot 'cvs.cmd'), ($cmdLines -join "`r`n") + "`r`n", [Text.Encoding]::ASCII)
+    Write-TestBytes 'crlf.txt' ([Text.Encoding]::ASCII.GetBytes("before`r`nend`r`nadded1`nadded2`nadded3`n"))
+    Write-TestBytes 'lf.txt' ([Text.Encoding]::ASCII.GetBytes("before`nend`nadded1`r`nadded2`r`nadded3`r`n"))
+    Write-TestBytes 'no-final.txt' ([Text.Encoding]::ASCII.GetBytes("before`r`nend`r`nadded`n"))
+    Write-TestBytes 'with-final.txt' ([Text.Encoding]::ASCII.GetBytes("before`nend`r`n`r`n"))
+    Write-TestBytes 'utf8-bom.txt' ([Text.Encoding]::UTF8.GetBytes("before`r`nend`nadded`n"))
+    Write-TestBytes 'ansi.txt' ([byte[]](0xE9, 0x0D, 0x0A, 0xE8, 0x0D, 0x0A))
+    Write-TestBytes 'binary.bin' ([byte[]](0x00, 0x41, 0x0A, 0x42, 0x0D, 0x0A))
 
-    $result = Invoke-HookProcess -WorkingDirectory $projectRoot -PathValue ($binRoot + [IO.Path]::PathSeparator + $env:PATH)
-    if ($result.ExitCode -ne 0) { throw "Hook 結束碼不是 0：$($result.ExitCode)" }
-    if ($result.Stdout.Trim() -ne '{}') { throw "Stop Hook 標準輸出不是唯一的合法空 JSON：$($result.Stdout)" }
-    if ($result.Stderr -notmatch 'ambiguous\.txt') {
-        throw '數量相同的混合換行沒有輸出警告。'
-    }
+    Invoke-Hook -Mode Track -SessionId $sessionA -InputText $trackInput | Out-Null
+    $stateAfterSecondTrack = Get-Content -LiteralPath $statePathA -Raw
+    if ($stateAfterSecondTrack -ne $firstStateContent) { throw '同一 session 的第二次 Track 覆寫原始狀態。' }
 
-    Assert-Bytes 'crlf-majority.txt' ([Text.Encoding]::ASCII.GetBytes("a`r`nb`r`nc`r`nd`r`n"))
-    Assert-Bytes 'lf-majority.txt' ([Text.Encoding]::ASCII.GetBytes("a`nb`nc`nd`n"))
-    Assert-Bytes 'pure-crlf.txt' $pureCrlf
-    Assert-Bytes 'pure-lf.txt' $pureLf
-    Assert-Bytes 'single-line.txt' $singleLine
-    Assert-Bytes 'ambiguous.txt' $ambiguous
-    Assert-Bytes 'utf8-bom.txt' ([byte[]](0xEF, 0xBB, 0xBF) + [Text.Encoding]::UTF8.GetBytes("a`r`nb`r`nc`r`n"))
-    Assert-Bytes 'ansi.txt' ([byte[]](0xE9, 0x0A, 0xE8, 0x0A, 0xE7, 0x0A))
-    Assert-Bytes 'binary.bin' $binary
+    $sessionB = 'session-B'
+    Invoke-Hook -Mode Track -SessionId $sessionB -InputText (New-HookInput -EventName PreToolUse -SessionId $sessionB) | Out-Null
+    if (-not (Test-Path -LiteralPath (Join-Path $stateRoot 'session-B.json'))) { throw '不同 session 未建立獨立狀態檔。' }
 
-    [IO.File]::WriteAllText((Join-Path $binRoot 'cvs.cmd'), "@echo off`r`nexit /b 1`r`n", [Text.Encoding]::ASCII)
-    $failureResult = Invoke-HookProcess -WorkingDirectory $projectRoot -PathValue ($binRoot + [IO.Path]::PathSeparator + $env:PATH)
-    if ($failureResult.ExitCode -ne 0 -or $failureResult.Stdout.Trim() -ne '{}' -or $failureResult.Stderr -notmatch 'CVS status scan failed') {
-        throw 'CVS 掃描失敗時沒有警告並安全結束。'
-    }
+    $restoreInput = New-HookInput -EventName Stop -SessionId $sessionA
+    Invoke-Hook -Mode Restore -SessionId $sessionA -InputText $restoreInput | Out-Null
+    if (Test-Path -LiteralPath $statePathA) { throw 'Stop Hook 未清理完成的 session 狀態檔。' }
+    if (-not (Test-Path -LiteralPath (Join-Path $stateRoot 'session-B.json'))) { throw 'Stop Hook 誤刪其他 session 狀態檔。' }
 
-    $outsideRoot = Join-Path $testRoot 'outside'
-    New-Item -ItemType Directory -Path $outsideRoot -Force | Out-Null
-    $outsideResult = Invoke-HookProcess -WorkingDirectory $outsideRoot -PathValue $env:PATH
-    if ($outsideResult.ExitCode -ne 0 -or $outsideResult.Stdout.Trim() -ne '{}') { throw '非 CVS 專案中未安全結束。' }
+    Assert-Bytes 'crlf.txt' ([Text.Encoding]::ASCII.GetBytes("before`r`nend`r`nadded1`r`nadded2`r`nadded3`r`n"))
+    Assert-Bytes 'lf.txt' ([Text.Encoding]::ASCII.GetBytes("before`nend`nadded1`nadded2`nadded3`n"))
+    Assert-Bytes 'no-final.txt' ([Text.Encoding]::ASCII.GetBytes("before`r`nend`r`nadded"))
+    Assert-Bytes 'with-final.txt' ([Text.Encoding]::ASCII.GetBytes("before`nend`n"))
+    Assert-Bytes 'utf8-bom.txt' ([byte[]](0xEF, 0xBB, 0xBF) + [Text.Encoding]::UTF8.GetBytes("before`r`nend`r`nadded`r`n"))
+    Assert-Bytes 'ansi.txt' ([byte[]](0xE9, 0x0A, 0xE8, 0x0A))
+    Assert-Bytes 'binary.bin' ([byte[]](0x00, 0x41, 0x0A, 0x42, 0x0D, 0x0A))
+    if ([IO.File]::GetLastWriteTimeUtc((Join-Path $projectRoot 'unchanged.txt')) -ne $unchangedTime) { throw 'Stop Hook 重寫了未修改檔案。' }
+
+    $invalid = Invoke-Hook -Mode Track -SessionId 'invalid' -InputText '{invalid-json'
+    if ([string]::IsNullOrWhiteSpace([string]$invalid.Output.systemMessage)) { throw '無效 payload 沒有回傳清楚錯誤。' }
 } finally {
     Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
 }

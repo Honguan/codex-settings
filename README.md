@@ -23,10 +23,10 @@ Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 
 ## 一鍵安裝
 
-下載 Release 中含版本號的單一檔案，例如 `CodexSettings-Setup-v1.6.0.cmd`，不需解壓縮，直接執行：
+下載 Release 中含版本號的單一檔案，例如 `CodexSettings-Setup-v1.7.0.cmd`，不需解壓縮，直接執行：
 
 ```powershell
-.\CodexSettings-Setup-v1.6.0.cmd
+.\CodexSettings-Setup-v1.7.0.cmd
 ```
 
 安裝器會在 `%TEMP%` 解開內嵌程式、執行後立即清理。從原始碼執行時則使用根目錄的 `Install.cmd`。
@@ -43,9 +43,9 @@ Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 選擇「全域安裝／更新」後會選擇開發環境：
 
 - Git（首次安裝預設）：加入 Git 專屬 AGENTS 與 Rules。
-- CVS：加入 CVS 專屬 AGENTS、Rules 與全域換行保護 Stop Hook。Hook 只修復本次 CVS 修改檔中的混合換行，不會把所有檔案強制轉為 CRLF。
+- CVS：加入 CVS 專屬 AGENTS、Rules 與全域換行保護 Hooks。`PreToolUse` 依 session 記錄 CVS 追蹤檔的原始狀態，`Stop` 只恢復本次實際改變的檔案。
 
-換行保護會依檔案內現有換行的多數格式恢復為 CRLF 或 LF；兩者數量相同時略過並警告。轉換直接處理換行位元組，不會重新編碼文字或改變 BOM。
+換行保護會精確恢復每個檔案原本的 CRLF／LF 與檔尾換行，不再依修改後的換行數量猜測。轉換直接處理換行位元組，不會重新編碼文字或改變 BOM；session 狀態在完成後自動清除。
 
 安裝成功後會將選擇記錄為預設專案體系。下次互動安裝按 Enter，或非互動安裝未提供 `-DevelopmentEnvironment` 時，會沿用上次的 Git／CVS 選擇。
 
@@ -197,10 +197,10 @@ cdaily 30                        # 顯示最近 30 天的每日統計
 確認版本後再建立對應的 Git tag。GitHub Actions 僅接受完整的 `v主版.次版.修訂版` 標籤。
 
 ```powershell
-.\tools\build-installer.ps1 -Version v1.6.0
+.\tools\build-installer.ps1 -Version v1.7.0
 ```
 
-輸出為唯一的 `dist\CodexSettings-Setup-v1.6.0.cmd`，內嵌所有必要模組與範本。正式發佈時，檔名版本會直接取自 Git tag。
+輸出為唯一的 `dist\CodexSettings-Setup-v1.7.0.cmd`，內嵌所有必要模組與範本。正式發佈時，檔名版本會直接取自 Git tag。
 
 原始碼依職責整理為：
 

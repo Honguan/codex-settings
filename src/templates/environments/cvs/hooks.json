@@ -1,13 +1,27 @@
 {
-  "description": "Restore mixed line endings after Codex finishes.",
+  "description": "Preserve original line endings for files modified by Codex.",
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pwsh -NoProfile -Command '& (Join-Path $HOME \".codex/hooks/preserve-line-endings.ps1\") -Mode Track'",
+            "commandWindows": "pwsh.exe -NoProfile -ExecutionPolicy Bypass -Command \"& (Join-Path $HOME '.codex\\hooks\\preserve-line-endings.ps1') -Mode Track\"",
+            "timeout": 60,
+            "statusMessage": "Recording original line endings"
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "pwsh -NoProfile -Command '& (Join-Path $HOME \".codex/hooks/preserve-line-endings.ps1\")'",
-            "commandWindows": "pwsh.exe -NoProfile -ExecutionPolicy Bypass -Command \"& (Join-Path $HOME '.codex\\hooks\\preserve-line-endings.ps1')\"",
+            "command": "pwsh -NoProfile -Command '& (Join-Path $HOME \".codex/hooks/preserve-line-endings.ps1\") -Mode Restore'",
+            "commandWindows": "pwsh.exe -NoProfile -ExecutionPolicy Bypass -Command \"& (Join-Path $HOME '.codex\\hooks\\preserve-line-endings.ps1') -Mode Restore\"",
             "timeout": 60,
             "statusMessage": "Restoring original line endings"
           }
