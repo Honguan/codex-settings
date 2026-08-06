@@ -32,12 +32,11 @@ function Get-Sha256([byte[]]$Bytes) {
 
 function Get-CvsRoot([string]$StartPath) {
     $current = [IO.DirectoryInfo][IO.Path]::GetFullPath($StartPath)
-    $root = $null
     while ($null -ne $current) {
-        if (Test-Path -LiteralPath (Join-Path $current.FullName 'CVS') -PathType Container) { $root = $current.FullName }
+        if (Test-Path -LiteralPath (Join-Path $current.FullName 'CVS') -PathType Container) { return $current.FullName }
         $current = $current.Parent
     }
-    return $root
+    return $null
 }
 
 function Test-BinaryBytes([byte[]]$Bytes) {
@@ -57,7 +56,18 @@ function Get-LineEndingState([byte[]]$Bytes) {
     $style = if ($crlf -gt 0 -and $lfOnly -gt 0) { 'MIXED' } elseif ($crlf -gt 0) { 'CRLF' } elseif ($lfOnly -gt 0) { 'LF' } else { 'NONE' }
     $finalNewline = $Bytes.Length -gt 0 -and $Bytes[$Bytes.Length - 1] -eq 10
     $finalStyle = if (-not $finalNewline) { 'NONE' } elseif ($Bytes.Length -gt 1 -and $Bytes[$Bytes.Length - 2] -eq 13) { 'CRLF' } else { 'LF' }
-    return [pscustomobject]@{ Style = $style; FinalNewline = $finalNewline; FinalStyle = $finalStyle }
+    $preferredStyle = if ($style -in @('CRLF', 'LF')) {
+        $style
+    } elseif ($crlf -gt $lfOnly) {
+        'CRLF'
+    } elseif ($lfOnly -gt $crlf) {
+        'LF'
+    } elseif ($finalStyle -in @('CRLF', 'LF')) {
+        $finalStyle
+    } else {
+        'CRLF'
+    }
+    return [pscustomobject]@{ Style = $style; PreferredStyle = $preferredStyle; FinalNewline = $finalNewline; FinalStyle = $finalStyle }
 }
 
 function Get-BomName([byte[]]$Bytes) {
@@ -176,6 +186,7 @@ function Save-InitialState($InputObject) {
         $lineEndings = Get-LineEndingState -Bytes $bytes
         $files[$path] = [ordered]@{
             lineEnding = $lineEndings.Style
+            preferredLineEnding = $lineEndings.PreferredStyle
             finalNewline = $lineEndings.FinalNewline
             finalNewlineStyle = $lineEndings.FinalStyle
             bom = Get-BomName -Bytes $bytes
@@ -215,12 +226,11 @@ function Restore-InitialState($InputObject, [Collections.Generic.List[string]]$W
                 if ((Get-Sha256 -Bytes $bytes) -eq [string]$original.sha256) { continue }
 
                 $restored = Restore-BomBytes -Bytes $bytes -OriginalBom ([string]$original.bom)
-                if ([string]$original.lineEnding -in @('CRLF', 'LF')) {
-                    $restored = Convert-LineEndingBytes -Bytes $restored -Style ([string]$original.lineEnding)
-                } elseif ([string]$original.lineEnding -eq 'MIXED') {
-                    $Warnings.Add("Skipped original mixed line endings: $path")
+                $restoreStyle = if ([string]$original.lineEnding -eq 'MIXED') { [string]$original.preferredLineEnding } else { [string]$original.lineEnding }
+                if ($restoreStyle -in @('CRLF', 'LF')) {
+                    $restored = Convert-LineEndingBytes -Bytes $restored -Style $restoreStyle
                 }
-                $finalStyle = if ([string]$original.lineEnding -in @('CRLF', 'LF')) { [string]$original.lineEnding } elseif ([string]$original.finalNewlineStyle -in @('CRLF', 'LF')) { [string]$original.finalNewlineStyle } else { 'LF' }
+                $finalStyle = if ($restoreStyle -in @('CRLF', 'LF')) { $restoreStyle } elseif ([string]$original.finalNewlineStyle -in @('CRLF', 'LF')) { [string]$original.finalNewlineStyle } else { 'LF' }
                 $restored = Set-FinalNewlineBytes -Bytes $restored -FinalNewline ([bool]$original.finalNewline) -Style $finalStyle
                 if (-not [Linq.Enumerable]::SequenceEqual([byte[]]$bytes, [byte[]]$restored)) {
                     [IO.File]::WriteAllBytes($path, $restored)
