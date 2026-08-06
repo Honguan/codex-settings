@@ -7,6 +7,7 @@ param(
     [switch]$InstallRequestExecutionOptimizer,
     [switch]$InstallMattPocockSkills,
     [switch]$EnableDefaultModeRequestUserInput,
+    [Nullable[bool]]$InstallWindowsNotifications,
     [ValidateSet('Git', 'CVS')]
     [string]$DevelopmentEnvironment,
     [switch]$Force,
@@ -37,8 +38,9 @@ if ($Mode -eq 'Interactive') {
                     $installRequestExecutionOptimizer = Select-OptionalGlobalSkill
                     $installMattPocockSkills = Select-OptionalMattPocockSkills
                     $enableDefaultModeRequestUserInput = Select-OptionalDefaultModeRequestUserInput
-                    & $PSCommandPath -Mode Global -InstallStyle $style -DevelopmentEnvironment $developmentEnvironment -InstallRequestExecutionOptimizer:$installRequestExecutionOptimizer -InstallMattPocockSkills:$installMattPocockSkills -EnableDefaultModeRequestUserInput:$enableDefaultModeRequestUserInput
-                    return
+                    $installWindowsNotifications = Select-OptionalWindowsNotifications -AlreadyInstalled:(Test-WindowsNotificationsInstalled -Root $globalRoot)
+                    & $PSCommandPath -Mode Global -InstallStyle $style -DevelopmentEnvironment $developmentEnvironment -InstallRequestExecutionOptimizer:$installRequestExecutionOptimizer -InstallMattPocockSkills:$installMattPocockSkills -EnableDefaultModeRequestUserInput:$enableDefaultModeRequestUserInput -InstallWindowsNotifications:$installWindowsNotifications
+                    exit 0
                 }
                 default { & $PSCommandPath -Mode $selection }
             }
@@ -64,7 +66,10 @@ $Force = $InstallStyle -eq 'Replace'
 if (-not $InstallMattPocockSkills -and (Test-MattPocockSkillsInstalled)) {
     $InstallMattPocockSkills = $true
 }
-$targets = @(Resolve-GlobalTargets -DevelopmentEnvironment $DevelopmentEnvironment -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput)
+if ($null -eq $InstallWindowsNotifications) {
+    $InstallWindowsNotifications = Test-WindowsNotificationsInstalled -Root $globalRoot
+}
+$targets = @(Resolve-GlobalTargets -DevelopmentEnvironment $DevelopmentEnvironment -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput -InstallWindowsNotifications ([bool]$InstallWindowsNotifications))
 $preflight = $globalRoot
 Test-Prerequisites 'Global' $preflight
 foreach ($target in $targets) { Test-DirectoryWritable -Path $target.Root }
@@ -151,7 +156,9 @@ try {
 
         Complete-FileTransaction -Transaction $transaction
 
-        & (Join-Path $globalRoot 'hooks\show-codex-notification.ps1') -Type Completed -Test | Out-Null
+        if ([bool]$InstallWindowsNotifications) {
+            & (Join-Path $globalRoot 'hooks\show-codex-notification.ps1') -Type Completed -Test | Out-Null
+        }
 
         Write-Host ''
         Write-Host '安裝完成。'
@@ -175,7 +182,7 @@ try {
         Write-Host '  cdaily [天數]：查看每日 Token 與費用統計。'
         Write-Host "舊專案設定：處理 $($obsoleteProjects.Projects) 個專案、移除 $($obsoleteProjects.FilesRemoved) 個檔案、更新 $($obsoleteProjects.FilesUpdated) 個檔案"
         Write-Host "交易備份：$transactionRoot"
-        Write-Host 'Windows 通知：已送出安裝測試通知。'
+        Write-Host $(if ([bool]$InstallWindowsNotifications) { 'Windows 通知：已安裝，並送出測試通知。' } else { 'Windows 通知：未安裝。' })
         Write-Host '請重新啟動 PowerShell 與 Codex，以載入設定、指令與 MCP。'
     } catch {
         $reason = $_.Exception.Message

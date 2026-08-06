@@ -119,6 +119,32 @@ function Select-OptionalDefaultModeRequestUserInput {
     return $selection -in @('y', 'Y', 'yes', 'YES')
 }
 
+function Test-WindowsNotificationsInstalled([string]$Root = (Join-Path $HOME '.codex')) {
+    if (Test-Path -LiteralPath (Join-Path $Root 'hooks\show-codex-notification.ps1') -PathType Leaf) { return $true }
+    $hooksPath = Join-Path $Root 'hooks.json'
+    if (-not (Test-Path -LiteralPath $hooksPath -PathType Leaf)) { return $false }
+    try {
+        $hooksObject = Get-Content -LiteralPath $hooksPath -Raw | ConvertFrom-Json -ErrorAction Stop
+        foreach ($property in @($hooksObject.hooks.PSObject.Properties)) {
+            if (@($property.Value | Where-Object { Test-ManagedNotificationHookEntry $_ }).Count -gt 0) { return $true }
+        }
+    } catch { return $false }
+    return $false
+}
+
+function Select-OptionalWindowsNotifications([bool]$AlreadyInstalled = (Test-WindowsNotificationsInstalled)) {
+    Write-Host ''
+    Write-Host '選用全域功能：Windows 完成、權限與提問通知'
+    if ($AlreadyInstalled) {
+        Write-Host '已偵測到既有受管理通知；預設保留並更新。'
+        $selection = Read-Host '要繼續安裝嗎？[Y/n]'
+        return $selection -notin @('n', 'N', 'no', 'NO')
+    }
+    Write-Host '尚未安裝；選擇安裝後會套用到所有專案。'
+    $selection = Read-Host '要安裝嗎？[y/N]'
+    return $selection -in @('y', 'Y', 'yes', 'YES')
+}
+
 function Assert-Command([string]$Name) {
     if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) { throw "在 PATH 中找不到 $Name。" }
 }
@@ -148,7 +174,7 @@ function Test-Prerequisites([string]$InstallMode, [string]$TargetPath) {
     if ($shape.Duplicates.Count -gt 0) { throw "內建 config.toml 無效：$($shape.Duplicates -join ', ')" }
 }
 
-function Resolve-GlobalTargets([ValidateSet('Git', 'CVS')][string]$DevelopmentEnvironment, [switch]$InstallRequestExecutionOptimizer, [switch]$EnableDefaultModeRequestUserInput) {
+function Resolve-GlobalTargets([ValidateSet('Git', 'CVS')][string]$DevelopmentEnvironment, [switch]$InstallRequestExecutionOptimizer, [switch]$EnableDefaultModeRequestUserInput, [bool]$InstallWindowsNotifications) {
     $targets = New-Object 'System.Collections.Generic.List[object]'
     [void]$targets.Add([pscustomobject]@{
         Mode = 'Global'
@@ -157,6 +183,7 @@ function Resolve-GlobalTargets([ValidateSet('Git', 'CVS')][string]$DevelopmentEn
         DevelopmentEnvironment = $DevelopmentEnvironment
         Root = Join-Path $HOME '.codex'
         EnableDefaultModeRequestUserInput = [bool]$EnableDefaultModeRequestUserInput
+        InstallWindowsNotifications = $InstallWindowsNotifications
     })
     $skillsRoot = Join-Path $HOME '.codex\skills'
     $skillManifest = Join-Path $skillsRoot '.codex-settings-manifest.json'
@@ -171,9 +198,13 @@ function Get-InstallTemplateEntries($Target) {
     $globalPaths = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
     foreach ($source in Get-ChildItem -LiteralPath $Target.Template -Recurse -File) {
         $relative = $source.FullName.Substring($Target.Template.Length).TrimStart([char[]]'\/')
+        if ($Target.Mode -eq 'Global' -and -not [bool]$Target.InstallWindowsNotifications -and $relative.Replace('\', '/') -eq 'hooks/show-codex-notification.ps1') { continue }
         [void]$globalPaths.Add($relative)
         $content = [IO.File]::ReadAllText($source.FullName)
         if ($Target.Mode -eq 'Global') {
+            if (-not [bool]$Target.InstallWindowsNotifications -and $relative.Replace('\', '/') -eq 'hooks.json') {
+                $content = Remove-ManagedNotificationHooksJson -Content $content
+            }
             $environmentSource = Join-Path $Target.EnvironmentTemplate $relative
             if (Test-Path -LiteralPath $environmentSource -PathType Leaf) {
                 if ($relative.Replace('\', '/') -eq 'hooks.json') {
@@ -296,7 +327,7 @@ function Remove-GlobalLineEndingHooks([string]$Root, $Transaction) {
     }
 }
 
-function Assert-GlobalLineEndingHook([ValidateSet('Git', 'CVS')][string]$DevelopmentEnvironment, [string]$Root) {
+function Assert-GlobalLineEndingHook([ValidateSet('Git', 'CVS')][string]$DevelopmentEnvironment, [string]$Root, [bool]$InstallWindowsNotifications) {
     $hooksPath = Join-Path $Root 'hooks.json'
     $hookContent = if (Test-Path -LiteralPath $hooksPath -PathType Leaf) { [IO.File]::ReadAllText($hooksPath) } else { '' }
     $trackHookCount = 0
@@ -332,8 +363,9 @@ function Assert-GlobalLineEndingHook([ValidateSet('Git', 'CVS')][string]$Develop
     $preserveScriptCount = if (Test-Path -LiteralPath (Join-Path $Root 'hooks\preserve-line-endings.ps1') -PathType Leaf) { 1 } else { 0 }
     $notificationScriptCount = if (Test-Path -LiteralPath (Join-Path $Root 'hooks\show-codex-notification.ps1') -PathType Leaf) { 1 } else { 0 }
     $tokenUsageScriptCount = if (Test-Path -LiteralPath (Join-Path $Root 'hooks\show-turn-token-usage.ps1') -PathType Leaf) { 1 } else { 0 }
-    if ($notificationQuestionHookCount -ne 1 -or $notificationPermissionHookCount -ne 1 -or $notificationCompletedHookCount -ne 1 -or $notificationScriptCount -ne 1) {
-        throw "Windows 通知安裝檢查失敗：QuestionHookCount=$notificationQuestionHookCount PermissionHookCount=$notificationPermissionHookCount CompletedHookCount=$notificationCompletedHookCount NotificationScriptCount=$notificationScriptCount"
+    $expectedNotificationCount = if ($InstallWindowsNotifications) { 1 } else { 0 }
+    if ($notificationQuestionHookCount -ne $expectedNotificationCount -or $notificationPermissionHookCount -ne $expectedNotificationCount -or $notificationCompletedHookCount -ne $expectedNotificationCount -or $notificationScriptCount -ne $expectedNotificationCount) {
+        throw "Windows 通知安裝檢查失敗：Expected=$expectedNotificationCount QuestionHookCount=$notificationQuestionHookCount PermissionHookCount=$notificationPermissionHookCount CompletedHookCount=$notificationCompletedHookCount NotificationScriptCount=$notificationScriptCount"
     }
     if ($tokenUsageHookCount -ne 1 -or $tokenUsageScriptCount -ne 1) {
         throw "每輪 Token 統計安裝檢查失敗：TokenUsageHookCount=$tokenUsageHookCount TokenUsageScriptCount=$tokenUsageScriptCount"
@@ -553,7 +585,7 @@ function Install-Target($Target, $Transaction, [switch]$Force) {
         }
     }
 
-    if ($Target.Mode -eq 'Global') { Assert-GlobalLineEndingHook -DevelopmentEnvironment $Target.DevelopmentEnvironment -Root $Target.Root }
+    if ($Target.Mode -eq 'Global') { Assert-GlobalLineEndingHook -DevelopmentEnvironment $Target.DevelopmentEnvironment -Root $Target.Root -InstallWindowsNotifications ([bool]$Target.InstallWindowsNotifications) }
 
     return [pscustomobject]@{ Mode = $Target.Mode; DevelopmentEnvironment = $Target.DevelopmentEnvironment; Root = $Target.Root; Previous = $previous; Files = $entries.ToArray() }
 }

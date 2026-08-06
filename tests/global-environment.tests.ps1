@@ -7,7 +7,7 @@ $script:ScriptRoot = Join-Path $repositoryRoot 'src'
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('codex-settings-global-environment-' + [guid]::NewGuid().ToString('N'))
 $globalRoot = Join-Path $testRoot '.codex'
 
-function Install-TestEnvironment([ValidateSet('Git', 'CVS')][string]$Environment) {
+function Install-TestEnvironment([ValidateSet('Git', 'CVS')][string]$Environment, [bool]$InstallWindowsNotifications = $true) {
     $transaction = New-FileTransaction -Root (Join-Path $testRoot ("transaction-$Environment-" + [guid]::NewGuid().ToString('N'))) -Mode "Test-$Environment"
     $target = [pscustomobject]@{
         Mode = 'Global'
@@ -16,6 +16,7 @@ function Install-TestEnvironment([ValidateSet('Git', 'CVS')][string]$Environment
         DevelopmentEnvironment = $Environment
         Root = $globalRoot
         EnableDefaultModeRequestUserInput = $false
+        InstallWindowsNotifications = $InstallWindowsNotifications
     }
     $result = Install-Target -Target $target -Transaction $transaction
     Write-Manifest -Result $result -Transaction $transaction -External $null
@@ -149,6 +150,27 @@ try {
     $installedHooks = Get-Content -LiteralPath (Join-Path $globalRoot 'hooks.json') -Raw | ConvertFrom-Json
     if (@($installedHooks.hooks.PreToolUse | Where-Object { Test-ManagedNotificationHookEntry $_ }).Count -ne 1 -or @($installedHooks.hooks.PermissionRequest | Where-Object { Test-ManagedNotificationHookEntry $_ }).Count -ne 1 -or @($installedHooks.hooks.Stop | Where-Object { Test-ManagedNotificationHookEntry $_ }).Count -ne 1) { throw 'Switching environments duplicated or removed the global notification hooks.' }
     if (@($installedHooks.hooks.Stop | Where-Object { Test-ManagedTokenUsageHookEntry $_ }).Count -ne 1) { throw 'Switching environments duplicated or removed the turn token usage hook.' }
+
+    Install-TestEnvironment -Environment Git -InstallWindowsNotifications $false
+    $installedHooks = Get-Content -LiteralPath (Join-Path $globalRoot 'hooks.json') -Raw | ConvertFrom-Json
+    if (@($installedHooks.hooks.PSObject.Properties.Value | ForEach-Object { @($_) } | Where-Object { Test-ManagedNotificationHookEntry $_ }).Count -ne 0) { throw 'Disabling Windows notifications retained managed notification hooks.' }
+    if (Test-Path -LiteralPath (Join-Path $globalRoot 'hooks\show-codex-notification.ps1')) { throw 'Disabling Windows notifications retained the notification script.' }
+    if (@($installedHooks.hooks.Stop | Where-Object { Test-ManagedTokenUsageHookEntry $_ }).Count -ne 1) { throw 'Disabling Windows notifications removed the turn token usage hook.' }
+
+    $script:notificationAnswer = ''
+    $script:capturedNotificationPrompt = ''
+    function Read-Host([string]$Prompt) {
+        $script:capturedNotificationPrompt = $Prompt
+        return $script:notificationAnswer
+    }
+    try {
+        if (Select-OptionalWindowsNotifications -AlreadyInstalled:$false) { throw 'Blank first-install selection must not install Windows notifications.' }
+        if ($script:capturedNotificationPrompt -ne '要安裝嗎？[y/N]') { throw 'First-install notification prompt is invalid.' }
+        if (-not (Select-OptionalWindowsNotifications -AlreadyInstalled:$true)) { throw 'Blank update selection must preserve Windows notifications.' }
+        if ($script:capturedNotificationPrompt -ne '要繼續安裝嗎？[Y/n]') { throw 'Existing notification prompt is invalid.' }
+    } finally {
+        Remove-Item -LiteralPath Function:\Read-Host -ErrorAction SilentlyContinue
+    }
 
     $script:capturedEnvironmentPrompt = ''
     function Read-Host([string]$Prompt) {

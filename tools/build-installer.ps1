@@ -24,7 +24,6 @@ where pwsh.exe >nul 2>nul
 if errorlevel 1 (
     echo [ERROR] PowerShell 7 or later is required.
     echo Download: https://aka.ms/powershell-release?tag=stable
-    if "%~1"=="" pause
     exit /b 1
 )
 

@@ -414,6 +414,21 @@ function Test-ManagedNotificationHookEntry {
     return (($Entry | ConvertTo-Json -Depth 20 -Compress) -match $script:ManagedNotificationHookSignaturePattern)
 }
 
+function Remove-ManagedNotificationHooksJson {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Content)
+
+    if ([string]::IsNullOrWhiteSpace($Content)) { return '' }
+    $object = $Content | ConvertFrom-Json -ErrorAction Stop
+    if ($null -eq $object.hooks) { return $Content }
+    foreach ($property in @($object.hooks.PSObject.Properties)) {
+        $filtered = @($property.Value | Where-Object { -not (Test-ManagedNotificationHookEntry $_) })
+        if ($filtered.Count -eq 0) { $object.hooks.PSObject.Properties.Remove($property.Name) }
+        else { $object.hooks | Add-Member -NotePropertyName $property.Name -NotePropertyValue $filtered -Force }
+    }
+    return ($object | ConvertTo-Json -Depth 30)
+}
+
 function Test-ManagedTokenUsageHookEntry {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)]$Entry)

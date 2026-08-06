@@ -7,7 +7,7 @@ Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 ## 主要功能
 
 - 安裝或更新全域 `AGENTS.md`、`config.toml` 與權限規則。
-- 安裝全域 Windows 通知 Hook，分別提示任務完成、等待權限與等待回答。
+- 可選安裝全域 Windows 通知 Hook，分別提示任務完成、等待權限與等待回答。
 - 安裝全域每輪 Token 統計 Hook，以目前 Session 的 `ccsessions` 累積值計算本輪差值。
 - 在全域安裝流程選擇 Git 或 CVS，合併對應的全域 AGENTS 與 Rules。
 - 安裝 Context7、Playwright MCP 設定。
@@ -49,7 +49,7 @@ Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 
 換行保護使用 wildcard matcher，因此直接 `apply_patch`、code mode 的 `exec → tools.apply_patch`、Shell、MCP 與其他本機工具都使用同一份修改前基準。它只處理雜湊實際改變的檔案，精確恢復原本的 CRLF／LF、檔尾換行與 BOM，不會重新編碼文字；session 狀態在完成後自動清除。
 
-Windows 通知使用 `PermissionRequest`、`request_user_input` 的 `PreToolUse` 與 `Stop` 官方事件，依專案名稱顯示不同標題與提示音。同一 session、turn 與類型在短時間內只顯示一次；設定位於 `~/.codex/state/notifications/settings.json`，可停用全部或個別通知。可執行 `~/.codex/hooks/show-codex-notification.ps1 -Type Completed -Test` 測試通知流程。
+安裝器會單獨詢問是否安裝 Windows 通知：首次安裝預設為否，已安裝時預設保留並更新；選擇不安裝會移除受管理通知，但保留 Token 與其他自訂 Hook。通知使用 `PermissionRequest`、`request_user_input` 的 `PreToolUse` 與 `Stop` 官方事件，依專案名稱顯示不同標題與提示音。同一 session、turn 與類型在短時間內只顯示一次；設定位於 `~/.codex/state/notifications/settings.json`，可停用全部或個別通知。可執行 `~/.codex/hooks/show-codex-notification.ps1 -Type Completed -Test` 測試通知流程。
 
 每輪 Token 統計使用 `Stop` payload 的 Session ID 呼叫 `ccsessions -Json`，不會改用其他 Session。顯示順序為 Session、Model、Input、Output、Cache、Total、Cache hit rate、Cost、Estimated usage；第一輪顯示目前累積值，後續顯示本輪差值，Token 以 K／M／B 縮寫。`Cache` 顯示快取讀取 Token；快取命中率仍以 `Cache read ÷ (Cache read + Cache write + Input)` 計算，估計消耗比例以每 US$1.30 = 1% 計算。狀態依 Session 分開儲存在 `~/.codex/state/token-usage`，相同 snapshot 不會重複顯示。Codex Hook 無法改寫既有 assistant 文字，因此統計透過 `systemMessage` 緊接在回覆後顯示；設定位於同目錄的 `settings.json`。
 
@@ -61,6 +61,8 @@ Windows 通知使用 `PermissionRequest`、`request_user_input` 的 `PreToolUse`
 .\Install.cmd -Mode Global
 .\Install.cmd -Mode Global -DevelopmentEnvironment Git
 .\Install.cmd -Mode Global -DevelopmentEnvironment CVS
+.\Install.cmd -Mode Global -InstallWindowsNotifications $true
+.\Install.cmd -Mode Global -InstallWindowsNotifications $false
 ```
 
 常用參數：
