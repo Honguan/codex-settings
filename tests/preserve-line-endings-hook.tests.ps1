@@ -126,8 +126,15 @@ try {
     if (-not (Test-Path -LiteralPath (Join-Path $stateRoot 'session-B.json'))) { throw '不同 session 未建立獨立狀態檔。' }
 
     Write-TestBytes 'crlf.txt' ([Text.Encoding]::ASCII.GetBytes("before`r`nend`r`nadded1`nfinal`n"))
-    $restoreInput = New-HookInput -EventName Stop -SessionId $sessionA
-    Invoke-Hook -Mode Finalize -SessionId $sessionA -InputText $restoreInput | Out-Null
+    $malformedStopInput = [ordered]@{
+        session_id = $sessionA
+        cwd = $projectRoot
+        hook_event_name = 'Stop'
+        stop_hook_active = $false
+        last_assistant_message = '已刪除 "activity_config.php" 註解'
+    } | ConvertTo-Json -Compress
+    $malformedStopInput = $malformedStopInput.Replace('\"activity_config.php\"', '"activity_config.php"')
+    Invoke-Hook -Mode Finalize -SessionId $sessionA -InputText $malformedStopInput | Out-Null
     if (Test-Path -LiteralPath $statePathA) { throw 'Stop Hook 未清理完成的 session 狀態檔。' }
     if (-not (Test-Path -LiteralPath (Join-Path $stateRoot 'session-B.json'))) { throw 'Stop Hook 誤刪其他 session 狀態檔。' }
 

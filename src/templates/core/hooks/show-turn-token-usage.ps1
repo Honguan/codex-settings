@@ -3,6 +3,18 @@ param()
 
 $ErrorActionPreference = 'Stop'
 
+function ConvertFrom-HookInputJson([string]$Text) {
+    try { return $Text | ConvertFrom-Json -ErrorAction Stop }
+    catch {
+        $originalError = $_
+        $pattern = '(?s)(?<prefix>"last_assistant_message"\s*:\s*)".*"(?<suffix>\s*}\s*)$'
+        $sanitized = [regex]::Replace($Text, $pattern, '${prefix}null${suffix}')
+        if ($sanitized -eq $Text) { throw $originalError }
+        try { return $sanitized | ConvertFrom-Json -ErrorAction Stop }
+        catch { throw $originalError }
+    }
+}
+
 function Write-HookOutput($Value) {
     [Console]::Out.Write(($Value | ConvertTo-Json -Depth 8 -Compress))
 }
@@ -224,7 +236,7 @@ function Write-HookDiagnostic($HookInput, [string]$Result, [string]$Details) {
 try {
     $raw = [Console]::In.ReadToEnd()
     if ([string]::IsNullOrWhiteSpace($raw)) { throw 'session ID could not be resolved' }
-    $inputObject = $raw | ConvertFrom-Json -ErrorAction Stop
+    $inputObject = ConvertFrom-HookInputJson -Text $raw
     $sessionId = [string]$inputObject.session_id
     if ([string]::IsNullOrWhiteSpace($sessionId)) { throw 'session ID could not be resolved' }
     if ([bool]$inputObject.stop_hook_active) { Write-HookOutput ([pscustomobject]@{}); return }

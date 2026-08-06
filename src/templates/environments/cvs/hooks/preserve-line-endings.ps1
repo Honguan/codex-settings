@@ -12,6 +12,18 @@ $stateRoot = if ([string]::IsNullOrWhiteSpace($env:CODEX_SETTINGS_LINE_ENDING_ST
     $env:CODEX_SETTINGS_LINE_ENDING_STATE_ROOT
 }
 
+function ConvertFrom-HookInputJson([string]$Text) {
+    try { return $Text | ConvertFrom-Json -ErrorAction Stop }
+    catch {
+        $originalError = $_
+        $pattern = '(?s)(?<prefix>"last_assistant_message"\s*:\s*)".*"(?<suffix>\s*}\s*)$'
+        $sanitized = [regex]::Replace($Text, $pattern, '${prefix}null${suffix}')
+        if ($sanitized -eq $Text) { throw $originalError }
+        try { return $sanitized | ConvertFrom-Json -ErrorAction Stop }
+        catch { throw $originalError }
+    }
+}
+
 function Get-Sha256([byte[]]$Bytes) {
     $sha = [Security.Cryptography.SHA256]::Create()
     try { return ([BitConverter]::ToString($sha.ComputeHash($Bytes))).Replace('-', '') }
@@ -230,7 +242,7 @@ $changedFiles = @()
 try {
     $inputText = [Console]::In.ReadToEnd()
     if ([string]::IsNullOrWhiteSpace($inputText)) { throw 'Hook input JSON is empty.' }
-    $inputObject = $inputText | ConvertFrom-Json -ErrorAction Stop
+    $inputObject = ConvertFrom-HookInputJson -Text $inputText
     if ([string]::IsNullOrWhiteSpace([string]$inputObject.session_id)) { throw 'Hook input is missing session_id.' }
     if ($Mode -eq 'Track') {
         if ([string]::IsNullOrWhiteSpace([string]$inputObject.cwd)) { throw 'Hook input is missing cwd.' }
