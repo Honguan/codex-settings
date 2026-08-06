@@ -87,7 +87,7 @@ function Uninstall-ManagedTarget {
             if ($strategy -eq 'managed-hooks') {
                 $state = Get-TextFileState -Path $managedPath
                 try {
-                    $newContent = Remove-ManagedHooksJson -Content $state.Content
+                    $newContent = Remove-ObsoleteCvsHooksJson -Content $state.Content
                     $object = if ([string]::IsNullOrWhiteSpace($newContent)) { $null } else { $newContent | ConvertFrom-Json }
                     $hookCount = 0
                     if ($null -ne $object -and $null -ne $object.hooks) {

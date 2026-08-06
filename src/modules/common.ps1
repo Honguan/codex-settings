@@ -386,58 +386,16 @@ function Merge-TomlTemplate {
     return $result
 }
 
-$script:CrlfHookSignaturePattern = '(?i)((?:crlf-updated-files|normalize-cvs-crlf)\.ps1|Converting updated files? to CRLF|Normalizing updated files to CRLF|Finalizing CRLF normalization|CodexSettings CRLF (?:track|finalize))'
+$script:ObsoleteCvsHookSignaturePattern = '(?i)((?:crlf-updated-files|normalize-cvs-crlf)\.ps1|Converting updated files? to CRLF|Normalizing updated files to CRLF|Finalizing CRLF normalization|CodexSettings CRLF (?:track|finalize))'
 
-function Test-CrlfHookEntry {
+function Test-ObsoleteCvsHookEntry {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)]$Entry)
 
-    return (($Entry | ConvertTo-Json -Depth 20 -Compress) -match $script:CrlfHookSignaturePattern)
+    return (($Entry | ConvertTo-Json -Depth 20 -Compress) -match $script:ObsoleteCvsHookSignaturePattern)
 }
 
-function Get-CrlfHookCounts {
-    [CmdletBinding()]
-    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Content)
-
-    $object = if ([string]::IsNullOrWhiteSpace($Content)) { [pscustomobject]@{ hooks = [pscustomobject]@{} } } else { $Content | ConvertFrom-Json -ErrorAction Stop }
-    $postToolUse = 0
-    $stop = 0
-    if ($null -ne $object.hooks) {
-        foreach ($eventName in @('PostToolUse', 'Stop')) {
-            if ($object.hooks.PSObject.Properties.Name -notcontains $eventName) { continue }
-            $count = @($object.hooks.PSObject.Properties[$eventName].Value | Where-Object { Test-CrlfHookEntry $_ }).Count
-            if ($eventName -eq 'PostToolUse') { $postToolUse = $count } else { $stop = $count }
-        }
-    }
-    return [pscustomobject]@{ PostToolUse = $postToolUse; Stop = $stop; Total = $postToolUse + $stop }
-}
-
-function Merge-HooksJson {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ExistingContent,
-        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$TemplateContent
-    )
-
-    $existing = if ([string]::IsNullOrWhiteSpace($ExistingContent)) { [pscustomobject]@{ hooks = [pscustomobject]@{} } } else { $ExistingContent | ConvertFrom-Json -ErrorAction Stop }
-    if ($null -eq $existing.hooks) { $existing | Add-Member -NotePropertyName hooks -NotePropertyValue ([pscustomobject]@{}) -Force }
-    foreach ($property in @($existing.hooks.PSObject.Properties)) {
-        $filtered = @($property.Value | Where-Object { -not (Test-CrlfHookEntry $_) })
-        if ($filtered.Count -eq 0) {
-            $existing.hooks.PSObject.Properties.Remove($property.Name)
-        } else {
-            $existing.hooks | Add-Member -NotePropertyName $property.Name -NotePropertyValue $filtered -Force
-        }
-    }
-    $template = $TemplateContent | ConvertFrom-Json -ErrorAction Stop
-    foreach ($property in @($template.hooks.PSObject.Properties)) {
-        $current = if ($existing.hooks.PSObject.Properties.Name -contains $property.Name) { @($existing.hooks.PSObject.Properties[$property.Name].Value) } else { @() }
-        $existing.hooks | Add-Member -NotePropertyName $property.Name -NotePropertyValue (@($current) + @($property.Value)) -Force
-    }
-    return ($existing | ConvertTo-Json -Depth 30)
-}
-
-function Remove-CrlfHooksJson {
+function Remove-ObsoleteCvsHooksJson {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Content)
 
@@ -445,7 +403,7 @@ function Remove-CrlfHooksJson {
     $object = $Content | ConvertFrom-Json -ErrorAction Stop
     if ($null -eq $object.hooks) { return $Content }
     foreach ($property in @($object.hooks.PSObject.Properties)) {
-        $filtered = @($property.Value | Where-Object { -not (Test-CrlfHookEntry $_) })
+        $filtered = @($property.Value | Where-Object { -not (Test-ObsoleteCvsHookEntry $_) })
         if ($filtered.Count -eq 0) {
             $object.hooks.PSObject.Properties.Remove($property.Name)
         } else {
@@ -453,13 +411,6 @@ function Remove-CrlfHooksJson {
         }
     }
     return ($object | ConvertTo-Json -Depth 30)
-}
-
-function Remove-ManagedHooksJson {
-    [CmdletBinding()]
-    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Content)
-
-    return Remove-CrlfHooksJson -Content $Content
 }
 
 function Remove-CcusageProfileBlocks {

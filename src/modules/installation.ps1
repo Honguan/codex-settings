@@ -45,7 +45,7 @@ function Select-DevelopmentEnvironment([ValidateSet('Git', 'CVS')][string]$Defau
     Write-Host ''
     Write-Host '開發環境（設定會安裝到全域）'
     Write-Host $(if ($Default -eq 'Git') { '[1] Git（目前預設）' } else { '[1] Git' })
-    Write-Host $(if ($Default -eq 'CVS') { '[2] CVS（目前預設，包含全域 CRLF Hook）' } else { '[2] CVS（包含全域 CRLF Hook）' })
+    Write-Host $(if ($Default -eq 'CVS') { '[2] CVS（目前預設）' } else { '[2] CVS' })
 
     $defaultOption = if ($Default -eq 'CVS') { '2' } else { '1' }
     switch (Read-Host "請選擇 [$defaultOption]") {
@@ -216,13 +216,34 @@ function Get-Strategy([string]$ModeName, [string]$RelativePath) {
         return [pscustomobject]@{ Name = 'managed-block'; Start = '<!-- >>> CODEX-SETTINGS: >>> -->'; End = '<!-- <<< CODEX-SETTINGS: <<< -->' }
     }
     if ($normalized -eq 'config.toml') {
-        return [pscustomobject]@{ Name = 'managed-toml'; Start = "# >>> CODEX-SETTINGS:$ModeName:CONFIG >>>"; End = "# <<< CODEX-SETTINGS:$ModeName:CONFIG <<<" }
+        return [pscustomobject]@{ Name = 'managed-toml'; Start = "# >>> CODEX-SETTINGS:${ModeName}:CONFIG >>>"; End = "# <<< CODEX-SETTINGS:${ModeName}:CONFIG <<<" }
     }
     if ($normalized -eq 'rules/default.rules' -or $normalized.EndsWith('/rules/default.rules')) {
-        return [pscustomobject]@{ Name = 'managed-block'; Start = "# >>> CODEX-SETTINGS:$ModeName:RULES >>>"; End = "# <<< CODEX-SETTINGS:$ModeName:RULES <<<" }
+        return [pscustomobject]@{ Name = 'managed-block'; Start = "# >>> CODEX-SETTINGS:${ModeName}:RULES >>>"; End = "# <<< CODEX-SETTINGS:${ModeName}:RULES <<<" }
     }
-    if ($normalized -eq 'hooks.json' -or $normalized.EndsWith('/hooks.json')) { return [pscustomobject]@{ Name = 'managed-hooks'; Start = $null; End = $null } }
     return [pscustomobject]@{ Name = 'replace'; Start = $null; End = $null }
+}
+
+function Remove-LegacyDefaultRulesContent([string]$ExistingContent, [string]$NewLine) {
+    $cleaned = $ExistingContent -replace "`r`n|`r", "`n"
+    $cleaned = Remove-ManagedBlock -Content $cleaned -StartMarker '# >>> CODEX-SETTINGS: >>>' -EndMarker '# <<< CODEX-SETTINGS: <<<'
+    $templatePaths = @(
+        (Join-Path $ScriptRoot 'templates\core\rules\default.rules'),
+        (Join-Path $ScriptRoot 'templates\environments\git\rules\default.rules'),
+        (Join-Path $ScriptRoot 'templates\environments\cvs\rules\default.rules')
+    )
+    foreach ($templatePath in $templatePaths) {
+        $managedContent = ([IO.File]::ReadAllText($templatePath) -replace "`r`n|`r", "`n").Trim()
+        if ([string]::IsNullOrWhiteSpace($managedContent)) { continue }
+
+        $cleaned = $cleaned.Replace($managedContent, '')
+        $title = @($managedContent -split "`n", 2)[0]
+        $cleaned = [regex]::Replace($cleaned, '(?m)^\s*' + [regex]::Escape($title) + '\s*\n?', '')
+        foreach ($section in [regex]::Matches($managedContent, '(?ms)^# \d+\.[^\n]*\nprefix_rule\(\n.*?^\)')) {
+            $cleaned = $cleaned.Replace($section.Value.Trim(), '')
+        }
+    }
+    return ($cleaned.Trim() -replace "`n", $NewLine)
 }
 
 function Add-DefaultModeRequestUserInputFeature([string]$Content, [string]$NewLine) {
@@ -244,11 +265,11 @@ function Add-DefaultModeRequestUserInputFeature([string]$Content, [string]$NewLi
     return $Content.TrimEnd() + $NewLine + $NewLine + '[features]' + $NewLine + 'default_mode_request_user_input = true'
 }
 
-function Remove-GlobalCrlfHooks([string]$Root, $Transaction) {
+function Remove-ObsoleteGlobalCvsHooks([string]$Root, $Transaction) {
     $hooksPath = Join-Path $Root 'hooks.json'
     if (Test-Path -LiteralPath $hooksPath -PathType Leaf) {
         $state = Get-TextFileState $hooksPath
-        $cleaned = Remove-CrlfHooksJson -Content $state.Content
+        $cleaned = Remove-ObsoleteCvsHooksJson -Content $state.Content
         if ($cleaned -ne $state.Content) {
             Save-TransactionFile -Transaction $Transaction -Path $hooksPath
             Write-TextFileState -Path $hooksPath -Content $cleaned -Encoding $state.Encoding
@@ -262,19 +283,9 @@ function Remove-GlobalCrlfHooks([string]$Root, $Transaction) {
             Remove-Item -LiteralPath $scriptPath -Force
         }
     }
-}
-
-function Assert-GlobalEnvironmentInstallation([ValidateSet('Git', 'CVS')][string]$DevelopmentEnvironment, [string]$Root) {
-    $hooksPath = Join-Path $Root 'hooks.json'
-    $content = if (Test-Path -LiteralPath $hooksPath -PathType Leaf) { [IO.File]::ReadAllText($hooksPath) } else { '' }
-    $counts = Get-CrlfHookCounts -Content $content
-    $scriptCount = if (Test-Path -LiteralPath (Join-Path $Root 'hooks\normalize-cvs-crlf.ps1') -PathType Leaf) { 1 } else { 0 }
-    if ($DevelopmentEnvironment -eq 'Git') {
-        if ($counts.Total -ne 0 -or $scriptCount -ne 0) { throw 'Git 全域設定仍包含 CVS CRLF Hook。' }
-        return
-    }
-    if ($counts.PostToolUse -ne 0 -or $counts.Stop -ne 1 -or $scriptCount -ne 1) {
-        throw 'CVS 全域 CRLF Hook 安裝檢查失敗。'
+    $hooksRoot = Join-Path $Root 'hooks'
+    if ((Test-Path -LiteralPath $hooksRoot -PathType Container) -and @(Get-ChildItem -LiteralPath $hooksRoot -Force).Count -eq 0) {
+        Remove-Item -LiteralPath $hooksRoot -Force
     }
 }
 
@@ -333,7 +344,7 @@ function Remove-ObsoleteProjectSettings($Transaction, [string]$RegistryPath) {
                 }
             } elseif ($strategy -eq 'managed-hooks') {
                 $state = Get-TextFileState -Path $path
-                $content = Remove-ManagedHooksJson -Content $state.Content
+                $content = Remove-ObsoleteCvsHooksJson -Content $state.Content
                 $object = if ([string]::IsNullOrWhiteSpace($content)) { $null } else { $content | ConvertFrom-Json -ErrorAction Stop }
                 $hasHooks = $null -ne $object -and $null -ne $object.hooks -and @($object.hooks.PSObject.Properties).Count -gt 0
                 if (-not $hasHooks -and -not [bool]$entry.ExistedBefore) {
@@ -406,7 +417,7 @@ function Remove-ObsoleteProjectSettings($Transaction, [string]$RegistryPath) {
 function Install-Target($Target, $Transaction, [switch]$Force) {
     if (-not (Test-Path -LiteralPath $Target.Template -PathType Container)) { throw "找不到範本：$($Target.Template)" }
     New-Item -ItemType Directory -Path $Target.Root -Force | Out-Null
-    if ($Target.Mode -eq 'Global') { Remove-GlobalCrlfHooks -Root $Target.Root -Transaction $Transaction }
+    if ($Target.Mode -eq 'Global') { Remove-ObsoleteGlobalCvsHooks -Root $Target.Root -Transaction $Transaction }
     $previous = Get-Manifest $Target.Root
     $entries = New-Object 'System.Collections.Generic.List[object]'
     $templatePaths = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
@@ -439,12 +450,17 @@ function Install-Target($Target, $Transaction, [switch]$Force) {
                 'managed-block' {
                     if ($relative.Replace('\', '/').EndsWith('AGENTS.md')) {
                         $merged = Merge-ManagedMarkdownBlock $existing $template $strategy.Start $strategy.End $state.NewLine
+                    } elseif ($relative.Replace('\', '/') -eq 'rules/default.rules') {
+                        $rulesBase = Remove-LegacyDefaultRulesContent -ExistingContent $existing -NewLine $state.NewLine
+                        $merged = Merge-ManagedBlock $rulesBase $template $strategy.Start $strategy.End $state.NewLine
                     } else {
                         $merged = Merge-ManagedBlock $existing $template $strategy.Start $strategy.End $state.NewLine
                     }
                 }
-                'managed-toml' { $merged = Merge-TomlTemplate $existing $template $strategy.Start $strategy.End $state.NewLine }
-                'managed-hooks' { $merged = Merge-HooksJson $existing $template }
+                'managed-toml' {
+                    $configBase = Remove-ManagedBlock -Content $existing -StartMarker '# >>> CODEX-SETTINGS: >>>' -EndMarker '# <<< CODEX-SETTINGS: <<<'
+                    $merged = Merge-TomlTemplate $configBase $template $strategy.Start $strategy.End $state.NewLine
+                }
             }
             if ($isOptionalFeatureConfig) { $merged = Add-DefaultModeRequestUserInputFeature -Content $merged -NewLine $state.NewLine }
             Write-TextFileState $destination $merged $state.Encoding
@@ -474,8 +490,6 @@ function Install-Target($Target, $Transaction, [switch]$Force) {
             }
         }
     }
-
-    if ($Target.Mode -eq 'Global') { Assert-GlobalEnvironmentInstallation -DevelopmentEnvironment $Target.DevelopmentEnvironment -Root $Target.Root }
 
     return [pscustomobject]@{ Mode = $Target.Mode; DevelopmentEnvironment = $Target.DevelopmentEnvironment; Root = $Target.Root; Previous = $previous; Files = $entries.ToArray() }
 }

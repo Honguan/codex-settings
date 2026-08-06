@@ -58,6 +58,9 @@ try {
     }
 
     New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
+    Get-ChildItem -LiteralPath $OutputDirectory -Filter 'CodexSettings-Setup-v*.cmd' -File | Where-Object {
+        $_.FullName -ne $installerPath
+    } | Remove-Item -Force
     [IO.File]::WriteAllText($installerPath, $header + ($lines -join "`r`n") + "`r`n", [Text.Encoding]::ASCII)
     Write-Host "已建立單檔安裝器：$installerPath"
     Write-Host "檔案大小：$((Get-Item -LiteralPath $installerPath).Length) bytes"

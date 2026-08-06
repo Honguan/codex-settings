@@ -46,9 +46,22 @@ try {
                     )
                 }
             )
+            Stop = @(
+                [ordered]@{
+                    hooks = @(
+                        [ordered]@{
+                            type = 'command'
+                            command = 'pwsh -File ~/.codex/hooks/normalize-cvs-crlf.ps1'
+                        }
+                    )
+                }
+            )
         }
     }
     Write-JsonFileAtomic -Path (Join-Path $globalRoot 'hooks.json') -Value $existingHooks -Depth 10
+    $obsoleteHookScript = Join-Path $globalRoot 'hooks\normalize-cvs-crlf.ps1'
+    New-Item -ItemType Directory -Path (Split-Path -Parent $obsoleteHookScript) -Force | Out-Null
+    [IO.File]::WriteAllText($obsoleteHookScript, '# obsolete hook', [Text.UTF8Encoding]::new($false))
     $legacyAgents = [IO.File]::ReadAllText((Join-Path $script:ScriptRoot 'templates\core\AGENTS.md')).TrimEnd()
     $legacyAgents = $legacyAgents.Replace(
         '- Preserve existing architecture, coding style, naming, and structure unless current requirements change them.',
@@ -57,17 +70,45 @@ try {
     $legacyAgents = [regex]::Replace($legacyAgents, '(?ms)^# Architecture\r?\n.*?(?=^# File Handling)', '')
     $legacyAgents += "`r`n`r`n# User Custom Rules`r`n`r`n- Preserve this custom rule.`r`n"
     [IO.File]::WriteAllText((Join-Path $globalRoot 'AGENTS.md'), $legacyAgents, [Text.UTF8Encoding]::new($false))
+    $legacyRulesPath = Join-Path $globalRoot 'rules\default.rules'
+    New-Item -ItemType Directory -Path (Split-Path -Parent $legacyRulesPath) -Force | Out-Null
+    $legacyRules = [IO.File]::ReadAllText((Join-Path $script:ScriptRoot 'templates\core\rules\default.rules')).TrimEnd()
+    $legacyRules = [regex]::Replace($legacyRules, '(?ms)^# 48\. Read-only file and path inspection\..*$', '').TrimEnd()
+    $legacyRules += "`r`n`r`n" + [IO.File]::ReadAllText((Join-Path $script:ScriptRoot 'templates\environments\git\rules\default.rules')).Trim()
+    $legacyRules += "`r`n`r`n# >>> CODEX-SETTINGS: >>>`r`n" + [IO.File]::ReadAllText((Join-Path $script:ScriptRoot 'templates\core\rules\default.rules')).Trim() + "`r`n# <<< CODEX-SETTINGS: <<<"
+    $legacyRules += "`r`n`r`n# User custom rule`r`nprefix_rule(`r`n    pattern = [[`"custom-tool`"]],`r`n    decision = `"allow`",`r`n)`r`n"
+    [IO.File]::WriteAllText($legacyRulesPath, $legacyRules + "`r`n", [Text.UTF8Encoding]::new($false))
+    $legacyConfigPath = Join-Path $globalRoot 'config.toml'
+    $legacyConfig = "user_custom_setting = true`r`n`r`n# >>> CODEX-SETTINGS: >>>`r`n"
+    $legacyConfig += [IO.File]::ReadAllText((Join-Path $script:ScriptRoot 'templates\core\config.toml')).Trim()
+    $legacyConfig += "`r`n# <<< CODEX-SETTINGS: <<<`r`n"
+    [IO.File]::WriteAllText($legacyConfigPath, $legacyConfig, [Text.UTF8Encoding]::new($false))
 
     Install-TestEnvironment -Environment CVS
     $agents = Get-Content -LiteralPath (Join-Path $globalRoot 'AGENTS.md') -Raw
     foreach ($heading in @('Communication', 'Code Changes', 'Architecture', 'File Handling', 'Validation')) {
         if ([regex]::Matches($agents, "(?m)^# $([regex]::Escape($heading))\s*$").Count -ne 1) { throw "Safe merge duplicated or omitted the AGENTS.md section: $heading" }
     }
+    if ([regex]::Matches($agents, '(?m)^## Line endings\s*$').Count -ne 1 -or $agents -notmatch 'When modifying files, preserve their existing CRLF or LF line-ending format\.') { throw 'Global AGENTS.md line-ending instructions are missing or duplicated.' }
     if ($agents -notmatch '(?m)^# User Custom Rules\s*$') { throw 'Safe merge removed a custom AGENTS.md section.' }
     if ($agents -match 'and backward compatibility\.') { throw 'Safe merge did not update a legacy AGENTS.md section.' }
     $installedHooks = Get-Content -LiteralPath (Join-Path $globalRoot 'hooks.json') -Raw | ConvertFrom-Json
     if (@($installedHooks.hooks.SessionStart).Count -ne 1) { throw 'CVS installation did not preserve the unmanaged user hook.' }
-    if ($installedHooks.hooks.PSObject.Properties.Name -contains 'PostToolUse' -or @($installedHooks.hooks.Stop).Count -ne 1) { throw 'CVS installation did not add only its managed Stop hook.' }
+    if ($installedHooks.hooks.PSObject.Properties.Name -contains 'PostToolUse' -or $installedHooks.hooks.PSObject.Properties.Name -contains 'Stop') { throw 'CVS installation retained an obsolete CRLF hook.' }
+    if (Test-Path -LiteralPath (Join-Path $globalRoot 'hooks\normalize-cvs-crlf.ps1')) { throw 'CVS installation retained an obsolete CRLF conversion script.' }
+    if (Test-Path -LiteralPath (Join-Path $globalRoot 'hooks') -PathType Container) { throw 'CVS installation retained an empty obsolete hooks directory.' }
+    $rules = Get-Content -LiteralPath $legacyRulesPath -Raw
+    if ([regex]::Matches($rules, 'Block disk formatting\.').Count -ne 1 -or [regex]::Matches($rules, 'CVS project rules supplement').Count -ne 1 -or [regex]::Matches($rules, 'Git project rules supplement').Count -ne 0) {
+        throw 'CVS installation did not replace legacy unmarked default.rules content without duplicates or conflicts.'
+    }
+    if ($rules -match '# >>> CODEX-SETTINGS: >>>|# <<< CODEX-SETTINGS: <<<') { throw 'CVS installation retained obsolete default.rules markers.' }
+    if ([regex]::Matches($rules, '(?m)^# >>> CODEX-SETTINGS:Global:RULES >>>\s*$').Count -ne 1) { throw 'CVS installation did not write the scoped default.rules marker.' }
+    if ($rules -notmatch 'pattern = \[\["custom-tool"\]\]') { throw 'CVS installation removed an unmanaged custom rule.' }
+    $config = Get-Content -LiteralPath $legacyConfigPath -Raw
+    if ($config -notmatch '(?m)^user_custom_setting = true\s*$') { throw 'CVS installation removed an unmanaged config.toml setting.' }
+    if ($config -match '# >>> CODEX-SETTINGS: >>>|# <<< CODEX-SETTINGS: <<<' -or [regex]::Matches($config, '(?m)^# >>> CODEX-SETTINGS:Global:CONFIG >>>\s*$').Count -ne 1) {
+        throw 'CVS installation did not replace the obsolete config.toml marker with a scoped marker.'
+    }
     if ((Get-DefaultDevelopmentEnvironment -Root $globalRoot) -ne 'CVS') { throw 'CVS was not recorded as the default project system.' }
 
     Install-TestEnvironment -Environment Git
@@ -75,31 +116,22 @@ try {
     $rules = Get-Content -LiteralPath (Join-Path $globalRoot 'rules\default.rules') -Raw
     $config = Get-Content -LiteralPath (Join-Path $globalRoot 'config.toml') -Raw
     if ($agents -notmatch '# Communication' -or $agents -notmatch '# Git Project Rules' -or $agents -match '# CVS Project Rules') { throw 'Git AGENTS.md composition is invalid.' }
-    if ($rules -notmatch 'Git project rules supplement' -or $rules -match 'CVS project rules supplement') { throw 'Git rules composition is invalid.' }
+    if ([regex]::Matches($rules, 'Git project rules supplement').Count -ne 1 -or [regex]::Matches($rules, 'CVS project rules supplement').Count -ne 0) { throw 'Git rules contain duplicate or conflicting project-type settings.' }
     if ($config -notmatch 'project_root_markers = \["\.git", "CVS"\]' -or $config -match '\.codex-root') { throw 'Global project root markers are invalid.' }
-    if (Test-Path -LiteralPath (Join-Path $globalRoot 'hooks\normalize-cvs-crlf.ps1')) { throw 'Git environment installed the CVS CRLF hook.' }
     if ((Get-DefaultDevelopmentEnvironment -Root $globalRoot) -ne 'Git') { throw 'Git was not recorded as the default project system.' }
 
     Install-TestEnvironment -Environment CVS
     $agents = Get-Content -LiteralPath (Join-Path $globalRoot 'AGENTS.md') -Raw
     $rules = Get-Content -LiteralPath (Join-Path $globalRoot 'rules\default.rules') -Raw
     if ($agents -notmatch '# Communication' -or $agents -notmatch '# CVS Project Rules' -or $agents -match '# Git Project Rules') { throw 'CVS AGENTS.md composition is invalid.' }
-    if ($rules -notmatch 'CVS project rules supplement' -or $rules -match 'Git project rules supplement') { throw 'CVS rules composition is invalid.' }
-    Assert-GlobalEnvironmentInstallation -DevelopmentEnvironment CVS -Root $globalRoot
+    if ([regex]::Matches($rules, 'CVS project rules supplement').Count -ne 1 -or [regex]::Matches($rules, 'Git project rules supplement').Count -ne 0) { throw 'CVS rules contain duplicate or conflicting project-type settings.' }
     $installedHooks = Get-Content -LiteralPath (Join-Path $globalRoot 'hooks.json') -Raw | ConvertFrom-Json
     if (@($installedHooks.hooks.SessionStart).Count -ne 1) { throw 'CVS installation did not preserve the unmanaged user hook.' }
-    if ($installedHooks.hooks.PSObject.Properties.Name -contains 'PostToolUse' -or @($installedHooks.hooks.Stop).Count -ne 1) { throw 'CVS installation did not add only its managed Stop hook.' }
-
-    $outsideCvs = Join-Path $testRoot 'ordinary-directory'
-    New-Item -ItemType Directory -Path $outsideCvs -Force | Out-Null
-    Push-Location $outsideCvs
-    try { & pwsh -NoLogo -NoProfile -File (Join-Path $globalRoot 'hooks\normalize-cvs-crlf.ps1') }
-    finally { Pop-Location }
-    if ($LASTEXITCODE -ne 0) { throw 'Global CVS hook must skip non-CVS directories successfully.' }
+    if ($installedHooks.hooks.PSObject.Properties.Name -contains 'PostToolUse' -or $installedHooks.hooks.PSObject.Properties.Name -contains 'Stop') { throw 'Repeated CVS installation added a CRLF hook.' }
+    if ((Test-Path -LiteralPath (Join-Path $script:ScriptRoot 'templates\environments\cvs\hooks.json')) -or (Test-Path -LiteralPath (Join-Path $script:ScriptRoot 'templates\environments\cvs\hooks\normalize-cvs-crlf.ps1'))) { throw 'CVS hook templates were not removed.' }
 
     Install-TestEnvironment -Environment Git
-    Assert-GlobalEnvironmentInstallation -DevelopmentEnvironment Git -Root $globalRoot
-    if (Test-Path -LiteralPath (Join-Path $globalRoot 'hooks\normalize-cvs-crlf.ps1')) { throw 'Switching to Git did not remove the global CVS hook.' }
+    if (Test-Path -LiteralPath (Join-Path $globalRoot 'hooks\normalize-cvs-crlf.ps1')) { throw 'Switching environments retained the obsolete CVS hook script.' }
 
     $script:capturedEnvironmentPrompt = ''
     function Read-Host([string]$Prompt) {

@@ -27,6 +27,9 @@ if (-not $invalidVersionFailed) {
 
 $buildRoot = Join-Path ([IO.Path]::GetTempPath()) ('codex-settings-versioned-build-' + [guid]::NewGuid().ToString('N'))
 try {
+    New-Item -ItemType Directory -Path $buildRoot -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $buildRoot 'CodexSettings-Setup-v1.0.0.cmd') -Value 'stale installer'
+    Set-Content -LiteralPath (Join-Path $buildRoot 'keep.txt') -Value 'unrelated file'
     & (Join-Path (Split-Path -Parent $scriptPath) 'build-installer.ps1') -Version 'v9.8.7' -OutputDirectory $buildRoot
     $versionedInstaller = Join-Path $buildRoot 'CodexSettings-Setup-v9.8.7.cmd'
     if (-not (Test-Path -LiteralPath $versionedInstaller -PathType Leaf)) {
@@ -34,6 +37,15 @@ try {
     }
     if (Test-Path -LiteralPath (Join-Path $buildRoot 'CodexSettings-Setup.cmd')) {
         throw '建置結果仍包含無版本檔名。'
+    }
+    if (Test-Path -LiteralPath (Join-Path $buildRoot 'CodexSettings-Setup-v1.0.0.cmd')) {
+        throw '建置結果仍保留舊版本安裝器。'
+    }
+    if (@(Get-ChildItem -LiteralPath $buildRoot -Filter 'CodexSettings-Setup-v*.cmd' -File).Count -ne 1) {
+        throw '輸出目錄並非只有一個版本化安裝器。'
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $buildRoot 'keep.txt') -PathType Leaf)) {
+        throw '建置時誤刪除非安裝器檔案。'
     }
 } finally {
     Remove-Item -LiteralPath $buildRoot -Recurse -Force -ErrorAction SilentlyContinue

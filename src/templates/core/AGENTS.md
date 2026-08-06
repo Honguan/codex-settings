@@ -33,6 +33,10 @@
 - Assume files may contain Traditional Chinese, Simplified Chinese, English, Japanese, or Korean.
 - For files larger than 1000 lines, inspect only the relevant section first.
 
+## Line endings
+
+When modifying files, preserve their existing CRLF or LF line-ending format.
+
 # Validation
 
 - Run only checks relevant to the modified code.
