@@ -9,7 +9,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $SourceRoot = Split-Path -Parent $ScriptRoot
-. (Join-Path $ScriptRoot 'common.ps1')
+. (Join-Path $SourceRoot 'load-operations.ps1')
 
 if ($PSVersionTable.PSVersion.Major -lt 7) {
     throw "安裝 ccsessions 與 cdaily 需要 PowerShell 7 或更新版本；目前版本：$($PSVersionTable.PSVersion)"

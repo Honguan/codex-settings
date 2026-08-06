@@ -1,8 +1,7 @@
 $ErrorActionPreference = 'Stop'
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $script:ScriptRoot = Join-Path $repositoryRoot 'src'
-. (Join-Path $script:ScriptRoot 'modules\common.ps1')
-. (Join-Path $script:ScriptRoot 'modules\installation.ps1')
+. (Join-Path $script:ScriptRoot 'load-installation.ps1')
 
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('codex-settings-global-environment-' + [guid]::NewGuid().ToString('N'))
 $globalRoot = Join-Path $testRoot '.codex'
@@ -25,7 +24,7 @@ function Install-TestEnvironment([ValidateSet('Git', 'CVS')][string]$Environment
 }
 
 try {
-    $installerSource = Get-Content -LiteralPath (Join-Path $script:ScriptRoot 'installer.ps1') -Raw
+    $installerSource = Get-Content -LiteralPath (Join-Path $script:ScriptRoot 'install.ps1') -Raw
     if ($installerSource -match 'Write-Warning\s+"已回復中斷的交易') {
         throw 'Installer startup must not render recovered transactions as a yellow warning.'
     }

@@ -1,11 +1,10 @@
 $ErrorActionPreference = 'Stop'
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
-$installerSource = Get-Content -LiteralPath (Join-Path $repositoryRoot 'src\installer.ps1') -Raw
+$installerSource = Get-Content -LiteralPath (Join-Path $repositoryRoot 'src\install.ps1') -Raw
 $installCommand = Get-Content -LiteralPath (Join-Path $repositoryRoot 'Install.cmd') -Raw
 $buildSource = Get-Content -LiteralPath (Join-Path $repositoryRoot 'tools\build-installer.ps1') -Raw
 $script:ScriptRoot = Join-Path $repositoryRoot 'src'
-. (Join-Path $script:ScriptRoot 'modules\common.ps1')
-. (Join-Path $script:ScriptRoot 'modules\installation.ps1')
+. (Join-Path $script:ScriptRoot 'load-installation.ps1')
 
 function Read-Host([string]$Prompt) { return '' }
 try {
@@ -25,6 +24,12 @@ if ($installCommand -match $pausePattern) {
 }
 if ($buildSource -match $pausePattern) {
     throw '單檔安裝器仍包含按鍵等待。'
+}
+if ($installCommand -notmatch 'src\\install\.ps1' -or $installCommand -match 'src\\installer\.ps1') {
+    throw 'Install.cmd 未使用重新命名後的安裝入口。'
+}
+if ($buildSource -notmatch 'src\\install\.ps1' -or $buildSource -match 'src\\installer\.ps1') {
+    throw '單檔安裝器未使用重新命名後的安裝入口。'
 }
 
 Write-Host 'Interactive installation exit tests passed.'

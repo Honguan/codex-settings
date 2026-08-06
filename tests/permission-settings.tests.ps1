@@ -1,8 +1,7 @@
 $ErrorActionPreference = 'Stop'
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $script:ScriptRoot = Join-Path $repositoryRoot 'src'
-. (Join-Path $script:ScriptRoot 'modules\common.ps1')
-. (Join-Path $script:ScriptRoot 'modules\installation.ps1')
+. (Join-Path $script:ScriptRoot 'load-installation.ps1')
 
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('codex-settings-permissions-' + [guid]::NewGuid().ToString('N'))
 $globalRoot = Join-Path $testRoot '.codex'

@@ -33,7 +33,7 @@ if errorlevel 1 (
     goto cleanup
 )
 
-pwsh.exe -NoProfile -ExecutionPolicy Bypass -File "%CODEX_SETTINGS_TEMP%\src\installer.ps1" %*
+pwsh.exe -NoProfile -ExecutionPolicy Bypass -File "%CODEX_SETTINGS_TEMP%\src\install.ps1" %*
 set "CODEX_SETTINGS_EXIT=%ERRORLEVEL%"
 
 :cleanup

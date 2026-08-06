@@ -9,7 +9,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-pwsh.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0src\installer.ps1" %*
+pwsh.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0src\install.ps1" %*
 
 set EXIT_CODE=%errorlevel%
 echo.

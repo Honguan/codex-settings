@@ -1,8 +1,7 @@
 $ErrorActionPreference = 'Stop'
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $script:ScriptRoot = Join-Path $repositoryRoot 'src'
-. (Join-Path $script:ScriptRoot 'modules\common.ps1')
-. (Join-Path $script:ScriptRoot 'modules\installation.ps1')
+. (Join-Path $script:ScriptRoot 'load-installation.ps1')
 
 $expectedNames = @(
     'setup-matt-pocock-skills', 'grill-with-docs', 'to-spec', 'to-tickets', 'implement',
@@ -54,7 +53,7 @@ try {
         throw 'Existing mattpocock/skills installation did not select automatic update.'
     }
 
-    $installerSource = Get-Content -LiteralPath (Join-Path $script:ScriptRoot 'installer.ps1') -Raw
+    $installerSource = Get-Content -LiteralPath (Join-Path $script:ScriptRoot 'install.ps1') -Raw
     foreach ($fragment in @('Test-MattPocockSkillsInstalled', 'Get-MattPocockSkillsArguments', '& npx @skillsArguments')) {
         if (-not $installerSource.Contains($fragment)) { throw "Installer command is missing: $fragment" }
     }

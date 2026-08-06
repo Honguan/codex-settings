@@ -217,14 +217,38 @@ cdaily 30                        # 顯示最近 30 天的每日統計
 
 ```text
 src\
-├─ installer.ps1
-├─ modules\
-├─ operations\
+├─ install.ps1
+├─ load-core.ps1
+├─ load-operations.ps1
+├─ load-installation.ps1
+├─ commands\
+│  ├─ backup-settings.ps1
+│  ├─ restore-settings.ps1
+│  └─ uninstall-settings.ps1
+├─ core\
+│  ├─ file-system.ps1
+│  ├─ hook-configuration.ps1
+│  ├─ managed-content.ps1
+│  └─ file-transactions.ps1
+├─ installation\
+│  ├─ prompts.ps1
+│  ├─ prerequisites.ps1
+│  ├─ installation-plan.ps1
+│  ├─ legacy-project-cleanup.ps1
+│  ├─ hook-validation.ps1
+│  ├─ hook-trust.ps1
+│  └─ target-installer.ps1
+├─ integrations\
+│  ├─ ccusage-state.ps1
+│  ├─ external-state-recovery.ps1
+│  └─ install-usage-tools.ps1
 └─ templates\
 tests\
 tools\
 ├─ build-installer.ps1
 └─ plan-release.ps1
 ```
+
+`load-core.ps1`、`load-operations.ps1` 與 `load-installation.ps1` 集中定義模組載入順序；核心檔案不依賴外部套件，安裝層也不直接實作原子寫入與交易回復。
 
 推送符合 `v主版.次版.修訂版` 的 Git tag 時，GitHub Actions 會建立同名 Release 附件。

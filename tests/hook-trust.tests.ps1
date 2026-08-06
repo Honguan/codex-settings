@@ -1,8 +1,7 @@
 $ErrorActionPreference = 'Stop'
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $script:ScriptRoot = Join-Path $repositoryRoot 'src'
-. (Join-Path $script:ScriptRoot 'modules\common.ps1')
-. (Join-Path $script:ScriptRoot 'modules\installation.ps1')
+. (Join-Path $script:ScriptRoot 'load-installation.ps1')
 
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('codex-settings-hook-trust-' + [guid]::NewGuid().ToString('N'))
 $globalRoot = Join-Path $testRoot '.codex'
@@ -13,7 +12,7 @@ $codexShimPath = Join-Path $testRoot 'codex.cmd'
 $originalPath = $env:PATH
 
 try {
-    $installerSource = Get-Content -LiteralPath (Join-Path $script:ScriptRoot 'installer.ps1') -Raw
+    $installerSource = Get-Content -LiteralPath (Join-Path $script:ScriptRoot 'install.ps1') -Raw
     if ($installerSource -notmatch 'Set-CodexSettingsHookTrust\s+-Root\s+\$globalRoot') { throw 'Global installer does not trust managed Hooks after installation.' }
 
     New-Item -ItemType Directory -Path $globalRoot -Force | Out-Null
