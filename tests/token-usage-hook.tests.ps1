@@ -63,12 +63,23 @@ Get-Content -LiteralPath $env:CODEX_SETTINGS_CCSESSIONS_SNAPSHOT -Raw
         last_token_usage = [ordered]@{ input_tokens = 4321; cached_input_tokens = 1234; cache_write_input_tokens = 345; output_tokens = 567; reasoning_output_tokens = 89; total_tokens = 6567 }
     }
     foreach ($expected in @('Input           4.32K', 'Output          567', 'Cache           1.23K', 'Total           6.57K')) {
-        if (-not $realtime.systemMessage.Contains($expected)) { throw "Stop payload 即時 Token 未優先使用：$expected" }
+        if (-not $realtime.reason.Contains($expected)) { throw "Stop payload 即時 Token 未優先使用：$expected" }
+    }
+    if ($realtime.decision -ne 'block' -or -not $realtime.reason.Contains('Input           4.32K')) {
+        throw 'Token Hook 未要求 Codex 在 assistant 回覆後續答顯示使用率。'
     }
     $realtimeDiagnostic = Get-Content -LiteralPath (Join-Path $diagnosticRoot ($sessionRealtime + '.log')) -Raw | ConvertFrom-Json
     if ($realtimeDiagnostic.event -ne 'Stop' -or $realtimeDiagnostic.handler -ne 'turn-token-usage' -or $realtimeDiagnostic.result -ne 'success' -or $realtimeDiagnostic.details -notmatch 'source=realtime') {
         throw 'Token Hook 未寫入可診斷的執行紀錄。'
     }
+
+    $sessionActive = '019fd65b-39b0-7d60-99fc-deb094690000'
+    Set-Snapshot -SessionId $sessionActive -InputTokens 100 -CachedInputTokens 20 -CacheWriteTokens 0 -OutputTokens 10 -TotalTokens 110 -CostUsd 0
+    $activeStop = Invoke-TokenHook -SessionId $sessionActive -TurnId 'turn-active' -AdditionalInput @{
+        stop_hook_active = $true
+        last_token_usage = [ordered]@{ input_tokens = 100; cached_input_tokens = 20; cache_write_input_tokens = 0; output_tokens = 10; reasoning_output_tokens = 0; total_tokens = 110 }
+    }
+    if (@($activeStop.PSObject.Properties).Count -ne 0) { throw 'Token Hook 在續答後再次觸發，可能造成 Stop 循環。' }
 
     $sessionTranscript = '019fd65b-39b0-7d60-99fc-deb094690002'
     Set-Snapshot -SessionId $sessionTranscript -InputTokens 999000 -CachedInputTokens 888000 -CacheWriteTokens 777000 -OutputTokens 666000 -TotalTokens 3330000 -CostUsd 9.99
@@ -86,7 +97,7 @@ Get-Content -LiteralPath $env:CODEX_SETTINGS_CCSESSIONS_SNAPSHOT -Raw
     [IO.File]::WriteAllText($rolloutPath, ($rolloutEvent | ConvertTo-Json -Depth 8 -Compress), [Text.UTF8Encoding]::new($false))
     $fromTranscript = Invoke-TokenHook -SessionId $sessionTranscript -TurnId 'turn-transcript' -AdditionalInput @{ transcript_path = $rolloutPath }
     foreach ($expected in @('Input           2.47K', 'Output          579', 'Cache           1.36K', 'Total           4.65K')) {
-        if (-not $fromTranscript.systemMessage.Contains($expected)) { throw "rollout token_count 未優先使用：$expected" }
+        if (-not $fromTranscript.reason.Contains($expected)) { throw "rollout token_count 未優先使用：$expected" }
     }
 
     $sessionRetry = '019fd65b-39b0-7d60-99fc-deb094690003'
@@ -94,18 +105,18 @@ Get-Content -LiteralPath $env:CODEX_SETTINGS_CCSESSIONS_SNAPSHOT -Raw
     $env:CODEX_SETTINGS_CCSESSIONS_RETRY_MARKER = $retryMarkerPath
     $retried = Invoke-TokenHook -SessionId $sessionRetry -TurnId 'turn-retry'
     Remove-Item Env:\CODEX_SETTINGS_CCSESSIONS_RETRY_MARKER
-    if (-not (Test-Path -LiteralPath $retryMarkerPath) -or -not $retried.systemMessage.Contains('Input           8.77K')) { throw 'ccsessions 資料延遲時未重試一次。' }
+    if (-not (Test-Path -LiteralPath $retryMarkerPath) -or -not $retried.reason.Contains('Input           8.77K')) { throw 'ccsessions 資料延遲時未重試一次。' }
 
     $sessionA = '019fd65b-39b0-7d60-99fc-deb09469413b'
     Set-Snapshot -SessionId $sessionA -InputTokens 120000 -CachedInputTokens 80000 -CacheWriteTokens 20000 -OutputTokens 12000 -TotalTokens 212000 -CostUsd 0.18
     $first = Invoke-TokenHook -SessionId $sessionA -TurnId 'turn-1'
     foreach ($expected in @('Token usage since session start', 'Input           120K', 'Cache           80K', 'Cache hit rate  36.36%', 'Estimated usage 0.14%', '019fd65b...69413b')) {
-        if (-not $first.systemMessage.Contains($expected)) { throw "新 Session 第一輪缺少：$expected" }
+        if (-not $first.reason.Contains($expected)) { throw "新 Session 第一輪缺少：$expected" }
     }
     $orderedLabels = @('Session', 'Model', 'Input', 'Output', 'Cache', 'Total', 'Cache hit rate', 'Cost', 'Estimated usage')
     $previousIndex = -1
     foreach ($label in $orderedLabels) {
-        $index = $first.systemMessage.IndexOf($label, [StringComparison]::Ordinal)
+        $index = $first.reason.IndexOf($label, [StringComparison]::Ordinal)
         if ($index -le $previousIndex) { throw "Token 顯示順序錯誤：$label" }
         $previousIndex = $index
     }
@@ -116,13 +127,13 @@ Get-Content -LiteralPath $env:CODEX_SETTINGS_CCSESSIONS_SNAPSHOT -Raw
     Set-Snapshot -SessionId $sessionA -InputTokens 145000 -CachedInputTokens 96000 -CacheWriteTokens 22000 -OutputTokens 15500 -TotalTokens 256500 -CostUsd 0.22 -Models @('gpt-5.6-sol', 'gpt-5.6-terra')
     $second = Invoke-TokenHook -SessionId $sessionA -TurnId 'turn-2'
     foreach ($expected in @('Turn token usage', '+25K', '+16K', '+3.5K', '+44.5K', 'Cache hit rate  37.21%', '+$0.04', 'Estimated usage 0.03%', 'gpt-5.6-sol, gpt-5.6-terra')) {
-        if (-not $second.systemMessage.Contains($expected)) { throw "第二輪差值缺少：$expected" }
+        if (-not $second.reason.Contains($expected)) { throw "第二輪差值缺少：$expected" }
     }
 
     $sessionB = '019fd65b-39b0-7d60-99fc-deb094699999'
     Set-Snapshot -SessionId $sessionB -InputTokens 10 -CachedInputTokens 2 -CacheWriteTokens 1 -OutputTokens 3 -TotalTokens 15 -CostUsd 0.001
     $other = Invoke-TokenHook -SessionId $sessionB -TurnId 'turn-b1'
-    if ($other.systemMessage -notmatch 'Token usage since session start') { throw '不同 Session 未使用獨立基準。' }
+    if ($other.reason -notmatch 'Token usage since session start') { throw '不同 Session 未使用獨立基準。' }
     $sessionStates = @(Get-ChildItem -LiteralPath $stateRoot -Filter '*.json' | Where-Object Name -ne 'settings.json')
     if ($sessionStates.Count -ne 5) { throw "多 Session 狀態檔數量錯誤：$($sessionStates.Count)" }
 
@@ -130,7 +141,7 @@ Get-Content -LiteralPath $env:CODEX_SETTINGS_CCSESSIONS_SNAPSHOT -Raw
     [IO.File]::WriteAllText($stateA.FullName, '{invalid', [Text.UTF8Encoding]::new($false))
     Set-Snapshot -SessionId $sessionA -InputTokens 150000 -CachedInputTokens 97000 -CacheWriteTokens 22500 -OutputTokens 16000 -TotalTokens 263000 -CostUsd 0.23
     $rebuilt = Invoke-TokenHook -SessionId $sessionA -TurnId 'turn-3'
-    if ($rebuilt.systemMessage -notmatch 'Token usage since session start' -or @(Get-ChildItem -LiteralPath $stateRoot -Filter '*.corrupt-*').Count -ne 1) { throw '損壞狀態未備份並重建。' }
+    if ($rebuilt.reason -notmatch 'Token usage since session start' -or @(Get-ChildItem -LiteralPath $stateRoot -Filter '*.corrupt-*').Count -ne 1) { throw '損壞狀態未備份並重建。' }
 
     $settingsPath = Join-Path $stateRoot 'settings.json'
     $settings = Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json

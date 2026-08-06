@@ -227,6 +227,7 @@ try {
     $inputObject = $raw | ConvertFrom-Json -ErrorAction Stop
     $sessionId = [string]$inputObject.session_id
     if ([string]::IsNullOrWhiteSpace($sessionId)) { throw 'session ID could not be resolved' }
+    if ([bool]$inputObject.stop_hook_active) { Write-HookOutput ([pscustomobject]@{}); return }
     $root = Get-StateRoot
     $settings = Get-Settings -Root $root
     if (-not [bool]$settings.enabled -or -not [bool]$settings.showAfterEachTurn) { Write-HookOutput ([pscustomobject]@{}); return }
@@ -279,7 +280,9 @@ try {
     if ([bool]$settings.showCost -and [bool]$current.hasCost) { [void]$lines.Add(('Estimated usage {0}' -f (Format-Percentage (([decimal]$shown.costUsd / [decimal]1.3) * 1)))) }
     [void]$lines.Add('────────────────────────────')
     Write-HookDiagnostic -HookInput $inputObject -Result 'success' -Details ("source={0}; displayedDelta={1}" -f $current.source, $isDelta)
-    Write-HookOutput ([pscustomobject]@{ systemMessage = $lines -join [Environment]::NewLine })
+    $usageText = $lines -join [Environment]::NewLine
+    $continuation = "在目前回覆後另起一段，原樣輸出以下使用率資訊，不要加入其他文字：$([Environment]::NewLine)$([Environment]::NewLine)$usageText"
+    Write-HookOutput ([pscustomobject]@{ decision = 'block'; reason = $continuation })
 } catch {
     $reason = if ($_.Exception.Message -match 'ccsessions not found') { 'ccsessions not found' } elseif ($_.Exception.Message -match 'session ID') { 'session ID could not be resolved' } else { 'usage data could not be read' }
     Write-HookDiagnostic -HookInput $inputObject -Result 'error' -Details $_.Exception.Message

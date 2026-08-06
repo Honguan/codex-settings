@@ -197,7 +197,7 @@ try {
         Write-Host "交易備份：$transactionRoot"
         Write-Host $(if ([bool]$InstallWindowsNotifications) { 'Windows 通知：已安裝，並送出測試通知。' } else { 'Windows 通知：未安裝。' })
         Write-Host $(if ([bool]$InstallTokenUsageInterface) { 'Token 使用率介面：已安裝。' } else { 'Token 使用率介面：未安裝。' })
-        Write-Host '請重新啟動 PowerShell 與 Codex，以載入設定、指令與 MCP。'
+        Write-Host '請完全關閉並重新啟動 VS Code、Codex 與 PowerShell；既有 Session 不會載入新安裝的 Hook。'
     } catch {
         $reason = $_.Exception.Message
         $rollbackErrors = New-Object 'System.Collections.Generic.List[string]'

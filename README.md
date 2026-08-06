@@ -31,7 +31,7 @@ Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 .\CodexSettings-Setup-v1.8.6.cmd
 ```
 
-安裝器會在 `%TEMP%` 解開內嵌程式、執行後立即清理；全域安裝成功後會直接關閉，不再返回選單或等待按鍵。從原始碼執行時則使用根目錄的 `Install.cmd`。
+安裝器會在 `%TEMP%` 解開內嵌程式、執行後立即清理；全域安裝成功後會直接關閉，不再返回選單或等待按鍵。安裝或更新 Hook 後必須完全關閉並重新啟動 VS Code、Codex 與 PowerShell，既有 Session 不會載入新 Hook。從原始碼執行時則使用根目錄的 `Install.cmd`。
 
 主選單只有四項：
 
@@ -51,7 +51,7 @@ Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 
 安裝器會單獨詢問是否安裝 Windows 通知：首次安裝預設為否，已安裝時預設保留並更新；選擇不安裝會移除受管理通知，但保留使用率介面與其他自訂 Hook。通知使用 `PermissionRequest`、`request_user_input` 的 `PreToolUse` 與 `Stop` 官方事件，依專案名稱顯示不同標題與提示音。同一 session、turn 與類型在短時間內只顯示一次；設定位於 `~/.codex/state/notifications/settings.json`，可停用全部或個別通知。可執行 `~/.codex/hooks/show-codex-notification.ps1 -Type Completed -Test` 測試通知流程。
 
-每輪 Token 使用率介面也會單獨詢問：首次安裝預設為否，已安裝時預設保留並更新；選擇不安裝會移除受管理 Hook 與腳本。統計優先讀取 Stop payload 的 `last_token_usage`；未提供時讀取目前 rollout 的最新 `token_count`，最後才以相同 Session ID 呼叫 `ccsessions -Json` 作為後備，不會改用其他 Session。顯示順序為 Session、Model、Input、Output、Cache、Total、Cache hit rate、Cost、Estimated usage；即時資料顯示本輪數值，`ccsessions` 資料則從第二次起顯示差值，Token 以 K／M／B 縮寫。即時事件未提供模型與費用時不會捏造數值，待 `ccsessions` 可讀取後才顯示。`Cache` 顯示快取讀取 Token；快取命中率仍以 `Cache read ÷ (Cache read + Cache write + Input)` 計算，估計消耗比例以每 US$1.30 = 1% 計算。狀態依 Session 分開儲存在 `~/.codex/state/token-usage`，相同 snapshot 不會重複顯示。Codex Hook 無法改寫既有 assistant 文字，因此統計透過 `systemMessage` 緊接在回覆後顯示；設定位於同目錄的 `settings.json`。Token 與 CVS 換行 Hook 不設定持續顯示的執行狀態，並將執行結果寫入 `~/.codex/logs/hooks/<session-id>.log`，包含事件、handler、session／turn、工具、已處理檔案與錯誤內容。安裝器會透過 Codex `app-server` 取得目前 Hook 雜湊，只信任並驗證本工具管理的 Token、通知及換行保護 Hook，不會信任使用者自訂 Hook。
+每輪 Token 使用率介面也會單獨詢問：首次安裝預設為否，已安裝時預設保留並更新；選擇不安裝會移除受管理 Hook 與腳本。統計優先讀取 Stop payload 的 `last_token_usage`；未提供時讀取目前 rollout 的最新 `token_count`，最後才以相同 Session ID 呼叫 `ccsessions -Json` 作為後備，不會改用其他 Session。顯示順序為 Session、Model、Input、Output、Cache、Total、Cache hit rate、Cost、Estimated usage；即時資料顯示本輪數值，`ccsessions` 資料則從第二次起顯示差值，Token 以 K／M／B 縮寫。即時事件未提供模型與費用時不會捏造數值，待 `ccsessions` 可讀取後才顯示。`Cache` 顯示快取讀取 Token；快取命中率仍以 `Cache read ÷ (Cache read + Cache write + Input)` 計算，估計消耗比例以每 US$1.30 = 1% 計算。狀態依 Session 分開儲存在 `~/.codex/state/token-usage`，相同 snapshot 不會重複顯示。Codex Hook 無法改寫既有 assistant 文字，因此 Stop Hook 會要求 Codex 在原回覆後產生一段只含使用率的續答，並以 `stop_hook_active` 防止循環；設定位於同目錄的 `settings.json`。Token 與 CVS 換行 Hook 不設定持續顯示的執行狀態，並將執行結果寫入 `~/.codex/logs/hooks/<session-id>.log`，包含事件、handler、session／turn、工具、已處理檔案與錯誤內容。安裝器會透過 Codex `app-server` 取得目前 Hook 雜湊，只信任並驗證本工具管理的 Token、通知及換行保護 Hook，不會信任使用者自訂 Hook。
 
 安裝成功後會將選擇記錄為預設專案體系。下次互動安裝按 Enter，或非互動安裝未提供 `-DevelopmentEnvironment` 時，會沿用上次的 Git／CVS 選擇。
 

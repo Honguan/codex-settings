@@ -32,6 +32,9 @@ try {
     if ($installerSource -notmatch 'Write-Host\s+"已自動回復上次中斷的安裝交易') {
         throw 'Installer startup did not preserve a clear recovered-transaction status message.'
     }
+    if ($installerSource -notmatch '完全關閉並重新啟動 VS Code、Codex 與 PowerShell') {
+        throw 'Installer completion message did not require restarting existing Codex sessions before testing Hooks.'
+    }
 
     if ((Get-DefaultDevelopmentEnvironment -Root $globalRoot) -ne 'Git') { throw 'First installation must default to Git.' }
     New-Item -ItemType Directory -Path $globalRoot -Force | Out-Null
