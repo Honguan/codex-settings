@@ -89,17 +89,6 @@ Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 .\Install.cmd -Mode Global -InstallStyle Replace
 ```
 
-## 舊專案設定清理
-
-新版全域安裝會讀取舊版 `%LOCALAPPDATA%\CodexSettings\projects.json`，逐一清理已登記專案：
-
-- 刪除舊安裝 manifest 所列的專案 `AGENTS.md`／`agent.md` 與 Rules。
-- 移除舊版 CVS CRLF Hooks；其他 Hook 予以保留。
-- 移除 `.codex-root`、舊版 CRLF Hook 腳本與專案 manifest。
-- 清理完成後刪除舊專案登記清單。
-
-所有變更都納入同一筆交易備份；安裝失敗時會回復。找不到登記清單時直接略過，不會掃描或修改未登記的專案。
-
 ## 設定位置
 
 主要全域設定安裝到：
@@ -234,7 +223,6 @@ src\
 │  ├─ prompts.ps1
 │  ├─ prerequisites.ps1
 │  ├─ installation-plan.ps1
-│  ├─ legacy-project-cleanup.ps1
 │  ├─ hook-validation.ps1
 │  ├─ hook-trust.ps1
 │  └─ target-installer.ps1

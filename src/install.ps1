@@ -112,7 +112,6 @@ try {
     $results = New-Object 'System.Collections.Generic.List[object]'
 
     try {
-        $obsoleteProjects = Remove-ObsoleteProjectSettings -Transaction $transaction
         foreach ($target in $targets) { [void]$results.Add((Install-Target $target $transaction -Force:$Force)) }
         $external = $null
 
@@ -196,7 +195,6 @@ try {
         Write-Host '  ccsessions [數量或 Session ID]：查看 Session 的模型、Token、費用與台北時間。'
         Write-Host '  ccsessions -Json <Session ID>：輸出每輪 Token Hook 使用的機器可讀資料。'
         Write-Host '  cdaily [天數]：查看每日 Token 與費用統計。'
-        Write-Host "舊專案設定：處理 $($obsoleteProjects.Projects) 個專案、移除 $($obsoleteProjects.FilesRemoved) 個檔案、更新 $($obsoleteProjects.FilesUpdated) 個檔案"
         Write-Host "Hook 信任：已驗證 $($hookTrust.TrustedCount) 個、更新 $($hookTrust.UpdatedCount) 個。"
         Write-Host "交易備份：$transactionRoot"
         Write-Host $(if ([bool]$InstallWindowsNotifications) { 'Windows 通知：已安裝，並送出測試通知。' } else { 'Windows 通知：未安裝。' })

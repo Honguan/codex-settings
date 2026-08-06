@@ -81,24 +81,6 @@ function Remove-ManagedLineEndingHooksJson {
     return ($object | ConvertTo-Json -Depth 30)
 }
 
-function Merge-LineEndingHooksJson {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ExistingContent,
-        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$TemplateContent
-    )
-
-    $cleaned = Remove-ManagedLineEndingHooksJson -Content $ExistingContent
-    $existing = if ([string]::IsNullOrWhiteSpace($cleaned)) { [pscustomobject]@{ hooks = [pscustomobject]@{} } } else { $cleaned | ConvertFrom-Json -ErrorAction Stop }
-    if ($null -eq $existing.hooks) { $existing | Add-Member -NotePropertyName hooks -NotePropertyValue ([pscustomobject]@{}) -Force }
-    $template = $TemplateContent | ConvertFrom-Json -ErrorAction Stop
-    foreach ($property in @($template.hooks.PSObject.Properties)) {
-        $current = if ($existing.hooks.PSObject.Properties.Name -contains $property.Name) { @($existing.hooks.PSObject.Properties[$property.Name].Value) } else { @() }
-        $existing.hooks | Add-Member -NotePropertyName $property.Name -NotePropertyValue (@($current) + @($property.Value)) -Force
-    }
-    return ($existing | ConvertTo-Json -Depth 30)
-}
-
 function Merge-HooksJson {
     [CmdletBinding()]
     param(

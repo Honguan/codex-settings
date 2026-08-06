@@ -17,7 +17,6 @@ $expectedFiles = @(
     'installation\hook-trust.ps1',
     'installation\hook-validation.ps1',
     'installation\installation-plan.ps1',
-    'installation\legacy-project-cleanup.ps1',
     'installation\prerequisites.ps1',
     'installation\prompts.ps1',
     'installation\target-installer.ps1',
@@ -47,7 +46,6 @@ foreach ($commandName in @(
     'Select-Mode',
     'Test-Prerequisites',
     'Resolve-GlobalTargets',
-    'Remove-ObsoleteProjectSettings',
     'Set-CodexSettingsHookTrust',
     'Install-Target'
 )) {

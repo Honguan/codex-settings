@@ -232,8 +232,7 @@ try {
 
     $targets = @(
         [pscustomobject]@{ Root = Join-Path $HOME '.codex'; Label = 'global' },
-        [pscustomobject]@{ Root = Join-Path $HOME '.codex\skills'; Label = 'global-skills' },
-        [pscustomobject]@{ Root = Join-Path $HOME '.agents\skills'; Label = 'legacy-global-skills' }
+        [pscustomobject]@{ Root = Join-Path $HOME '.codex\skills'; Label = 'global-skills' }
     )
 
     $availableTargets = @($targets | Where-Object { Test-Path -LiteralPath (Join-Path $_.Root '.codex-settings-manifest.json') -PathType Leaf })
