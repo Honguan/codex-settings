@@ -1,0 +1,65 @@
+name: Issue close guard
+
+on:
+  issues:
+    types:
+      - closed
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  verify:
+    name: Verify main before Issue close
+    runs-on: windows-latest
+    steps:
+      - name: Reopen Issue when main verification is missing
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $issueNumber = [int]$env:ISSUE_NUMBER
+          $pullRequests = @(gh api "repos/$($env:REPOSITORY)/pulls?state=closed&base=main&per_page=100" | ConvertFrom-Json)
+          $referencePattern = '(?im)\bRefs\s+#\s*' + $issueNumber + '\b'
+          $branchPattern = '^issue/' + $issueNumber + '-'
+          $mergedPullRequest = $pullRequests | Where-Object {
+              $null -ne $_.merged_at -and (
+                  ([string]$_.body -match $referencePattern) -or
+                  ([string]$_.head.ref -match $branchPattern)
+              )
+          } | Sort-Object merged_at -Descending | Select-Object -First 1
+
+          $failureReason = $null
+          if ($null -eq $mergedPullRequest) {
+              $failureReason = "no merged PR targeting main references Issue #$issueNumber"
+          } else {
+              $comparison = gh api "repos/$($env:REPOSITORY)/compare/$($mergedPullRequest.merge_commit_sha)...main" | ConvertFrom-Json
+              if ($comparison.status -notin @('ahead', 'identical')) {
+                  $failureReason = "merge commit $($mergedPullRequest.merge_commit_sha) is not reachable from main"
+              } else {
+                  $runs = @(gh run list --repo $env:REPOSITORY --workflow main-validation.yml --commit $mergedPullRequest.merge_commit_sha --limit 20 --json status,conclusion | ConvertFrom-Json)
+                  $successfulRun = $runs | Where-Object { $_.status -eq 'completed' -and $_.conclusion -eq 'success' } | Select-Object -First 1
+                  if ($null -eq $successfulRun) {
+                      $failureReason = "main-validation.yml has not passed for $($mergedPullRequest.merge_commit_sha)"
+                  }
+              }
+          }
+
+          if ($null -ne $failureReason) {
+              $comment = @"
+          Issue close guard reopened #$issueNumber because main verification is incomplete: $failureReason.
+
+          Complete the main-branch verification and record Branch, PR, Merge commit, Main verification, and Tests before closing the Issue again.
+          "@
+              gh api --method PATCH "repos/$($env:REPOSITORY)/issues/$issueNumber" -f state=open | Out-Null
+              gh api --method POST "repos/$($env:REPOSITORY)/issues/$issueNumber/comments" -f body=$comment | Out-Null
+              throw $failureReason
+          }
+
+          Write-Host "Issue #$issueNumber passed merged-main and main-validation checks."
