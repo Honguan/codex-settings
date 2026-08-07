@@ -1,0 +1,46 @@
+name: Main validation
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  validate:
+    name: Verify main and run tests
+    runs-on: windows-latest
+    steps:
+      - name: Verify main push came from a merged PR
+        if: github.event_name == 'push'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pullRequests = @(gh api "repos/$($env:REPOSITORY)/commits/$($env:COMMIT_SHA)/pulls" | ConvertFrom-Json)
+          $mergedPullRequest = $pullRequests | Where-Object {
+              $_.base.ref -eq 'main' -and $null -ne $_.merged_at
+          } | Select-Object -First 1
+          if ($null -eq $mergedPullRequest) {
+              throw "The main commit $($env:COMMIT_SHA) is not associated with a merged PR targeting main."
+          }
+          Write-Host "Main commit came from merged PR #$($mergedPullRequest.number)."
+
+      - uses: actions/checkout@v6
+      - name: Run PowerShell tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $failed = @()
+          Get-ChildItem ./tests/*.tests.ps1 | Sort-Object Name | ForEach-Object {
+              & pwsh -NoLogo -NoProfile -File $_.FullName
+              if ($LASTEXITCODE -ne 0) { $failed += $_.Name }
+          }
+          if ($failed.Count -gt 0) { throw "Failed tests: $($failed -join ', ')" }

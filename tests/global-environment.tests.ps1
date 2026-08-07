@@ -120,7 +120,7 @@ try {
     $rules = Get-Content -LiteralPath (Join-Path $globalRoot 'rules\default.rules') -Raw
     $config = Get-Content -LiteralPath (Join-Path $globalRoot 'config.toml') -Raw
     if ($agents -notmatch '# Communication' -or $agents -notmatch '# Git Project Rules' -or $agents -match '# CVS Project Rules') { throw 'Git AGENTS.md composition is invalid.' }
-    if ([regex]::Matches($agents, '(?m)^## Issue Completion Workflow\s*$').Count -ne 1 -or $agents -notmatch 'Fixes #<issue-number>' -or $agents -notmatch 'only after the fixing commit is on the default branch') { throw 'Git Issue completion workflow is missing or duplicated.' }
+    if ([regex]::Matches($agents, '(?m)^## Issue Branch Workflow\s*$').Count -ne 1 -or [regex]::Matches($agents, '(?m)^## Pull Request and Main Verification\s*$').Count -ne 1 -or $agents -notmatch 'issue/<issue-number>-<short-description>' -or $agents -notmatch 'Refs #<issue-number>' -or $agents -notmatch 'only after the fixing commit is on the default branch') { throw 'Git Issue branch and main-verification workflow is missing or duplicated.' }
     if ([regex]::Matches($rules, 'Git project rules supplement').Count -ne 1 -or [regex]::Matches($rules, 'CVS project rules supplement').Count -ne 0) { throw 'Git rules contain duplicate or conflicting project-type settings.' }
     if ($config -notmatch 'project_root_markers = \["\.git", "CVS"\]' -or $config -match '\.codex-root') { throw 'Global project root markers are invalid.' }
     if ((Get-DefaultDevelopmentEnvironment -Root $globalRoot) -ne 'Git') { throw 'Git was not recorded as the default project system.' }
