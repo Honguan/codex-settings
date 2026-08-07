@@ -33,6 +33,80 @@ function Remove-GlobalLineEndingHookEntries([string]$Root, $Transaction) {
     }
 }
 
+function Get-ManagedHookScriptPaths([string]$Content, [string]$Root, [string[]]$ManagedHookFingerprints = @()) {
+    $paths = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    if ([string]::IsNullOrWhiteSpace($Content)) { return @($paths | ForEach-Object { $_ }) }
+    try { $object = $Content | ConvertFrom-Json -ErrorAction Stop } catch { return @($paths | ForEach-Object { $_ }) }
+    if ($null -eq $object.hooks) { return @($paths | ForEach-Object { $_ }) }
+    $hooksRoot = [IO.Path]::GetFullPath((Join-Path $Root 'hooks')).TrimEnd('\', '/')
+    foreach ($property in @($object.hooks.PSObject.Properties)) {
+        foreach ($group in @($property.Value)) {
+            foreach ($entry in @(Get-HookHandlerEntries -Entry $group)) {
+                if (-not (Test-ManagedGlobalHookEntry -Entry $entry -ManagedHookFingerprints $ManagedHookFingerprints)) { continue }
+                foreach ($match in [regex]::Matches((Get-HookEntryText -Entry $entry), '(?i)(?<name>[A-Za-z0-9._-]+\.ps1)')) {
+                    $candidate = Join-Path $hooksRoot $match.Groups['name'].Value
+                    if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
+                    $fullCandidate = [IO.Path]::GetFullPath($candidate)
+                    if ($fullCandidate.StartsWith($hooksRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { [void]$paths.Add($fullCandidate) }
+                }
+            }
+        }
+    }
+    return @($paths | ForEach-Object { $_ })
+}
+
+function Test-ManagedHookScriptFile([string]$Path) {
+    try {
+        $content = [IO.File]::ReadAllText($Path)
+        return $content -match '(?i)(CodexSettings Windows notification|Codex 任務完成|工作已完成|請回到 Codex|turn[-_]?token[-_]?usage|CodexSettings turn token usage)'
+    } catch { return $false }
+}
+
+function Remove-ManagedHookScripts([string]$Root, $Transaction, [string[]]$ReferencedPaths = @()) {
+    $hooksRoot = [IO.Path]::GetFullPath((Join-Path $Root 'hooks')).TrimEnd('\', '/')
+    $paths = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    $referenced = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($path in @($ReferencedPaths)) {
+        try {
+            $fullPath = [IO.Path]::GetFullPath($path)
+            if ($fullPath.StartsWith($hooksRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { [void]$referenced.Add($fullPath); [void]$paths.Add($fullPath) }
+        } catch {}
+    }
+    foreach ($scriptName in @(
+        'show-codex-notification.ps1',
+        'show-turn-token-usage.ps1',
+        'show-codex-toast.ps1',
+        'show-turn-token-notification.ps1',
+        'notify-codex.ps1',
+        'codex-notification.ps1'
+    )) {
+        $scriptPath = [IO.Path]::GetFullPath((Join-Path $hooksRoot $scriptName))
+        if ((Test-Path -LiteralPath $scriptPath -PathType Leaf) -and ($referenced.Contains($scriptPath) -or (Test-ManagedHookScriptFile -Path $scriptPath))) { [void]$paths.Add($scriptPath) }
+    }
+    $removed = 0
+    foreach ($path in $paths) {
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+        Save-TransactionFile -Transaction $Transaction -Path $path
+        Remove-Item -LiteralPath $path -Force
+        $removed++
+    }
+    if ((Test-Path -LiteralPath $hooksRoot -PathType Container) -and @(Get-ChildItem -LiteralPath $hooksRoot -Force).Count -eq 0) { Remove-Item -LiteralPath $hooksRoot -Force }
+    return $removed
+}
+
+function Remove-ManagedGlobalNotificationHooks([string]$Root, $Transaction, [string[]]$ManagedHookFingerprints = @()) {
+    $hooksPath = Join-Path $Root 'hooks.json'
+    if (-not (Test-Path -LiteralPath $hooksPath -PathType Leaf)) { return }
+    $state = Get-TextFileState $hooksPath
+    $referencedScripts = @(Get-ManagedHookScriptPaths -Content $state.Content -Root $Root -ManagedHookFingerprints $ManagedHookFingerprints)
+    $cleaned = Remove-ManagedGlobalHooksJson -Content $state.Content -ManagedHookFingerprints $ManagedHookFingerprints
+    if ($cleaned -ne $state.Content) {
+        Save-TransactionFile -Transaction $Transaction -Path $hooksPath
+        Write-TextFileState -Path $hooksPath -Content $cleaned -Encoding $state.Encoding
+    }
+    [void](Remove-ManagedHookScripts -Root $Root -Transaction $Transaction -ReferencedPaths $referencedScripts)
+}
+
 function Find-CvsProjectRoot([string]$StartPath) {
     if ([string]::IsNullOrWhiteSpace($StartPath)) { return $null }
     try {
@@ -90,7 +164,7 @@ function Normalize-ManagedProjectLineEndingHooksJson([string]$Content) {
     return ($object | ConvertTo-Json -Depth 30)
 }
 
-function Remove-ManagedProjectHooks([string]$StartPath, $Transaction, [switch]$KeepCvsLineEndingHooks) {
+function Remove-ManagedProjectHooks([string]$StartPath, $Transaction, [switch]$KeepCvsLineEndingHooks, [string[]]$ManagedHookFingerprints = @()) {
     $projectRoot = Find-CvsProjectRoot -StartPath $StartPath
     if ([string]::IsNullOrWhiteSpace($projectRoot)) { return $null }
 
@@ -99,7 +173,8 @@ function Remove-ManagedProjectHooks([string]$StartPath, $Transaction, [switch]$K
     $changed = $false
     if (Test-Path -LiteralPath $hooksPath -PathType Leaf) {
         $state = Get-TextFileState $hooksPath
-        $cleaned = Remove-ManagedGlobalHooksJson -Content $state.Content
+        $referencedScripts = @(Get-ManagedHookScriptPaths -Content $state.Content -Root $codexRoot -ManagedHookFingerprints $ManagedHookFingerprints)
+        $cleaned = Remove-ManagedGlobalHooksJson -Content $state.Content -ManagedHookFingerprints $ManagedHookFingerprints
         $cleaned = if ($KeepCvsLineEndingHooks) { Normalize-ManagedProjectLineEndingHooksJson -Content $cleaned } else { Remove-ManagedLineEndingHooksJson -Content $cleaned }
         if ($cleaned -ne $state.Content) {
             Save-TransactionFile -Transaction $Transaction -Path $hooksPath
@@ -109,13 +184,7 @@ function Remove-ManagedProjectHooks([string]$StartPath, $Transaction, [switch]$K
     }
 
     $removedScripts = 0
-    foreach ($scriptName in @(
-        'crlf-updated-files.ps1',
-        'normalize-cvs-crlf.ps1',
-        'preserve-line-endings.ps1',
-        'show-turn-token-usage.ps1',
-        'show-codex-notification.ps1'
-    )) {
+    foreach ($scriptName in @('crlf-updated-files.ps1', 'normalize-cvs-crlf.ps1', 'preserve-line-endings.ps1')) {
         $scriptPath = Join-Path $codexRoot ("hooks\$scriptName")
         if (Test-Path -LiteralPath $scriptPath -PathType Leaf) {
             Save-TransactionFile -Transaction $Transaction -Path $scriptPath
@@ -124,6 +193,8 @@ function Remove-ManagedProjectHooks([string]$StartPath, $Transaction, [switch]$K
             $changed = $true
         }
     }
+    $removedNotificationScripts = Remove-ManagedHookScripts -Root $codexRoot -Transaction $Transaction -ReferencedPaths $referencedScripts
+    if ($removedNotificationScripts -gt 0) { $removedScripts += $removedNotificationScripts; $changed = $true }
 
     $hooksRoot = Join-Path $codexRoot 'hooks'
     if ((Test-Path -LiteralPath $hooksRoot -PathType Container) -and @(Get-ChildItem -LiteralPath $hooksRoot -Force).Count -eq 0) {
@@ -132,66 +203,72 @@ function Remove-ManagedProjectHooks([string]$StartPath, $Transaction, [switch]$K
     return [pscustomobject]@{ ProjectRoot = $projectRoot; Changed = $changed; RemovedScripts = $removedScripts }
 }
 
-function Assert-GlobalLineEndingHook([ValidateSet('Git', 'CVS')][string]$DevelopmentEnvironment, [string]$Root, [bool]$InstallWindowsNotifications, [string]$ProjectRoot) {
-    $hooksPath = Join-Path $Root 'hooks.json'
-    $hookContent = if (Test-Path -LiteralPath $hooksPath -PathType Leaf) { [IO.File]::ReadAllText($hooksPath) } else { '' }
-    $trackHookCount = 0
-    $restoreHookCount = 0
-    $finalizeHookCount = 0
-    $legacyHookCount = 0
-    $notificationQuestionHookCount = 0
-    $notificationPermissionHookCount = 0
-    $notificationCompletedHookCount = 0
-    if (-not [string]::IsNullOrWhiteSpace($hookContent)) {
-        $hookObject = $hookContent | ConvertFrom-Json -ErrorAction Stop
-        if ($null -ne $hookObject.hooks) {
-            foreach ($property in @($hookObject.hooks.PSObject.Properties)) {
-                foreach ($entry in @($property.Value)) {
-                    foreach ($managedEntry in @(Get-ManagedHookEntries -Entry $entry -SignaturePattern $script:PreserveLineEndingHookSignaturePattern)) {
-                        if ($property.Name -eq 'PreToolUse') { $trackHookCount++ }
-                        if ($property.Name -eq 'PostToolUse') { $restoreHookCount++ }
-                        if ($property.Name -eq 'Stop') { $finalizeHookCount++ }
-                    }
-                    $legacyHookCount += @(Get-ManagedHookEntries -Entry $entry -SignaturePattern $script:LegacyCrlfHookSignaturePattern).Count
-                    foreach ($managedEntry in @(Get-ManagedHookEntries -Entry $entry -SignaturePattern $script:ManagedNotificationHookSignaturePattern)) {
-                        if ($property.Name -eq 'PreToolUse') { $notificationQuestionHookCount++ }
-                        if ($property.Name -eq 'PermissionRequest') { $notificationPermissionHookCount++ }
-                        if ($property.Name -eq 'Stop') { $notificationCompletedHookCount++ }
-                    }
+function Get-HookConfigurationCounts([string]$HooksPath, [string[]]$NotificationFingerprints = @(), [string[]]$TokenFingerprints = @()) {
+    $counts = [ordered]@{
+        NotificationPreToolUse = 0
+        NotificationPermissionRequest = 0
+        NotificationStop = 0
+        LegacyNotificationStop = 0
+        Token = 0
+        LineEndingPreToolUse = 0
+        LineEndingPostToolUse = 0
+        LineEndingStop = 0
+        LegacyCrlf = 0
+    }
+    if (-not (Test-Path -LiteralPath $HooksPath -PathType Leaf)) { return [pscustomobject]$counts }
+    $object = Get-Content -LiteralPath $HooksPath -Raw | ConvertFrom-Json -ErrorAction Stop
+    if ($null -eq $object.hooks) { return [pscustomobject]$counts }
+    foreach ($property in @($object.hooks.PSObject.Properties)) {
+        foreach ($group in @($property.Value)) {
+            foreach ($entry in @(Get-HookHandlerEntries -Entry $group)) {
+                $isNotification = Test-ManagedNotificationHookEntry -Entry $entry -ManagedHookFingerprints $NotificationFingerprints
+                $isLegacyNotification = Test-LegacyManagedNotificationHookEntry -Entry $entry
+                if ($isNotification) {
+                    if ($property.Name -eq 'PreToolUse') { $counts.NotificationPreToolUse++ }
+                    if ($property.Name -eq 'PermissionRequest') { $counts.NotificationPermissionRequest++ }
+                    if ($property.Name -eq 'Stop') { $counts.NotificationStop++ }
                 }
+                if ($property.Name -eq 'Stop' -and $isLegacyNotification) { $counts.LegacyNotificationStop++ }
+                if (Test-ManagedTokenHookEntry -Entry $entry -ManagedHookFingerprints $TokenFingerprints) { $counts.Token++ }
+                if (Test-ManagedLineEndingHookEntry -Entry $entry) {
+                    if ($property.Name -eq 'PreToolUse') { $counts.LineEndingPreToolUse++ }
+                    if ($property.Name -eq 'PostToolUse') { $counts.LineEndingPostToolUse++ }
+                    if ($property.Name -eq 'Stop') { $counts.LineEndingStop++ }
+                }
+                if ((Get-HookEntryText -Entry $entry) -match $script:LegacyCrlfHookSignaturePattern) { $counts.LegacyCrlf++ }
             }
         }
     }
+    return [pscustomobject]$counts
+}
+
+function Assert-GlobalLineEndingHook([ValidateSet('Git', 'CVS')][string]$DevelopmentEnvironment, [string]$Root, [bool]$InstallWindowsNotifications, [string]$ProjectRoot, [string[]]$ManagedNotificationFingerprints = @(), [string[]]$ManagedTokenFingerprints = @()) {
+    $hooksPath = Join-Path $Root 'hooks.json'
+    $globalCounts = Get-HookConfigurationCounts -HooksPath $hooksPath -NotificationFingerprints $ManagedNotificationFingerprints -TokenFingerprints $ManagedTokenFingerprints
+    $trackHookCount = [int]$globalCounts.LineEndingPreToolUse
+    $restoreHookCount = [int]$globalCounts.LineEndingPostToolUse
+    $finalizeHookCount = [int]$globalCounts.LineEndingStop
+    $legacyHookCount = [int]$globalCounts.LegacyCrlf
+    $notificationQuestionHookCount = [int]$globalCounts.NotificationPreToolUse
+    $notificationPermissionHookCount = [int]$globalCounts.NotificationPermissionRequest
+    $notificationCompletedHookCount = [int]$globalCounts.NotificationStop
     $preserveScriptCount = if (Test-Path -LiteralPath (Join-Path $Root 'hooks\preserve-line-endings.ps1') -PathType Leaf) { 1 } else { 0 }
     $notificationScriptCount = if (Test-Path -LiteralPath (Join-Path $Root 'hooks\show-codex-notification.ps1') -PathType Leaf) { 1 } else { 0 }
     $expectedNotificationCount = if ($InstallWindowsNotifications) { 1 } else { 0 }
     if ($notificationQuestionHookCount -ne $expectedNotificationCount -or $notificationPermissionHookCount -ne $expectedNotificationCount -or $notificationCompletedHookCount -ne $expectedNotificationCount -or $notificationScriptCount -ne $expectedNotificationCount) {
         throw "Windows 通知安裝檢查失敗：Expected=$expectedNotificationCount QuestionHookCount=$notificationQuestionHookCount PermissionHookCount=$notificationPermissionHookCount CompletedHookCount=$notificationCompletedHookCount NotificationScriptCount=$notificationScriptCount"
     }
-    $projectNotificationStopHookCount = 0
-    $projectLineEndingPreToolUseHookCount = 0
-    $projectLineEndingPostToolUseHookCount = 0
-    $projectLineEndingStopHookCount = 0
-    $projectLegacyCrlfHookCount = 0
-    $projectLegacyTokenHookCount = 0
+    $projectCounts = [pscustomobject]@{ NotificationStop = 0; LegacyNotificationStop = 0; Token = 0; LineEndingPreToolUse = 0; LineEndingPostToolUse = 0; LineEndingStop = 0; LegacyCrlf = 0 }
     if (-not [string]::IsNullOrWhiteSpace($ProjectRoot)) {
         $projectHooksPath = Join-Path $ProjectRoot '.codex\hooks.json'
-        if (Test-Path -LiteralPath $projectHooksPath -PathType Leaf) {
-            $projectHooks = Get-Content -LiteralPath $projectHooksPath -Raw | ConvertFrom-Json -ErrorAction Stop
-            if ($null -ne $projectHooks.hooks) {
-                foreach ($property in @($projectHooks.hooks.PSObject.Properties)) {
-                    foreach ($entry in @($property.Value)) {
-                        if ($property.Name -eq 'Stop') { $projectNotificationStopHookCount += @(Get-ManagedHookEntries -Entry $entry -SignaturePattern $script:ManagedNotificationHookSignaturePattern).Count }
-                        if ($property.Name -eq 'PreToolUse') { $projectLineEndingPreToolUseHookCount += @(Get-ManagedHookEntries -Entry $entry -SignaturePattern $script:PreserveLineEndingHookSignaturePattern).Count }
-                        if ($property.Name -eq 'PostToolUse') { $projectLineEndingPostToolUseHookCount += @(Get-ManagedHookEntries -Entry $entry -SignaturePattern $script:PreserveLineEndingHookSignaturePattern).Count }
-                        if ($property.Name -eq 'Stop') { $projectLineEndingStopHookCount += @(Get-ManagedHookEntries -Entry $entry -SignaturePattern $script:PreserveLineEndingHookSignaturePattern).Count }
-                        $projectLegacyCrlfHookCount += @(Get-ManagedHookEntries -Entry $entry -SignaturePattern $script:LegacyCrlfHookSignaturePattern).Count
-                        $projectLegacyTokenHookCount += @(Get-ManagedHookEntries -Entry $entry -SignaturePattern $script:ManagedTokenHookSignaturePattern).Count
-                    }
-                }
-            }
-        }
+        if (Test-Path -LiteralPath $projectHooksPath -PathType Leaf) { $projectCounts = Get-HookConfigurationCounts -HooksPath $projectHooksPath }
     }
+    $projectNotificationStopHookCount = [int]$projectCounts.NotificationStop
+    $projectLineEndingPreToolUseHookCount = [int]$projectCounts.LineEndingPreToolUse
+    $projectLineEndingPostToolUseHookCount = [int]$projectCounts.LineEndingPostToolUse
+    $projectLineEndingStopHookCount = [int]$projectCounts.LineEndingStop
+    $projectLegacyCrlfHookCount = [int]$projectCounts.LegacyCrlf
+    $projectLegacyTokenHookCount = [int]$projectCounts.Token
 
     $notificationScriptPath = Join-Path $Root 'hooks\show-codex-notification.ps1'
     $detachedToastCleanup = -not $InstallWindowsNotifications
@@ -201,21 +278,16 @@ function Assert-GlobalLineEndingHook([ValidateSet('Git', 'CVS')][string]$Develop
     }
 
     $globalNotificationStopHookCount = $notificationCompletedHookCount
-    $legacyTokenHookCount = 0
-    if (-not [string]::IsNullOrWhiteSpace($hookContent)) {
-        $hookObject = $hookContent | ConvertFrom-Json -ErrorAction Stop
-        if ($null -ne $hookObject.hooks) {
-            foreach ($property in @($hookObject.hooks.PSObject.Properties)) {
-                foreach ($entry in @($property.Value)) {
-                    $legacyTokenHookCount += @(Get-ManagedHookEntries -Entry $entry -SignaturePattern $script:ManagedTokenHookSignaturePattern).Count
-                }
-            }
-        }
-    }
+    $legacyTokenHookCount = [int]$globalCounts.Token + $projectLegacyTokenHookCount
+    $legacyCompletedNotificationHookCount = [int]$globalCounts.LegacyNotificationStop + [int]$projectCounts.LegacyNotificationStop
+    $effectiveCompletedNotificationHookCount = $notificationCompletedHookCount + $projectNotificationStopHookCount
     $legacyCrlfHookCount += $projectLegacyCrlfHookCount
-    $legacyTokenHookCount += $projectLegacyTokenHookCount
-    if ($projectNotificationStopHookCount -ne 0 -or $projectLegacyCrlfHookCount -ne 0 -or $projectLegacyTokenHookCount -ne 0) {
-        throw "CVS 專案仍包含受管理的舊 Hook：NotificationStop=$projectNotificationStopHookCount LegacyCrlf=$projectLegacyCrlfHookCount LegacyToken=$projectLegacyTokenHookCount"
+    if ($legacyCompletedNotificationHookCount -ne 0 -or $projectLegacyCrlfHookCount -ne 0 -or $legacyTokenHookCount -ne 0) {
+        throw "仍包含受管理的舊 Hook：LegacyCompletedNotification=$legacyCompletedNotificationHookCount LegacyCrlf=$legacyCrlfHookCount LegacyToken=$legacyTokenHookCount"
+    }
+    $expectedEffectiveNotificationCount = if ($InstallWindowsNotifications) { 1 } else { 0 }
+    if ($effectiveCompletedNotificationHookCount -ne $expectedEffectiveNotificationCount) {
+        throw "有效 Completed 通知 Hook 數量錯誤：Expected=$expectedEffectiveNotificationCount Global=$notificationCompletedHookCount Project=$projectNotificationStopHookCount Effective=$effectiveCompletedNotificationHookCount"
     }
     $projectHasLineEndingHooks = $projectLineEndingPreToolUseHookCount -eq 1 -and $projectLineEndingPostToolUseHookCount -eq 1 -and $projectLineEndingStopHookCount -in @(0, 1)
     if ($DevelopmentEnvironment -eq 'CVS') {
@@ -234,9 +306,15 @@ function Assert-GlobalLineEndingHook([ValidateSet('Git', 'CVS')][string]$Develop
     return [pscustomobject]@{
         GlobalNotificationStopHookCount = $globalNotificationStopHookCount
         ProjectNotificationStopHookCount = $projectNotificationStopHookCount
+        GlobalCompletedNotificationHookCount = $notificationCompletedHookCount
+        ProjectCompletedNotificationHookCount = $projectNotificationStopHookCount
+        LegacyCompletedNotificationHookCount = $legacyCompletedNotificationHookCount
+        StandaloneTokenUsageHookCount = $legacyTokenHookCount
+        EffectiveCompletedNotificationHookCount = $effectiveCompletedNotificationHookCount
         ProjectLineEndingPreToolUseHookCount = $projectLineEndingPreToolUseHookCount
         ProjectLineEndingPostToolUseHookCount = $projectLineEndingPostToolUseHookCount
         ProjectLineEndingStopHookCount = $projectLineEndingStopHookCount
+        ProjectLineEndingFinalizeHookCount = $projectLineEndingStopHookCount
         GlobalLineEndingPreToolUseHookCount = $trackHookCount
         GlobalLineEndingPostToolUseHookCount = $restoreHookCount
         GlobalLineEndingStopHookCount = $finalizeHookCount
