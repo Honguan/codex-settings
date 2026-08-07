@@ -30,7 +30,7 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
             $status = if ($trusted) { 'trusted' } else { 'untrusted' }
             $hooks = if ($env:CODEX_SETTINGS_TEST_NO_MANAGED_HOOKS -eq '1') { @() } else { @(
                     @{ key = "$($env:CODEX_SETTINGS_TEST_HOOKS_PATH):session_start:0:0"; sourcePath = $env:CODEX_SETTINGS_TEST_HOOKS_PATH; command = 'custom-session-start.ps1'; currentHash = 'sha256:custom'; trustStatus = 'untrusted'; enabled = $true },
-                    @{ key = "$($env:CODEX_SETTINGS_TEST_HOOKS_PATH):stop:0:0"; sourcePath = $env:CODEX_SETTINGS_TEST_HOOKS_PATH; command = 'pwsh show-turn-token-usage.ps1'; currentHash = 'sha256:token'; trustStatus = $status; enabled = $true },
+                    @{ key = "$($env:CODEX_SETTINGS_TEST_HOOKS_PATH):stop:0:0"; sourcePath = $env:CODEX_SETTINGS_TEST_HOOKS_PATH; command = 'pwsh show-codex-notification.ps1 -Type Completed'; currentHash = 'sha256:notification'; trustStatus = $status; enabled = $true },
                     @{ key = "$($env:CODEX_SETTINGS_TEST_HOOKS_PATH):post_tool_use:0:0"; sourcePath = $env:CODEX_SETTINGS_TEST_HOOKS_PATH; command = 'pwsh preserve-line-endings.ps1 -Mode Restore'; currentHash = 'sha256:line-ending'; trustStatus = $status; enabled = $true }
                 ) }
             $result = @{ data = @(@{ cwd = $env:CODEX_SETTINGS_TEST_CWD; hooks = $hooks; warnings = @(); errors = @() }) }

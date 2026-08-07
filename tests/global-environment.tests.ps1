@@ -6,7 +6,7 @@ $script:ScriptRoot = Join-Path $repositoryRoot 'src'
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('codex-settings-global-environment-' + [guid]::NewGuid().ToString('N'))
 $globalRoot = Join-Path $testRoot '.codex'
 
-function Install-TestEnvironment([ValidateSet('Git', 'CVS')][string]$Environment, [bool]$InstallWindowsNotifications = $true, [bool]$InstallTokenUsageInterface = $true) {
+function Install-TestEnvironment([ValidateSet('Git', 'CVS')][string]$Environment, [bool]$InstallWindowsNotifications = $true) {
     $transaction = New-FileTransaction -Root (Join-Path $testRoot ("transaction-$Environment-" + [guid]::NewGuid().ToString('N'))) -Mode "Test-$Environment"
     $target = [pscustomobject]@{
         Mode = 'Global'
@@ -16,7 +16,6 @@ function Install-TestEnvironment([ValidateSet('Git', 'CVS')][string]$Environment
         Root = $globalRoot
         EnableDefaultModeRequestUserInput = $false
         InstallWindowsNotifications = $InstallWindowsNotifications
-        InstallTokenUsageInterface = $InstallTokenUsageInterface
     }
     $result = Install-Target -Target $target -Transaction $transaction
     Write-Manifest -Result $result -Transaction $transaction -External $null
@@ -100,7 +99,6 @@ try {
     if (@($installedHooks.hooks.SessionStart).Count -ne 1) { throw 'CVS installation did not preserve the unmanaged user hook.' }
     if (@($installedHooks.hooks.PreToolUse | Where-Object { Test-ManagedLineEndingHookEntry $_ }).Count -ne 1 -or @($installedHooks.hooks.PostToolUse | Where-Object { Test-ManagedLineEndingHookEntry $_ }).Count -ne 1 -or @($installedHooks.hooks.Stop | Where-Object { Test-ManagedLineEndingHookEntry $_ }).Count -ne 1) { throw 'CVS installation did not install one Track, Restore, and Finalize hook.' }
     if (@($installedHooks.hooks.PreToolUse | Where-Object { Test-ManagedNotificationHookEntry $_ }).Count -ne 1 -or @($installedHooks.hooks.PermissionRequest | Where-Object { Test-ManagedNotificationHookEntry $_ }).Count -ne 1 -or @($installedHooks.hooks.Stop | Where-Object { Test-ManagedNotificationHookEntry $_ }).Count -ne 1) { throw 'CVS installation did not install one notification hook per supported event.' }
-    if (@($installedHooks.hooks.Stop | Where-Object { Test-ManagedTokenUsageHookEntry $_ }).Count -ne 1) { throw 'CVS installation did not install one turn token usage hook.' }
     if (Test-Path -LiteralPath (Join-Path $globalRoot 'hooks\normalize-cvs-crlf.ps1')) { throw 'CVS installation retained an obsolete CRLF conversion script.' }
     if (-not (Test-Path -LiteralPath (Join-Path $globalRoot 'hooks\preserve-line-endings.ps1') -PathType Leaf)) { throw 'CVS installation omitted the line-ending protection script.' }
     $rules = Get-Content -LiteralPath $legacyRulesPath -Raw
@@ -127,10 +125,11 @@ try {
     if ($config -notmatch 'project_root_markers = \["\.git", "CVS"\]' -or $config -match '\.codex-root') { throw 'Global project root markers are invalid.' }
     if ((Get-DefaultDevelopmentEnvironment -Root $globalRoot) -ne 'Git') { throw 'Git was not recorded as the default project system.' }
     $installedHooks = Get-Content -LiteralPath (Join-Path $globalRoot 'hooks.json') -Raw | ConvertFrom-Json
-    if (@($installedHooks.hooks.SessionStart).Count -ne 1 -or @($installedHooks.hooks.PreToolUse).Count -ne 1 -or @($installedHooks.hooks.PermissionRequest).Count -ne 1 -or @($installedHooks.hooks.Stop).Count -ne 2 -or $installedHooks.hooks.PSObject.Properties.Name -contains 'PostToolUse') { throw 'Git installation did not preserve the global hooks.' }
+    if (@($installedHooks.hooks.SessionStart).Count -ne 1 -or @($installedHooks.hooks.PreToolUse).Count -ne 1 -or @($installedHooks.hooks.PermissionRequest).Count -ne 1 -or @($installedHooks.hooks.Stop).Count -ne 1 -or $installedHooks.hooks.PSObject.Properties.Name -contains 'PostToolUse') { throw 'Git installation did not preserve the global hooks.' }
     if (-not (Test-ManagedNotificationHookEntry $installedHooks.hooks.PreToolUse[0]) -or -not (Test-ManagedNotificationHookEntry $installedHooks.hooks.PermissionRequest[0]) -or @($installedHooks.hooks.Stop | Where-Object { Test-ManagedNotificationHookEntry $_ }).Count -ne 1) { throw 'Git notification hooks are invalid.' }
-    if (@($installedHooks.hooks.Stop | Where-Object { Test-ManagedTokenUsageHookEntry $_ }).Count -ne 1) { throw 'Git turn token usage hook is invalid.' }
     if (-not (Test-Path -LiteralPath (Join-Path $globalRoot 'hooks\show-codex-notification.ps1') -PathType Leaf)) { throw 'Git installation omitted the global notification script.' }
+    $notificationScriptBytes = [IO.File]::ReadAllBytes((Join-Path $globalRoot 'hooks\show-codex-notification.ps1'))
+    if ($notificationScriptBytes.Length -lt 3 -or $notificationScriptBytes[0] -ne 0xEF -or $notificationScriptBytes[1] -ne 0xBB -or $notificationScriptBytes[2] -ne 0xBF) { throw 'Installed notification script lost its UTF-8 BOM.' }
     if (Test-Path -LiteralPath (Join-Path $globalRoot 'hooks\preserve-line-endings.ps1')) { throw 'Git installation retained the CVS line-ending protection script.' }
 
     Install-TestEnvironment -Environment CVS
@@ -141,10 +140,9 @@ try {
     if ([regex]::Matches($rules, 'CVS project rules supplement').Count -ne 1 -or [regex]::Matches($rules, 'Git project rules supplement').Count -ne 0) { throw 'CVS rules contain duplicate or conflicting project-type settings.' }
     $installedHooks = Get-Content -LiteralPath (Join-Path $globalRoot 'hooks.json') -Raw | ConvertFrom-Json
     if (@($installedHooks.hooks.SessionStart).Count -ne 1) { throw 'CVS installation did not preserve the unmanaged user hook.' }
-    if (@($installedHooks.hooks.PreToolUse).Count -ne 2 -or @($installedHooks.hooks.PermissionRequest).Count -ne 1 -or @($installedHooks.hooks.PostToolUse).Count -ne 1 -or @($installedHooks.hooks.Stop).Count -ne 3) { throw 'Repeated CVS installation duplicated or omitted managed hooks.' }
+    if (@($installedHooks.hooks.PreToolUse).Count -ne 2 -or @($installedHooks.hooks.PermissionRequest).Count -ne 1 -or @($installedHooks.hooks.PostToolUse).Count -ne 1 -or @($installedHooks.hooks.Stop).Count -ne 2) { throw 'Repeated CVS installation duplicated or omitted managed hooks.' }
     if (@($installedHooks.hooks.PreToolUse | Where-Object { Test-ManagedLineEndingHookEntry $_ }).Count -ne 1 -or @($installedHooks.hooks.PostToolUse | Where-Object { Test-ManagedLineEndingHookEntry $_ }).Count -ne 1 -or @($installedHooks.hooks.Stop | Where-Object { Test-ManagedLineEndingHookEntry $_ }).Count -ne 1) { throw 'Repeated CVS installation duplicated or omitted the line-ending protection hooks.' }
     if (@($installedHooks.hooks.PreToolUse | Where-Object { Test-ManagedNotificationHookEntry $_ }).Count -ne 1 -or @($installedHooks.hooks.PermissionRequest | Where-Object { Test-ManagedNotificationHookEntry $_ }).Count -ne 1 -or @($installedHooks.hooks.Stop | Where-Object { Test-ManagedNotificationHookEntry $_ }).Count -ne 1) { throw 'Repeated CVS installation duplicated or omitted the global notification hooks.' }
-    if (@($installedHooks.hooks.Stop | Where-Object { Test-ManagedTokenUsageHookEntry $_ }).Count -ne 1) { throw 'Repeated CVS installation duplicated or omitted the turn token usage hook.' }
     if (-not (Test-Path -LiteralPath (Join-Path $script:ScriptRoot 'templates\environments\cvs\hooks.json')) -or -not (Test-Path -LiteralPath (Join-Path $script:ScriptRoot 'templates\environments\cvs\hooks\preserve-line-endings.ps1'))) { throw 'CVS line-ending hook templates are missing.' }
 
     Install-TestEnvironment -Environment Git
@@ -152,18 +150,11 @@ try {
     if (Test-Path -LiteralPath (Join-Path $globalRoot 'hooks\preserve-line-endings.ps1')) { throw 'Switching environments retained the CVS line-ending protection script.' }
     $installedHooks = Get-Content -LiteralPath (Join-Path $globalRoot 'hooks.json') -Raw | ConvertFrom-Json
     if (@($installedHooks.hooks.PreToolUse | Where-Object { Test-ManagedNotificationHookEntry $_ }).Count -ne 1 -or @($installedHooks.hooks.PermissionRequest | Where-Object { Test-ManagedNotificationHookEntry $_ }).Count -ne 1 -or @($installedHooks.hooks.Stop | Where-Object { Test-ManagedNotificationHookEntry $_ }).Count -ne 1) { throw 'Switching environments duplicated or removed the global notification hooks.' }
-    if (@($installedHooks.hooks.Stop | Where-Object { Test-ManagedTokenUsageHookEntry $_ }).Count -ne 1) { throw 'Switching environments duplicated or removed the turn token usage hook.' }
 
     Install-TestEnvironment -Environment Git -InstallWindowsNotifications $false
     $installedHooks = Get-Content -LiteralPath (Join-Path $globalRoot 'hooks.json') -Raw | ConvertFrom-Json
     if (@($installedHooks.hooks.PSObject.Properties.Value | ForEach-Object { @($_) } | Where-Object { Test-ManagedNotificationHookEntry $_ }).Count -ne 0) { throw 'Disabling Windows notifications retained managed notification hooks.' }
     if (Test-Path -LiteralPath (Join-Path $globalRoot 'hooks\show-codex-notification.ps1')) { throw 'Disabling Windows notifications retained the notification script.' }
-    if (@($installedHooks.hooks.Stop | Where-Object { Test-ManagedTokenUsageHookEntry $_ }).Count -ne 1) { throw 'Disabling Windows notifications removed the turn token usage hook.' }
-
-    Install-TestEnvironment -Environment Git -InstallWindowsNotifications $false -InstallTokenUsageInterface $false
-    $installedHooks = Get-Content -LiteralPath (Join-Path $globalRoot 'hooks.json') -Raw | ConvertFrom-Json
-    if (@($installedHooks.hooks.PSObject.Properties.Value | ForEach-Object { @($_) } | Where-Object { Test-ManagedTokenUsageHookEntry $_ }).Count -ne 0) { throw 'Disabling the Token usage interface retained its managed Hook.' }
-    if (Test-Path -LiteralPath (Join-Path $globalRoot 'hooks\show-turn-token-usage.ps1')) { throw 'Disabling the Token usage interface retained its script.' }
 
     $script:notificationAnswer = ''
     $script:capturedNotificationPrompt = ''
@@ -176,21 +167,6 @@ try {
         if ($script:capturedNotificationPrompt -ne '要安裝嗎？[y/N]') { throw 'First-install notification prompt is invalid.' }
         if (-not (Select-OptionalWindowsNotifications -AlreadyInstalled:$true)) { throw 'Blank update selection must preserve Windows notifications.' }
         if ($script:capturedNotificationPrompt -ne '要繼續安裝嗎？[Y/n]') { throw 'Existing notification prompt is invalid.' }
-    } finally {
-        Remove-Item -LiteralPath Function:\Read-Host -ErrorAction SilentlyContinue
-    }
-
-    $script:usageInterfaceAnswer = ''
-    $script:capturedUsageInterfacePrompt = ''
-    function Read-Host([string]$Prompt) {
-        $script:capturedUsageInterfacePrompt = $Prompt
-        return $script:usageInterfaceAnswer
-    }
-    try {
-        if (Select-OptionalTokenUsageInterface -AlreadyInstalled:$false) { throw 'Blank first-install selection must not install the Token usage interface.' }
-        if ($script:capturedUsageInterfacePrompt -ne '要安裝嗎？[y/N]') { throw 'First-install Token usage interface prompt is invalid.' }
-        if (-not (Select-OptionalTokenUsageInterface -AlreadyInstalled:$true)) { throw 'Blank update selection must preserve the Token usage interface.' }
-        if ($script:capturedUsageInterfacePrompt -ne '要繼續安裝嗎？[Y/n]') { throw 'Existing Token usage interface prompt is invalid.' }
     } finally {
         Remove-Item -LiteralPath Function:\Read-Host -ErrorAction SilentlyContinue
     }
