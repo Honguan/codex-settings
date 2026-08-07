@@ -7,6 +7,7 @@ $notificationRoot = Join-Path $testRoot 'notifications'
 $tokenRoot = Join-Path $testRoot 'token-usage'
 $logPath = Join-Path $testRoot 'notifications.jsonl'
 $diagnosticRoot = Join-Path $testRoot 'hook-logs'
+$invocationRoot = Join-Path $testRoot 'hook-invocations'
 $snapshotPath = Join-Path $testRoot 'snapshot.json'
 $rolloutPath = Join-Path $testRoot 'rollout.jsonl'
 $mockPath = Join-Path $testRoot 'mock-ccsessions.ps1'
@@ -48,13 +49,13 @@ try {
     $hooksTemplate = Get-Content -LiteralPath (Join-Path $repositoryRoot 'src\templates\core\hooks.json') -Raw | ConvertFrom-Json
     if (@($hooksTemplate.hooks.Stop).Count -ne 1) { throw 'Stop Hook 必須只保留一個完成通知 Hook。' }
     $stopCommand = $hooksTemplate.hooks.Stop[0].hooks[0]
-    if (($stopCommand | ConvertTo-Json -Compress) -notmatch 'show-codex-notification\.ps1' -or $stopCommand.timeout -ne 30 -or $stopCommand.statusMessage -ne 'CodexSettings Windows notification') {
+    if (($stopCommand | ConvertTo-Json -Compress) -notmatch 'show-codex-notification\.ps1' -or $stopCommand.timeout -ne 30 -or $stopCommand.PSObject.Properties.Name -contains 'statusMessage') {
         throw 'Stop 完成通知 Hook 設定錯誤。'
     }
     $notificationSource = Get-Content -LiteralPath $hookScript -Raw
     $notificationBytes = [IO.File]::ReadAllBytes($hookScript)
     if ($notificationBytes.Length -lt 3 -or $notificationBytes[0] -ne 0xEF -or $notificationBytes[1] -ne 0xBB -or $notificationBytes[2] -ne 0xBF) { throw '通知腳本必須使用 UTF-8 BOM，以便 Windows PowerShell 5.1 正確解析。' }
-    foreach ($expected in @('duration="long"', 'scenario="urgent"', 'ConvertTo-ToastVisualXml', '<group>', 'hint-align="right"', 'hint-maxLines="1"', 'ToastNotificationPriority', 'ExpirationTime', 'WindowStyle Hidden', 'ToastLifetimeSeconds = 180', 'PreviousToastLifetimeSeconds = 60', 'Start-Sleep -Seconds $DelaySeconds', 'active-toast.json', 'History.Remove', 'powershell.exe', 'NativeToast', 'Invoke-WithNamedMutex')) {
+    foreach ($expected in @('duration="long"', 'scenario="urgent"', 'ConvertTo-ToastVisualXml', '<group>', 'hint-align="right"', 'hint-maxLines="1"', 'ToastNotificationPriority', 'ExpirationTime', 'WindowStyle =', 'UseShellExecute = $false', 'CreateNoWindow = $true', 'RedirectStandardInput', 'RedirectStandardOutput', 'RedirectStandardError', 'ToastLifetimeSeconds = 60', 'PreviousToastLifetimeSeconds = 60', 'Start-Sleep -Seconds $DelaySeconds', 'active-toast.json', 'History.Remove', 'powershell.exe', 'NativeToast', 'Invoke-WithNamedMutex')) {
         if ($notificationSource -notmatch [regex]::Escape($expected)) { throw "Toast 設定缺少：$expected" }
     }
 
@@ -78,6 +79,7 @@ Get-Content -LiteralPath $env:CODEX_SETTINGS_CCSESSIONS_SNAPSHOT -Raw
     $env:CODEX_SETTINGS_NOTIFICATION_TEST_MODE = '1'
     $env:CODEX_SETTINGS_NOTIFICATION_TEST_LOG = $logPath
     $env:CODEX_SETTINGS_HOOK_LOG_ROOT = $diagnosticRoot
+    $env:CODEX_SETTINGS_HOOK_INVOCATION_STATE_ROOT = $invocationRoot
     $env:CODEX_SETTINGS_CCSESSIONS_TEST_COMMAND = $mockPath
     $env:CODEX_SETTINGS_CCSESSIONS_SNAPSHOT = $snapshotPath
 
@@ -92,7 +94,10 @@ Get-Content -LiteralPath $env:CODEX_SETTINGS_CCSESSIONS_SNAPSHOT -Raw
     }
     if (@($realtimeNotification.message -split '\r?\n').Count -ne 5 -or $realtimeNotification.title -ne 'Codex 任務完成') { throw '完成通知不是固定五行格式。' }
     $realtimeDiagnostic = Get-Content -LiteralPath (Join-Path $diagnosticRoot ($sessionRealtime + '.log')) -Raw | ConvertFrom-Json
-    if ($realtimeDiagnostic.handler -ne 'windows-notification' -or $realtimeDiagnostic.result -ne 'success' -or $realtimeDiagnostic.details -notmatch 'source=realtime') {
+    foreach ($field in @('timestamp', 'hookSource', 'hookCommand', 'processId', 'parentProcessId', 'startTime', 'endTime', 'elapsedMs', 'exitCode', 'GlobalStopHookCount', 'EffectiveStopHookCount', 'NotificationInvocationCount', 'CrlfInvocationCount')) {
+        if ($realtimeDiagnostic.PSObject.Properties.Name -notcontains $field) { throw "通知診斷缺少欄位：$field" }
+    }
+    if ($realtimeDiagnostic.handler -ne 'windows-notification' -or $realtimeDiagnostic.result -ne 'success' -or $realtimeDiagnostic.details -notmatch 'source=realtime' -or $realtimeDiagnostic.hookSource -ne 'global' -or $realtimeDiagnostic.NotificationInvocationCount -ne 1 -or $realtimeDiagnostic.CrlfInvocationCount -ne 0) {
         throw '整合後的完成通知沒有寫入可診斷的執行紀錄。'
     }
 
@@ -111,6 +116,8 @@ Get-Content -LiteralPath $env:CODEX_SETTINGS_CCSESSIONS_SNAPSHOT -Raw
     $eventCountBeforeDuplicate = $events.Count
     [void](Invoke-NotificationHook -SessionId $sessionRealtime -TurnId 'turn-realtime')
     if (@(Get-Content -LiteralPath $logPath).Count -ne $eventCountBeforeDuplicate) { throw '相同 Session、turn 與類型未正確去重。' }
+    $duplicateDiagnostic = @(Get-Content -LiteralPath (Join-Path $diagnosticRoot ($sessionRealtime + '.log')) | ForEach-Object { $_ | ConvertFrom-Json }) | Select-Object -Last 1
+    if ($duplicateDiagnostic.result -ne 'deduplicated' -or $duplicateDiagnostic.NotificationInvocationCount -ne 2 -or $duplicateDiagnostic.EffectiveStopHookCount -ne 2) { throw '重複 Stop Hook 未在早期去重並記錄有效執行次數。' }
 
     $sessionTranscript = '019fd65b-39b0-7d60-99fc-deb094690002'
     Set-Snapshot -SessionId $sessionTranscript -InputTokens 999000 -CachedInputTokens 888000 -CacheWriteTokens 777000 -OutputTokens 666000 -TotalTokens 3330000 -CostUsd 9.99
@@ -228,6 +235,7 @@ Get-Content -LiteralPath $env:CODEX_SETTINGS_CCSESSIONS_SNAPSHOT -Raw
     Remove-Item Env:\CODEX_SETTINGS_NOTIFICATION_TEST_MODE -ErrorAction SilentlyContinue
     Remove-Item Env:\CODEX_SETTINGS_NOTIFICATION_TEST_LOG -ErrorAction SilentlyContinue
     Remove-Item Env:\CODEX_SETTINGS_HOOK_LOG_ROOT -ErrorAction SilentlyContinue
+    Remove-Item Env:\CODEX_SETTINGS_HOOK_INVOCATION_STATE_ROOT -ErrorAction SilentlyContinue
     Remove-Item Env:\CODEX_SETTINGS_CCSESSIONS_TEST_COMMAND -ErrorAction SilentlyContinue
     Remove-Item Env:\CODEX_SETTINGS_CCSESSIONS_SNAPSHOT -ErrorAction SilentlyContinue
     Remove-Item Env:\CODEX_SETTINGS_CCSESSIONS_RETRY_MARKER -ErrorAction SilentlyContinue

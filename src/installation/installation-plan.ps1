@@ -1,4 +1,4 @@
-function Resolve-GlobalTargets([ValidateSet('Git', 'CVS')][string]$DevelopmentEnvironment, [switch]$InstallRequestExecutionOptimizer, [switch]$EnableDefaultModeRequestUserInput, [bool]$InstallWindowsNotifications) {
+function Resolve-GlobalTargets([ValidateSet('Git', 'CVS')][string]$DevelopmentEnvironment, [switch]$InstallRequestExecutionOptimizer, [switch]$EnableDefaultModeRequestUserInput, [bool]$InstallWindowsNotifications, [string]$Cwd = (Get-Location).Path) {
     $targets = New-Object 'System.Collections.Generic.List[object]'
     [void]$targets.Add([pscustomobject]@{
         Mode = 'Global'
@@ -6,6 +6,7 @@ function Resolve-GlobalTargets([ValidateSet('Git', 'CVS')][string]$DevelopmentEn
         EnvironmentTemplate = Join-Path $ScriptRoot ("templates\environments\{0}" -f $DevelopmentEnvironment.ToLowerInvariant())
         DevelopmentEnvironment = $DevelopmentEnvironment
         Root = Join-Path $HOME '.codex'
+        Cwd = $Cwd
         EnableDefaultModeRequestUserInput = [bool]$EnableDefaultModeRequestUserInput
         InstallWindowsNotifications = $InstallWindowsNotifications
     })

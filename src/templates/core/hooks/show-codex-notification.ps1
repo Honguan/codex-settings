@@ -13,10 +13,14 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$script:HookStartTime = [DateTimeOffset]::Now
 $script:HookStopwatch = [Diagnostics.Stopwatch]::StartNew()
+$script:HookCommand = if ([string]::IsNullOrWhiteSpace([string]$MyInvocation.Line)) { $PSCommandPath } else { [string]$MyInvocation.Line }
+$script:HookSource = 'global'
+$script:HookExitCode = 0
 $script:ToastAppId = 'Microsoft.WindowsTerminal_8wekyb3d8bbwe!App'
 $script:ToastGroup = 'CodexSettings'
-$script:ToastLifetimeSeconds = 180
+$script:ToastLifetimeSeconds = 60
 $script:PreviousToastLifetimeSeconds = 60
 $script:ToastStateMutexName = 'CodexSettings.ToastState'
 
@@ -80,11 +84,90 @@ function Get-TokenUsageRoot {
     return Join-Path $HOME '.codex\state\token-usage'
 }
 
+function Get-HookSource {
+    try {
+        $current = [IO.Path]::GetFullPath($PSScriptRoot).TrimEnd('\', '/')
+        $globalRoot = [IO.Path]::GetFullPath((Join-Path $HOME '.codex\hooks')).TrimEnd('\', '/')
+        if ($current.Equals($globalRoot, [StringComparison]::OrdinalIgnoreCase)) { return 'global' }
+        if ([IO.Path]::GetFileName($current).Equals('hooks', [StringComparison]::OrdinalIgnoreCase) -and [IO.Path]::GetFileName((Split-Path -Parent $current)).Equals('.codex', [StringComparison]::OrdinalIgnoreCase)) { return 'project' }
+    } catch {}
+    return 'global'
+}
+
+function Get-HookParentProcessId {
+    try {
+        $parent = (Get-Process -Id $PID -ErrorAction Stop).Parent
+        if ($null -ne $parent) { return [int]$parent.Id }
+    } catch {}
+    try { return [int](Get-CimInstance Win32_Process -Filter "ProcessId=$PID" -ErrorAction Stop).ParentProcessId }
+    catch { return 0 }
+}
+
+function New-HookInvocationCounts {
+    return [ordered]@{
+        GlobalStopHookCount = 0
+        ProjectStopHookCount = 0
+        EffectiveStopHookCount = 0
+        GlobalPostToolUseHookCount = 0
+        ProjectPostToolUseHookCount = 0
+        EffectivePostToolUseHookCount = 0
+        NotificationInvocationCount = 0
+        CrlfInvocationCount = 0
+    }
+}
+
+function Get-HookInvocationCounts($InputObject, [ValidateSet('notification', 'crlf')][string]$Kind) {
+    $counts = New-HookInvocationCounts
+    try {
+        $root = if ([string]::IsNullOrWhiteSpace($env:CODEX_SETTINGS_HOOK_INVOCATION_STATE_ROOT)) { Join-Path $HOME '.codex\state\hook-invocations' } else { [IO.Path]::GetFullPath($env:CODEX_SETTINGS_HOOK_INVOCATION_STATE_ROOT) }
+        $sessionId = if ($null -eq $InputObject -or [string]::IsNullOrWhiteSpace([string]$InputObject.session_id)) { 'unknown-session' } else { [string]$InputObject.session_id }
+        $turnId = if ($null -eq $InputObject -or [string]::IsNullOrWhiteSpace([string]$InputObject.turn_id)) { 'unknown-turn' } else { [string]$InputObject.turn_id }
+        $eventName = if ($null -eq $InputObject -or [string]::IsNullOrWhiteSpace([string]$InputObject.hook_event_name)) { $Type } else { [string]$InputObject.hook_event_name }
+        $cwd = if ($null -eq $InputObject) { '' } else { [string]$InputObject.cwd }
+        $key = "$cwd|$sessionId|$turnId|$eventName"
+        $sha = [Security.Cryptography.SHA256]::Create()
+        try { $hash = ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($key)))).Replace('-', '').ToLowerInvariant() }
+        finally { $sha.Dispose() }
+        $path = Join-Path $root ($hash + '.json')
+        $counts = Invoke-WithNamedMutex -Name ('CodexSettings.HookInvocation.' + $hash) -Action {
+            New-Item -ItemType Directory -Path $root -Force | Out-Null
+            $value = New-HookInvocationCounts
+            if (Test-Path -LiteralPath $path -PathType Leaf) {
+                try {
+                    $stored = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json -ErrorAction Stop
+                    foreach ($property in @($value.Keys)) { if ($null -ne $stored.PSObject.Properties[$property]) { $value[$property] = [int]$stored.$property } }
+                } catch {}
+            }
+            if ($Kind -eq 'notification') { $value.NotificationInvocationCount = [int]$value.NotificationInvocationCount + 1 }
+            if ($Kind -eq 'crlf') { $value.CrlfInvocationCount = [int]$value.CrlfInvocationCount + 1 }
+            if ($eventName -eq 'Stop') {
+                if ($script:HookSource -eq 'project') { $value.ProjectStopHookCount = [int]$value.ProjectStopHookCount + 1 } else { $value.GlobalStopHookCount = [int]$value.GlobalStopHookCount + 1 }
+            }
+            if ($eventName -eq 'PostToolUse') {
+                if ($script:HookSource -eq 'project') { $value.ProjectPostToolUseHookCount = [int]$value.ProjectPostToolUseHookCount + 1 } else { $value.GlobalPostToolUseHookCount = [int]$value.GlobalPostToolUseHookCount + 1 }
+            }
+            $value.EffectiveStopHookCount = $value.GlobalStopHookCount + $value.ProjectStopHookCount
+            $value.EffectivePostToolUseHookCount = $value.GlobalPostToolUseHookCount + $value.ProjectPostToolUseHookCount
+            $temporaryPath = $path + '.tmp-' + [guid]::NewGuid().ToString('N')
+            try {
+                [IO.File]::WriteAllText($temporaryPath, ($value | ConvertTo-Json -Compress), [Text.UTF8Encoding]::new($false))
+                Move-Item -LiteralPath $temporaryPath -Destination $path -Force
+            } finally {
+                if (Test-Path -LiteralPath $temporaryPath -PathType Leaf) { Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue }
+            }
+            return [pscustomobject]$value
+        }
+    } catch {}
+    if ($counts -is [hashtable] -or $counts -is [Collections.IDictionary]) { return [pscustomobject]$counts }
+    return $counts
+}
+
 function Write-HookDiagnostic($InputObject, [string]$Result, [string]$Details) {
     try {
         $root = if ([string]::IsNullOrWhiteSpace($env:CODEX_SETTINGS_HOOK_LOG_ROOT)) { Join-Path $HOME '.codex\logs\hooks' } else { $env:CODEX_SETTINGS_HOOK_LOG_ROOT }
         $sessionId = if ($null -eq $InputObject -or [string]::IsNullOrWhiteSpace([string]$InputObject.session_id)) { 'unknown' } else { [string]$InputObject.session_id }
         $safeSessionId = [regex]::Replace($sessionId, '[^A-Za-z0-9._-]', '_')
+        $counts = if ($null -eq $script:HookInvocationCounts) { [pscustomobject](New-HookInvocationCounts) } else { $script:HookInvocationCounts }
         $entry = [ordered]@{
             timestamp = [DateTimeOffset]::Now.ToString('o')
             event = if ($null -eq $InputObject) { '' } else { [string]$InputObject.hook_event_name }
@@ -96,7 +179,23 @@ function Write-HookDiagnostic($InputObject, [string]$Result, [string]$Details) {
             tool = if ($null -eq $InputObject) { '' } else { [string]$InputObject.tool_name }
             changedFileCount = 0
             changedFiles = @()
+            statusMessage = ''
+            hookSource = $script:HookSource
+            hookCommand = $script:HookCommand
+            processId = $PID
+            parentProcessId = Get-HookParentProcessId
+            startTime = $script:HookStartTime.ToString('o')
+            endTime = [DateTimeOffset]::Now.ToString('o')
             elapsedMs = $script:HookStopwatch.ElapsedMilliseconds
+            exitCode = $script:HookExitCode
+            GlobalStopHookCount = [int]$counts.GlobalStopHookCount
+            ProjectStopHookCount = [int]$counts.ProjectStopHookCount
+            EffectiveStopHookCount = [int]$counts.EffectiveStopHookCount
+            GlobalPostToolUseHookCount = [int]$counts.GlobalPostToolUseHookCount
+            ProjectPostToolUseHookCount = [int]$counts.ProjectPostToolUseHookCount
+            EffectivePostToolUseHookCount = [int]$counts.EffectivePostToolUseHookCount
+            NotificationInvocationCount = [int]$counts.NotificationInvocationCount
+            CrlfInvocationCount = [int]$counts.CrlfInvocationCount
             details = $Details
         }
         New-Item -ItemType Directory -Path $root -Force | Out-Null
@@ -160,20 +259,22 @@ function Get-DeduplicationPath([string]$Root, $InputObject, [string]$Notificatio
     $turnId = [string]$InputObject.turn_id
     if ([string]::IsNullOrWhiteSpace($sessionId)) { $sessionId = 'unknown-session' }
     if ([string]::IsNullOrWhiteSpace($turnId)) { $turnId = 'unknown-turn' }
-    $key = "$sessionId|$turnId|$NotificationType"
+    $eventName = [string]$InputObject.hook_event_name
+    if ([string]::IsNullOrWhiteSpace($eventName)) { $eventName = 'unknown-event' }
+    $key = "$sessionId|$turnId|$eventName|$NotificationType|windows-notification"
     $sha = [Security.Cryptography.SHA256]::Create()
     try { $name = ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($key)))).Replace('-', '').ToLowerInvariant() + '.json' }
     finally { $sha.Dispose() }
     return Join-Path $Root $name
 }
 
-function Test-Duplicate([string]$Root, $InputObject, [string]$NotificationType, [int]$Seconds) {
+function Test-Duplicate([string]$Root, $InputObject, [string]$NotificationType, [int]$Seconds, [switch]$Strict) {
     return Invoke-WithToastStateLock {
         New-Item -ItemType Directory -Path $Root -Force | Out-Null
         $path = Get-DeduplicationPath -Root $Root -InputObject $InputObject -NotificationType $NotificationType
         if (Test-Path -LiteralPath $path -PathType Leaf) {
             $age = [DateTimeOffset]::UtcNow - [DateTimeOffset](Get-Item -LiteralPath $path).LastWriteTimeUtc
-            if ($age.TotalSeconds -lt [Math]::Max(1, $Seconds)) { return $true }
+            if ($Strict -or $age.TotalSeconds -lt [Math]::Max(1, $Seconds)) { return $true }
         }
         $sessionId = [string]$InputObject.session_id
         $turnId = [string]$InputObject.turn_id
@@ -308,7 +409,48 @@ function ConvertTo-PowerShellLiteral([string]$Value) {
     return "'" + $Value.Replace("'", "''") + "'"
 }
 
-function Start-ToastCleanup([string]$Tag, [string]$Group, [string]$AppId, [int]$DelaySeconds = 180) {
+function ConvertTo-ProcessArgument([string]$Value) {
+    if ($null -eq $Value) { return '""' }
+    if ($Value -notmatch '[\s"]') { return $Value }
+    $escaped = $Value.Replace('\\', '\\\\').Replace('"', '\\"')
+    return '"' + $escaped + '"'
+}
+
+function Set-ProcessArguments($StartInfo, [string[]]$Arguments) {
+    $argumentListProperty = $StartInfo.PSObject.Properties['ArgumentList']
+    if ($null -ne $argumentListProperty) {
+        foreach ($argument in $Arguments) { [void]$StartInfo.ArgumentList.Add($argument) }
+    } else {
+        $StartInfo.Arguments = (($Arguments | ForEach-Object { ConvertTo-ProcessArgument $_ }) -join ' ')
+    }
+}
+
+function Start-DetachedPowerShell([string[]]$Arguments, [switch]$Wait) {
+    $powershell = Get-Command powershell.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($null -eq $powershell) { throw 'Windows PowerShell 5.1 is required for Windows Toast notifications.' }
+    $startInfo = [Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $powershell.Source
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.WindowStyle = [Diagnostics.ProcessWindowStyle]::Hidden
+    $startInfo.RedirectStandardInput = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    Set-ProcessArguments -StartInfo $startInfo -Arguments $Arguments
+    $process = [Diagnostics.Process]::Start($startInfo)
+    try {
+        $process.StandardInput.Close()
+        if (-not $Wait) { return }
+        if (-not $process.WaitForExit(10000)) {
+            try { $process.Kill() } catch {}
+            throw 'Windows Toast host timed out.'
+        }
+        $output = @($process.StandardOutput.ReadToEnd(), $process.StandardError.ReadToEnd())
+        if ($process.ExitCode -ne 0) { throw "Windows Toast host failed: $(($output | Out-String).Trim())" }
+    } finally { $process.Dispose() }
+}
+
+function Start-ToastCleanup([string]$Tag, [string]$Group, [string]$AppId, [int]$DelaySeconds = 60) {
     try {
         $DelaySeconds = [Math]::Max(0, $DelaySeconds)
         $tagLiteral = ConvertTo-PowerShellLiteral $Tag
@@ -325,7 +467,7 @@ try {
     }
 } catch {}
 "@
-        Start-Process -FilePath 'powershell.exe' -WindowStyle Hidden -ArgumentList @('-NoLogo', '-NoProfile', '-NonInteractive', '-Command', $cleanupCommand) | Out-Null
+        Start-DetachedPowerShell -Arguments @('-NoLogo', '-NoProfile', '-NonInteractive', '-Command', $cleanupCommand)
     } catch {}
 }
 
@@ -369,8 +511,6 @@ function Show-NativeToastCore([string]$Title, [string]$Message, [string]$Notific
 }
 
 function Invoke-WindowsPowerShellToast([string]$Title, [string]$Message, [string]$NotificationType, [bool]$Sound, [string]$Tag) {
-    $powershell = Get-Command powershell.exe -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($null -eq $powershell) { throw 'Windows PowerShell 5.1 is required for Windows Toast notifications.' }
     $arguments = @(
         '-NoLogo'
         '-NoProfile'
@@ -390,11 +530,7 @@ function Invoke-WindowsPowerShellToast([string]$Title, [string]$Message, [string
         $Tag
     )
     if ($Sound) { $arguments += '-NativeSound' }
-    $output = & $powershell.Source @arguments 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        $details = ($output | Out-String).Trim()
-        throw "Windows Toast host failed: $details"
-    }
+    Start-DetachedPowerShell -Arguments $arguments -Wait
 }
 
 function Show-NativeToast([string]$Title, [string]$Message, [string]$NotificationType, [bool]$Sound, [string]$Tag) {
@@ -667,6 +803,9 @@ try {
         if ($null -eq $inputObject) { $inputObject = [pscustomobject]@{} }
     }
 
+    $script:HookSource = Get-HookSource
+    $script:HookInvocationCounts = Get-HookInvocationCounts -InputObject $inputObject -Kind notification
+
     if ($Type -eq 'Completed' -and [string]$inputObject.last_assistant_message -match '(?s)(?:[?？]\s*$|請(?:選擇|確認|提供|回答))') {
         $Type = 'QuestionRequired'
     }
@@ -675,7 +814,7 @@ try {
     $settingName = $Type.Substring(0, 1).ToLowerInvariant() + $Type.Substring(1)
     if (-not $Test -and (-not [bool]$settings.enabled -or -not [bool]$settings.$settingName)) {
         Write-HookDiagnostic -InputObject $inputObject -Result 'disabled' -Details ''
-    } elseif (Test-Duplicate -Root $root -InputObject $inputObject -NotificationType $Type -Seconds ([int]$settings.dedupeSeconds)) {
+    } elseif (Test-Duplicate -Root $root -InputObject $inputObject -NotificationType $Type -Seconds ([int]$settings.dedupeSeconds) -Strict) {
         Write-HookDiagnostic -InputObject $inputObject -Result 'deduplicated' -Details ''
     } else {
         $content = switch ($Type) {
