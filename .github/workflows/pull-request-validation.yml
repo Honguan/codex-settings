@@ -5,7 +5,6 @@ on:
     branches:
       - main
     types: [opened, synchronize, reopened, ready_for_review, edited]
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -65,20 +64,3 @@ jobs:
           }
 
           Write-Host "Issue workflow metadata passed for #$issueNumber on $($env:PR_HEAD_REF)."
-
-  tests:
-    name: Run repository tests
-    needs: policy
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v6
-      - name: Run PowerShell tests
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $failed = @()
-          Get-ChildItem ./tests/*.tests.ps1 | Sort-Object Name | ForEach-Object {
-              & pwsh -NoLogo -NoProfile -File $_.FullName
-              if ($LASTEXITCODE -ne 0) { $failed += $_.Name }
-          }
-          if ($failed.Count -gt 0) { throw "Failed tests: $($failed -join ', ')" }

@@ -46,7 +46,7 @@ Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 - Git（首次安裝預設）：加入 Git 專屬 AGENTS、Rules 與 Issue 完成工作流；修正必須從最新 `main` 建立 `issue/<N>-<slug>` 分支，先驗證再提交，透過 PR 合併並驗證 `main` 後才能關閉 Issue。
 - CVS：加入 CVS 專屬 AGENTS、Rules 與全域／專案換行保護 Hooks。`PreToolUse` 依「專案路徑＋Session」記錄 CVS 追蹤檔的原始狀態，`PostToolUse` 在每次工具完成後立即恢復，`Stop` 負責最終補漏與清理。
 
-換行保護使用 wildcard matcher，因此直接 `apply_patch`、code mode 的 `exec → tools.apply_patch`、Shell、MCP 與其他本機工具都使用同一份修改前基準。它只處理雜湊實際改變的檔案，精確恢復原本的 CRLF／LF、檔尾換行與 BOM，不會重新編碼文字；若修改前快照缺失，`PostToolUse` 仍會辨識 patch 指向的 CVS 追蹤檔並修復混合換行。session 狀態在完成後自動清除。Codex 的檔案修改卡片是工具執行當下的靜態 diff，PostToolUse 修復後不會回寫卡片；請以 Hook 診斷與最終 `cvs diff`／`cvs status` 判定實際結果。
+換行保護使用 wildcard matcher，因此直接 `apply_patch`、code mode 的 `exec → tools.apply_patch`、Shell、MCP 與其他本機工具都使用同一份修改前基準。它以檔案大小與最後寫入時間略過已驗證且未變更的檔案，只對實際變更內容讀取位元組與計算雜湊，精確恢復原本的 CRLF／LF、檔尾換行與 BOM，不會重新編碼文字；若修改前快照缺失，`PostToolUse` 仍會辨識 patch 指向的 CVS 追蹤檔並修復混合換行。`Stop` 保留最終補漏能力並在完成後清除 session 狀態，不再於對話結束時重讀所有未變更內容。Codex 的檔案修改卡片是工具執行當下的靜態 diff，PostToolUse 修復後不會回寫卡片；請以 Hook 診斷與最終 `cvs diff`／`cvs status` 判定實際結果。
 
 安裝或更新時會清理全域與目前 CVS 專案中的受管理通知、Token、舊 CRLF 腳本與重複換行 Hook；會以安全的舊版簽章與 manifest fingerprint 清理 codex-settings 過去版本，未受管理的自訂 Hook 不會被刪除。通知 Hook 不再使用 Codex `statusMessage`，Toast 主程序與 60 秒背景清理程序也會隔離標準輸入、輸出與錯誤管線，避免 Hook 卡住或重複閃爍。全域 manifest 會記錄 `managedId`、`managedVersion`、`handlerId` 與 Handler fingerprint；安裝後會驗證全域與 CVS 專案合併後只有一個有效 Completed 通知。每次執行會將事件、來源、命令、Session／turn、程序、耗時、結束碼與全域／專案 Hook 計數寫入 `~/.codex/logs/hooks/<session-id>.log`；CVS 狀態則依「專案路徑＋Session」隔離。
 
@@ -177,7 +177,7 @@ cdaily 30                        # 顯示最近 30 天的每日統計
 
 修正 GitHub Issue 時，先同步最新主分支，再建立獨立的 `issue/<issue-number>-<short-description>` 分支；禁止直接在 `main` 修改或提交，也不能從其他 Issue 分支分叉。PR 必須以 `main` 為 base，標題或提交包含 Issue 編號，內容使用 `Refs #<issue-number>`，在主分支驗證完成前不得使用 `Fixes`、`Closes` 或 `Resolves`。
 
-合併前必須完成 Issue 驗收條件、相關測試、GitHub Actions、工作樹與 PR 差異檢查。合併後先執行 `git switch main` 與 `git pull --ff-only origin main`，確認合併提交、檔案、CI 與驗收條件，再在 Issue 留下以下紀錄並關閉：
+合併前必須完成 Issue 驗收條件、相關本機測試、PR 規則檢查、工作樹與 PR 差異檢查。合併後先執行 `git switch main` 與 `git pull --ff-only origin main`，確認合併提交、檔案、主分支來源驗證與驗收條件，再在 Issue 留下以下紀錄並關閉：
 
 ```text
 Issue=<number>
@@ -188,7 +188,7 @@ MainVerification=passed
 Tests=<commands and results>
 ```
 
-`.github/workflows/pull-request-validation.yml` 會檢查分支、PR 引用與 Issue 狀態並執行測試；`main-validation.yml` 會在主分支變更後驗證；`issue-close-guard.yml` 會在未完成主分支驗證時重新開啟被提前關閉的 Issue。儲存庫仍應將 `main` 設定為必須經 PR、分支符合命名規則與必要 CI 通過後才能合併。
+`.github/workflows/pull-request-validation.yml` 只檢查分支、PR 引用與 Issue 狀態；`main-validation.yml` 只驗證主分支提交來自已合併 PR；`issue-close-guard.yml` 會在未完成主分支驗證時重新開啟被提前關閉的 Issue。完整測試只在發佈新版時執行，避免同一套測試於 PR、主分支與 Release 重複執行。儲存庫仍應將 `main` 設定為必須經 PR、分支符合命名規則與必要 CI 通過後才能合併。
 
 ## 發佈一鍵安裝包
 
@@ -208,7 +208,7 @@ Tests=<commands and results>
 .\tools\plan-release.ps1 -ChangeType Fix
 ```
 
-確認版本後再建立對應的 Git tag。GitHub Actions 僅接受完整的 `v主版.次版.修訂版` 標籤。
+確認版本後再建立對應的 Git tag。GitHub Actions 僅接受完整的 `v主版.次版.修訂版` 標籤，且標籤提交必須位於 `main`；Release 工作流會先執行全部測試，再建置與發佈安裝器。
 
 ```powershell
 .\tools\build-installer.ps1 -Version v1.8.6
@@ -236,7 +236,10 @@ src\
 ├─ installation\
 │  ├─ prompts.ps1
 │  ├─ prerequisites.ps1
+│  ├─ installation-context.ps1
 │  ├─ installation-plan.ps1
+│  ├─ installation-runner.ps1
+│  ├─ installation-state.ps1
 │  ├─ hook-validation.ps1
 │  ├─ hook-trust.ps1
 │  └─ target-installer.ps1
@@ -251,6 +254,6 @@ tools\
 └─ plan-release.ps1
 ```
 
-`load-core.ps1`、`load-operations.ps1` 與 `load-installation.ps1` 集中定義模組載入順序；核心檔案不依賴外部套件，安裝層也不直接實作原子寫入與交易回復。
+`install.ps1` 只負責參數解析與啟動 runner；context 集中解析安裝選項與路徑，runner 負責流程與回復，state 負責 Context7 與 manifest。`load-core.ps1`、`load-operations.ps1` 與 `load-installation.ps1` 集中定義模組載入順序；核心檔案不依賴外部套件，安裝層也不直接實作原子寫入與交易回復。
 
 推送符合 `v主版.次版.修訂版` 的 Git tag 時，GitHub Actions 會建立同名 Release 附件。

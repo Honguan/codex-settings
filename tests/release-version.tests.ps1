@@ -47,6 +47,24 @@ try {
     if (-not (Test-Path -LiteralPath (Join-Path $buildRoot 'keep.txt') -PathType Leaf)) {
         throw '建置時誤刪除非安裝器檔案。'
     }
+
+    $startInfo = [Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = 'cmd.exe'
+    foreach ($argument in @('/d', '/c', $versionedInstaller)) { $startInfo.ArgumentList.Add($argument) }
+    $startInfo.WorkingDirectory = $buildRoot
+    $startInfo.UseShellExecute = $false
+    $startInfo.RedirectStandardInput = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $process = [Diagnostics.Process]::Start($startInfo)
+    $process.StandardInput.WriteLine('0')
+    $process.StandardInput.Close()
+    $stdout = $process.StandardOutput.ReadToEnd()
+    $stderr = $process.StandardError.ReadToEnd()
+    $process.WaitForExit()
+    if ($process.ExitCode -ne 0) { throw "單檔安裝器啟動失敗：$($process.ExitCode)`n$stderr" }
+    if ($stdout -notmatch 'Codex Settings 一鍵安裝器') { throw '單檔安裝器未載入完整安裝架構。' }
+    if (($stdout + $stderr) -match "`e\[33|(?im)^WARNING:|警告") { throw '單檔安裝器啟動時輸出異常黃色警告。' }
 } finally {
     Remove-Item -LiteralPath $buildRoot -Recurse -Force -ErrorAction SilentlyContinue
 }

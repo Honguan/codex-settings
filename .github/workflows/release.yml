@@ -13,6 +13,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - name: Validate release tag
         shell: pwsh
         run: |
@@ -22,10 +24,14 @@ jobs:
       - name: Validate installer
         shell: pwsh
         run: |
+          git merge-base --is-ancestor $env:GITHUB_SHA origin/main
+          if ($LASTEXITCODE -ne 0) { throw "Release tag must point to a commit on main: $env:GITHUB_SHA" }
+          $failed = @()
           Get-ChildItem ./tests/*.tests.ps1 | Sort-Object Name | ForEach-Object {
             & pwsh -NoLogo -NoProfile -File $_.FullName
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            if ($LASTEXITCODE -ne 0) { $failed += $_.Name }
           }
+          if ($failed.Count -gt 0) { throw "Failed tests: $($failed -join ', ')" }
       - name: Build single-file installer
         shell: pwsh
         run: ./tools/build-installer.ps1 -Version $env:GITHUB_REF_NAME

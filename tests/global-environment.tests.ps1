@@ -18,20 +18,31 @@ function Install-TestEnvironment([ValidateSet('Git', 'CVS')][string]$Environment
         EnableDefaultModeRequestUserInput = $false
         InstallWindowsNotifications = $InstallWindowsNotifications
     }
-    $result = Install-Target -Target $target -Transaction $transaction
-    Write-Manifest -Result $result -Transaction $transaction -External $null
+    $result = Invoke-TargetInstallation -Target $target -Transaction $transaction
+    Save-InstallationManifest -Result $result -Transaction $transaction -External $null
     Complete-FileTransaction -Transaction $transaction
 }
 
 try {
     $installerSource = Get-Content -LiteralPath (Join-Path $script:ScriptRoot 'install.ps1') -Raw
-    if ($installerSource -match 'Write-Warning\s+"已回復中斷的交易') {
+    $runnerSource = Get-Content -LiteralPath (Join-Path $script:ScriptRoot 'installation\installation-runner.ps1') -Raw
+    $installationSource = $installerSource + $runnerSource
+    if ($installationSource -match 'Write-Warning\s+"已回復中斷的交易') {
         throw 'Installer startup must not render recovered transactions as a yellow warning.'
     }
-    if ($installerSource -notmatch 'Write-Host\s+"已自動回復上次中斷的安裝交易') {
+    if ($installationSource -notmatch 'Write-Host\s+"已自動回復上次中斷的安裝交易') {
         throw 'Installer startup did not preserve a clear recovered-transaction status message.'
     }
-    if ($installerSource -notmatch '完全關閉並重新啟動 VS Code、Codex 與 PowerShell') {
+    foreach ($managementScript in @('commands\restore-settings.ps1', 'commands\uninstall-settings.ps1')) {
+        $managementSource = Get-Content -LiteralPath (Join-Path $script:ScriptRoot $managementScript) -Raw
+        if ($managementSource -match 'Write-Warning\s+"已回復中斷的交易') {
+            throw "Successful transaction recovery must not render as a yellow warning: $managementScript"
+        }
+        if ($managementSource -notmatch 'Write-Host\s+"已自動回復上次中斷的交易') {
+            throw "Transaction recovery status message is missing: $managementScript"
+        }
+    }
+    if ($installationSource -notmatch '完全關閉並重新啟動 VS Code、Codex 與 PowerShell') {
         throw 'Installer completion message did not require restarting existing Codex sessions before testing Hooks.'
     }
 

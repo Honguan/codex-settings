@@ -231,6 +231,14 @@ function Invoke-WithStateLock([string]$ProjectRoot, [string]$SessionId, [scriptb
     }
 }
 
+function Write-LineEndingState([string]$Path, $State) {
+    New-Item -ItemType Directory -Path (Split-Path -Parent $Path) -Force | Out-Null
+    $temporaryPath = $Path + '.tmp-' + [guid]::NewGuid().ToString('N')
+    [IO.File]::WriteAllText($temporaryPath, ($State | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
+    try { Move-Item -LiteralPath $temporaryPath -Destination $Path -Force }
+    finally { if (Test-Path -LiteralPath $temporaryPath -PathType Leaf) { Remove-Item -LiteralPath $temporaryPath -Force } }
+}
+
 function Get-HookInvocationCounts($InputObject) {
     $counts = New-HookInvocationCounts
     try {
@@ -324,6 +332,7 @@ function Save-InitialState($InputObject) {
             $bytes = [IO.File]::ReadAllBytes($path)
             if (Test-BinaryBytes -Bytes $bytes) { continue }
             $lineEndings = Get-LineEndingState -Bytes $bytes
+            $fileInfo = [IO.FileInfo]::new($path)
             $files[$path] = [ordered]@{
                 lineEnding = $lineEndings.Style
                 preferredLineEnding = $lineEndings.PreferredStyle
@@ -331,60 +340,74 @@ function Save-InitialState($InputObject) {
                 finalNewlineStyle = $lineEndings.FinalStyle
                 bom = Get-BomName -Bytes $bytes
                 sha256 = Get-Sha256 -Bytes $bytes
+                verifiedLength = $fileInfo.Length
+                verifiedLastWriteTimeUtcTicks = $fileInfo.LastWriteTimeUtc.Ticks
             }
         }
 
         $state = [ordered]@{ sessionId = [string]$InputObject.session_id; projectRoot = $root; files = $files }
-        New-Item -ItemType Directory -Path $stateRoot -Force | Out-Null
-        $temporaryPath = $statePath + '.tmp-' + [guid]::NewGuid().ToString('N')
-        [IO.File]::WriteAllText($temporaryPath, ($state | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
-        try { Move-Item -LiteralPath $temporaryPath -Destination $statePath -Force }
-        finally { if (Test-Path -LiteralPath $temporaryPath -PathType Leaf) { Remove-Item -LiteralPath $temporaryPath -Force } }
+        Write-LineEndingState -Path $statePath -State $state
     } | Out-Null
 }
 
 function Restore-InitialState($InputObject, [Collections.Generic.List[string]]$Warnings, [switch]$Cleanup) {
     $changedFiles = [Collections.Generic.List[string]]::new()
+    $stateFiles = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     $root = Get-CvsRoot -StartPath ([string]$InputObject.cwd)
     $statePath = if ([string]::IsNullOrWhiteSpace($root)) { $null } else { Get-StatePath -SessionId ([string]$InputObject.session_id) -ProjectRoot $root }
     if ($null -ne $statePath -and (Test-Path -LiteralPath $statePath -PathType Leaf)) {
-        try {
-            $state = [IO.File]::ReadAllText($statePath) | ConvertFrom-Json -ErrorAction Stop
-            $root = [IO.Path]::GetFullPath([string]$state.projectRoot).TrimEnd('\', '/')
-            $rootPrefix = $root + [IO.Path]::DirectorySeparatorChar
-            foreach ($property in @($state.files.PSObject.Properties)) {
-                try {
-                    $path = [IO.Path]::GetFullPath([string]$property.Name)
-                    if (-not $path.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) { continue }
-                    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
-                    $bytes = [IO.File]::ReadAllBytes($path)
-                    if (Test-BinaryBytes -Bytes $bytes) { continue }
-                    $original = $property.Value
-                    if ((Get-Sha256 -Bytes $bytes) -eq [string]$original.sha256) { continue }
+        Invoke-WithStateLock -ProjectRoot $root -SessionId ([string]$InputObject.session_id) -Action {
+            if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) { return }
+            try {
+                $state = [IO.File]::ReadAllText($statePath) | ConvertFrom-Json -ErrorAction Stop
+                $root = [IO.Path]::GetFullPath([string]$state.projectRoot).TrimEnd('\', '/')
+                $rootPrefix = $root + [IO.Path]::DirectorySeparatorChar
+                $stateChanged = $false
+                foreach ($property in @($state.files.PSObject.Properties)) {
+                    try {
+                        $path = [IO.Path]::GetFullPath([string]$property.Name)
+                        if (-not $path.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) { continue }
+                        [void]$stateFiles.Add($path)
+                        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+                        $original = $property.Value
+                        $fileInfo = [IO.FileInfo]::new($path)
+                        if ($fileInfo.Length -eq [long]$original.verifiedLength -and $fileInfo.LastWriteTimeUtc.Ticks -eq [long]$original.verifiedLastWriteTimeUtcTicks) { continue }
 
-                    $restored = Restore-BomBytes -Bytes $bytes -OriginalBom ([string]$original.bom)
-                    $restoreStyle = if ([string]$original.lineEnding -eq 'MIXED') { [string]$original.preferredLineEnding } else { [string]$original.lineEnding }
-                    if ($restoreStyle -in @('CRLF', 'LF')) {
-                        $restored = Convert-LineEndingBytes -Bytes $restored -Style $restoreStyle
+                        $bytes = [IO.File]::ReadAllBytes($path)
+                        if (Test-BinaryBytes -Bytes $bytes) { continue }
+                        if ((Get-Sha256 -Bytes $bytes) -ne [string]$original.sha256) {
+                            $restored = Restore-BomBytes -Bytes $bytes -OriginalBom ([string]$original.bom)
+                            $restoreStyle = if ([string]$original.lineEnding -eq 'MIXED') { [string]$original.preferredLineEnding } else { [string]$original.lineEnding }
+                            if ($restoreStyle -in @('CRLF', 'LF')) {
+                                $restored = Convert-LineEndingBytes -Bytes $restored -Style $restoreStyle
+                            }
+                            $finalStyle = if ($restoreStyle -in @('CRLF', 'LF')) { $restoreStyle } elseif ([string]$original.finalNewlineStyle -in @('CRLF', 'LF')) { [string]$original.finalNewlineStyle } else { 'LF' }
+                            $restored = Set-FinalNewlineBytes -Bytes $restored -FinalNewline ([bool]$original.finalNewline) -Style $finalStyle
+                            if (-not [Linq.Enumerable]::SequenceEqual([byte[]]$bytes, [byte[]]$restored)) {
+                                [IO.File]::WriteAllBytes($path, $restored)
+                                $changedFiles.Add($path)
+                            }
+                        }
+
+                        $fileInfo.Refresh()
+                        $original.verifiedLength = $fileInfo.Length
+                        $original.verifiedLastWriteTimeUtcTicks = $fileInfo.LastWriteTimeUtc.Ticks
+                        $stateChanged = $true
+                    } catch {
+                        $Warnings.Add("Failed to restore line endings for $($property.Name): $($_.Exception.Message)")
                     }
-                    $finalStyle = if ($restoreStyle -in @('CRLF', 'LF')) { $restoreStyle } elseif ([string]$original.finalNewlineStyle -in @('CRLF', 'LF')) { [string]$original.finalNewlineStyle } else { 'LF' }
-                    $restored = Set-FinalNewlineBytes -Bytes $restored -FinalNewline ([bool]$original.finalNewline) -Style $finalStyle
-                    if (-not [Linq.Enumerable]::SequenceEqual([byte[]]$bytes, [byte[]]$restored)) {
-                        [IO.File]::WriteAllBytes($path, $restored)
-                        $changedFiles.Add($path)
-                    }
-                } catch {
-                    $Warnings.Add("Failed to restore line endings for $($property.Name): $($_.Exception.Message)")
                 }
+                if (-not $Cleanup -and $stateChanged) { Write-LineEndingState -Path $statePath -State $state }
+            } finally {
+                if ($Cleanup) { Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue }
             }
-        } finally {
-            if ($Cleanup) { Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue }
-        }
+        } | Out-Null
     }
 
     if (-not [string]::IsNullOrWhiteSpace($root)) {
         foreach ($path in Get-HookCandidateFiles -InputObject $InputObject -Root $root) {
             try {
+                if ($stateFiles.Contains($path)) { continue }
                 if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
                 $bytes = [IO.File]::ReadAllBytes($path)
                 if (Test-BinaryBytes -Bytes $bytes) { continue }

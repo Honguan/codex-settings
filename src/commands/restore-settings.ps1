@@ -30,7 +30,7 @@ try {
     $operationLock = Enter-CodexSettingsLock
     New-Item -ItemType Directory -Path $BackupRoot -Force | Out-Null
     $recovered = @(Repair-PendingTransactions -BackupRoot $BackupRoot)
-    foreach ($path in $recovered) { Write-Warning "已回復中斷的交易：$path" }
+    if ($recovered.Count -gt 0) { Write-Host "已自動回復上次中斷的交易：$($recovered.Count) 筆。" }
 
     if ([string]::IsNullOrWhiteSpace($BackupPath)) {
         $candidates = @(Get-ChildItem -LiteralPath $BackupRoot -Directory -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 10)
