@@ -1,4 +1,4 @@
-function Resolve-GlobalTargets([ValidateSet('Git', 'CVS')][string]$DevelopmentEnvironment, [switch]$InstallRequestExecutionOptimizer, [switch]$EnableDefaultModeRequestUserInput, [bool]$InstallWindowsNotifications, [bool]$InstallTokenUsageInterface) {
+function Resolve-GlobalTargets([ValidateSet('Git', 'CVS')][string]$DevelopmentEnvironment, [switch]$InstallRequestExecutionOptimizer, [switch]$EnableDefaultModeRequestUserInput, [bool]$InstallWindowsNotifications) {
     $targets = New-Object 'System.Collections.Generic.List[object]'
     [void]$targets.Add([pscustomobject]@{
         Mode = 'Global'
@@ -8,7 +8,6 @@ function Resolve-GlobalTargets([ValidateSet('Git', 'CVS')][string]$DevelopmentEn
         Root = Join-Path $HOME '.codex'
         EnableDefaultModeRequestUserInput = [bool]$EnableDefaultModeRequestUserInput
         InstallWindowsNotifications = $InstallWindowsNotifications
-        InstallTokenUsageInterface = $InstallTokenUsageInterface
     })
     $skillsRoot = Join-Path $HOME '.codex\skills'
     $skillManifest = Join-Path $skillsRoot '.codex-settings-manifest.json'
@@ -24,15 +23,12 @@ function Get-InstallTemplateEntries($Target) {
     foreach ($source in Get-ChildItem -LiteralPath $Target.Template -Recurse -File) {
         $relative = $source.FullName.Substring($Target.Template.Length).TrimStart([char[]]'\/')
         if ($Target.Mode -eq 'Global' -and -not [bool]$Target.InstallWindowsNotifications -and $relative.Replace('\', '/') -eq 'hooks/show-codex-notification.ps1') { continue }
-        if ($Target.Mode -eq 'Global' -and -not [bool]$Target.InstallTokenUsageInterface -and $relative.Replace('\', '/') -eq 'hooks/show-turn-token-usage.ps1') { continue }
         [void]$globalPaths.Add($relative)
         $content = [IO.File]::ReadAllText($source.FullName)
+        if ($relative.Replace('\', '/') -eq 'hooks/show-codex-notification.ps1') { $content = [char]0xFEFF + $content }
         if ($Target.Mode -eq 'Global') {
             if (-not [bool]$Target.InstallWindowsNotifications -and $relative.Replace('\', '/') -eq 'hooks.json') {
                 $content = Remove-ManagedNotificationHooksJson -Content $content
-            }
-            if (-not [bool]$Target.InstallTokenUsageInterface -and $relative.Replace('\', '/') -eq 'hooks.json') {
-                $content = Remove-ManagedTokenUsageHooksJson -Content $content
             }
             $environmentSource = Join-Path $Target.EnvironmentTemplate $relative
             if (Test-Path -LiteralPath $environmentSource -PathType Leaf) {

@@ -8,7 +8,6 @@ param(
     [switch]$InstallMattPocockSkills,
     [switch]$EnableDefaultModeRequestUserInput,
     [Nullable[bool]]$InstallWindowsNotifications,
-    [Nullable[bool]]$InstallTokenUsageInterface,
     [ValidateSet('Git', 'CVS')]
     [string]$DevelopmentEnvironment,
     [switch]$Force,
@@ -39,8 +38,7 @@ if ($Mode -eq 'Interactive') {
                     $installMattPocockSkills = Select-OptionalMattPocockSkills
                     $enableDefaultModeRequestUserInput = Select-OptionalDefaultModeRequestUserInput
                     $installWindowsNotifications = Select-OptionalWindowsNotifications -AlreadyInstalled:(Test-WindowsNotificationsInstalled -Root $globalRoot)
-                    $installTokenUsageInterface = Select-OptionalTokenUsageInterface -AlreadyInstalled:(Test-TokenUsageInterfaceInstalled -Root $globalRoot)
-                    & $PSCommandPath -Mode Global -InstallStyle $style -DevelopmentEnvironment $developmentEnvironment -InstallRequestExecutionOptimizer:$installRequestExecutionOptimizer -InstallMattPocockSkills:$installMattPocockSkills -EnableDefaultModeRequestUserInput:$enableDefaultModeRequestUserInput -InstallWindowsNotifications:$installWindowsNotifications -InstallTokenUsageInterface:$installTokenUsageInterface
+                    & $PSCommandPath -Mode Global -InstallStyle $style -DevelopmentEnvironment $developmentEnvironment -InstallRequestExecutionOptimizer:$installRequestExecutionOptimizer -InstallMattPocockSkills:$installMattPocockSkills -EnableDefaultModeRequestUserInput:$enableDefaultModeRequestUserInput -InstallWindowsNotifications:$installWindowsNotifications
                     exit 0
                 }
                 default { & $PSCommandPath -Mode $selection }
@@ -75,10 +73,7 @@ if (-not $InstallMattPocockSkills -and (Test-MattPocockSkillsInstalled)) {
 if ($null -eq $InstallWindowsNotifications) {
     $InstallWindowsNotifications = Test-WindowsNotificationsInstalled -Root $globalRoot
 }
-if ($null -eq $InstallTokenUsageInterface) {
-    $InstallTokenUsageInterface = Test-TokenUsageInterfaceInstalled -Root $globalRoot
-}
-$targets = @(Resolve-GlobalTargets -DevelopmentEnvironment $DevelopmentEnvironment -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput -InstallWindowsNotifications ([bool]$InstallWindowsNotifications) -InstallTokenUsageInterface ([bool]$InstallTokenUsageInterface))
+$targets = @(Resolve-GlobalTargets -DevelopmentEnvironment $DevelopmentEnvironment -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput -InstallWindowsNotifications ([bool]$InstallWindowsNotifications))
 $preflight = $globalRoot
 Test-Prerequisites 'Global' $preflight
 foreach ($target in $targets) { Test-DirectoryWritable -Path $target.Root }
@@ -193,12 +188,11 @@ try {
         $commandStatus = if ([bool]$ccusage.CommandsUpdated) { '已更新 ccsessions、cdaily 指令' } else { 'ccsessions、cdaily 指令未變更' }
         Write-Host "ccusage：$packageStatus；$commandStatus"
         Write-Host '  ccsessions [數量或 Session ID]：查看 Session 的模型、Token、費用與台北時間。'
-        Write-Host '  ccsessions -Json <Session ID>：輸出每輪 Token Hook 使用的機器可讀資料。'
+        Write-Host '  ccsessions -Json <Session ID>：輸出完成通知使用的機器可讀資料。'
         Write-Host '  cdaily [天數]：查看每日 Token 與費用統計。'
         Write-Host "Hook 信任：已驗證 $($hookTrust.TrustedCount) 個、更新 $($hookTrust.UpdatedCount) 個。"
         Write-Host "交易備份：$transactionRoot"
-        Write-Host $(if ([bool]$InstallWindowsNotifications) { 'Windows 通知：已安裝，並送出測試通知。' } else { 'Windows 通知：未安裝。' })
-        Write-Host $(if ([bool]$InstallTokenUsageInterface) { 'Token 使用率介面：已安裝。' } else { 'Token 使用率介面：未安裝。' })
+        Write-Host $(if ([bool]$InstallWindowsNotifications) { 'Windows 通知與完成 Token 用量：已整合安裝，並送出測試通知。' } else { 'Windows 通知與完成 Token 用量：未安裝。' })
         Write-Host '請完全關閉並重新啟動 VS Code、Codex 與 PowerShell；既有 Session 不會載入新安裝的 Hook。'
     } catch {
         $reason = $_.Exception.Message

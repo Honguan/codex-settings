@@ -7,8 +7,7 @@ Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 ## 主要功能
 
 - 安裝或更新全域 `AGENTS.md`、`config.toml` 與權限規則。
-- 可選安裝全域 Windows 通知 Hook，分別提示任務完成、等待權限與等待回答。
-- 安裝全域每輪 Token 統計 Hook，以目前 Session 的 `ccsessions` 累積值計算本輪差值。
+- 可選安裝全域 Windows 通知 Hook，提示任務完成、等待權限與等待回答；完成通知整合本輪 Token 用量。
 - 在全域安裝流程選擇 Git 或 CVS，合併對應的全域 AGENTS 與 Rules。
 - 安裝 Context7、Playwright MCP 設定。
 - 安裝或更新 `ccusage`，並新增或更新 `ccsessions`（Session 用量）與 `cdaily`（每日用量）指令。
@@ -49,9 +48,7 @@ Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 
 換行保護使用 wildcard matcher，因此直接 `apply_patch`、code mode 的 `exec → tools.apply_patch`、Shell、MCP 與其他本機工具都使用同一份修改前基準。它只處理雜湊實際改變的檔案，精確恢復原本的 CRLF／LF、檔尾換行與 BOM，不會重新編碼文字；若修改前快照缺失，`PostToolUse` 仍會辨識 patch 指向的 CVS 追蹤檔並修復混合換行。session 狀態在完成後自動清除。Codex 的檔案修改卡片是工具執行當下的靜態 diff，PostToolUse 修復後不會回寫卡片；請以 Hook 診斷與最終 `cvs diff`／`cvs status` 判定實際結果。
 
-安裝器會單獨詢問是否安裝 Windows 通知：首次安裝預設為否，已安裝時預設保留並更新；選擇不安裝會移除受管理通知，但保留使用率介面與其他自訂 Hook。通知使用 `PermissionRequest`、`request_user_input` 的 `PreToolUse` 與 `Stop` 官方事件，依專案名稱顯示不同標題與提示音。同一 session、turn 與類型在短時間內只顯示一次；設定位於 `~/.codex/state/notifications/settings.json`，可停用全部或個別通知。可執行 `~/.codex/hooks/show-codex-notification.ps1 -Type Completed -Test` 測試通知流程。
-
-每輪 Token 使用率介面也會單獨詢問：首次安裝預設為否，已安裝時預設保留並更新；選擇不安裝會移除受管理 Hook 與腳本。統計優先讀取 Stop payload 的 `last_token_usage`；未提供時讀取目前 rollout 的最新 `token_count`，最後才以相同 Session ID 呼叫 `ccsessions -Json` 作為後備，不會改用其他 Session。顯示順序為 Session、Model、Input、Output、Cache、Total、Cache hit rate、Cost、Estimated usage；即時資料顯示本輪數值，`ccsessions` 資料則從第二次起顯示差值，Token 以 K／M／B 縮寫。即時事件未提供模型與費用時不會捏造數值，待 `ccsessions` 可讀取後才顯示。`Cache` 顯示快取讀取 Token；快取命中率仍以 `Cache read ÷ (Cache read + Cache write + Input)` 計算，估計消耗比例以每 US$1.30 = 1% 計算。狀態依 Session 分開儲存在 `~/.codex/state/token-usage`，相同 snapshot 不會重複顯示。Codex Hook 無法改寫既有 assistant 文字，因此 Stop Hook 會在原回覆結束後透過 `systemMessage` 直接把使用率顯示在 UI／事件流，不再依賴模型續答；設定位於同目錄的 `settings.json`。Token 與 CVS 換行 Hook 不設定持續顯示的執行狀態，並將執行結果寫入 `~/.codex/logs/hooks/<session-id>.log`，包含事件、handler、session／turn、工具、已處理檔案與錯誤內容。安裝器會透過 Codex `app-server` 取得目前 Hook 雜湊，只信任並驗證本工具管理的 Token、通知及換行保護 Hook，不會信任使用者自訂 Hook。
+安裝器會單獨詢問是否安裝 Windows 通知：首次安裝預設為否，已安裝時預設保留並更新；選擇不安裝會移除受管理通知與完成用量顯示，但保留其他自訂 Hook。通知使用 `PermissionRequest`、`request_user_input` 的 `PreToolUse` 與 `Stop` 官方事件；同一 session、turn 與類型在短時間內只顯示一次。完成通知會優先讀取 Stop payload 的 `last_token_usage`，再讀取目前 rollout 的最新 `token_count`，最後才以相同 Session ID 呼叫 `ccsessions -Json`。通知固定顯示 Session、Model、Input、Output、Cache read、Cache write、Total、Cache hit rate、Cost 與 Estimated usage；完成通知採標題加左右雙欄自適應排版，其他通知使用單段訊息；即時資料顯示本輪數值，`ccsessions` 資料則從第二次起顯示差值。Token 以 K／M／B 縮寫，Cache hit rate 使用 `Cache read ÷ (Input + Cache read + Cache write)`，Estimated usage 使用 Cost ÷ 1.3。狀態仍依 Session 分開儲存在 `~/.codex/state/token-usage`，原有 Token `settings.json` 設定格式也會保留。Token 統計失敗時仍顯示完成通知並記錄原始錯誤，不會讓 Stop Hook 失敗；執行結果寫入 `~/.codex/logs/hooks/<session-id>.log`。Toast 優先使用 `long`／`urgent` 與 High priority，系統不支援時降級為 `long`；聲音預設開啟，可在通知設定的 `sound` 設為 `false` 靜音；彈出時間由 Windows Shell 決定，單獨顯示時通知中心項目最多保留 180 秒，新通知成功出現後上一則自發送起最多保留 60 秒；背景清理不阻塞主 Hook。安裝器會透過 Codex `app-server` 取得目前 Hook 雜湊，只信任並驗證本工具管理的通知及換行保護 Hook，不會信任使用者自訂 Hook。
 
 安裝成功後會將選擇記錄為預設專案體系。下次互動安裝按 Enter，或非互動安裝未提供 `-DevelopmentEnvironment` 時，會沿用上次的 Git／CVS 選擇。
 
@@ -63,8 +60,6 @@ Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 .\Install.cmd -Mode Global -DevelopmentEnvironment CVS
 .\Install.cmd -Mode Global -InstallWindowsNotifications $true
 .\Install.cmd -Mode Global -InstallWindowsNotifications $false
-.\Install.cmd -Mode Global -InstallTokenUsageInterface $true
-.\Install.cmd -Mode Global -InstallTokenUsageInterface $false
 ```
 
 常用參數：
@@ -168,7 +163,7 @@ npx --yes skills@latest add mattpocock/skills -g -a codex -y --skill setup-matt-
 ccsessions                       # 顯示最近 10 筆 Session
 ccsessions 20                    # 顯示最近 20 筆 Session
 ccsessions 019fd1f8...4a87a2     # 顯示指定 Session
-ccsessions -Json <Session ID>    # 輸出 Hook 使用的機器可讀 JSON
+ccsessions -Json <Session ID>    # 輸出完成通知使用的機器可讀 JSON
 cdaily                           # 顯示最近 7 天的每日統計
 cdaily 30                        # 顯示最近 30 天的每日統計
 ```

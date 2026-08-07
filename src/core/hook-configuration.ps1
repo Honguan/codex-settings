@@ -2,8 +2,7 @@ $script:ManagedLineEndingHookSignaturePattern = '(?i)((?:crlf-updated-files|norm
 $script:PreserveLineEndingHookSignaturePattern = '(?i)(preserve-line-endings\.ps1|Restoring original line endings)'
 $script:LegacyCrlfHookSignaturePattern = '(?i)((?:crlf-updated-files|normalize-cvs-crlf)\.ps1|Converting updated files? to CRLF|Normalizing updated files to CRLF|Finalizing CRLF normalization|CodexSettings CRLF (?:track|finalize))'
 $script:ManagedNotificationHookSignaturePattern = '(?i)(show-codex-notification\.ps1|CodexSettings Windows notification)'
-$script:ManagedTokenUsageHookSignaturePattern = '(?i)(show-turn-token-usage\.ps1|CodexSettings turn token usage)'
-$script:ManagedGlobalHookSignaturePattern = '(?i)(show-(?:codex-notification|turn-token-usage)\.ps1|CodexSettings (?:Windows notification|turn token usage))'
+$script:ManagedGlobalHookSignaturePattern = '(?i)(show-codex-notification\.ps1|CodexSettings Windows notification|turn-token-usage|CodexSettings turn token usage)'
 
 function Test-ManagedLineEndingHookEntry {
     [CmdletBinding()]
@@ -35,28 +34,6 @@ function Remove-ManagedNotificationHooksJson {
     if ($null -eq $object.hooks) { return $Content }
     foreach ($property in @($object.hooks.PSObject.Properties)) {
         $filtered = @($property.Value | Where-Object { -not (Test-ManagedNotificationHookEntry $_) })
-        if ($filtered.Count -eq 0) { $object.hooks.PSObject.Properties.Remove($property.Name) }
-        else { $object.hooks | Add-Member -NotePropertyName $property.Name -NotePropertyValue $filtered -Force }
-    }
-    return ($object | ConvertTo-Json -Depth 30)
-}
-
-function Test-ManagedTokenUsageHookEntry {
-    [CmdletBinding()]
-    param([Parameter(Mandatory = $true)]$Entry)
-
-    return (($Entry | ConvertTo-Json -Depth 20 -Compress) -match $script:ManagedTokenUsageHookSignaturePattern)
-}
-
-function Remove-ManagedTokenUsageHooksJson {
-    [CmdletBinding()]
-    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Content)
-
-    if ([string]::IsNullOrWhiteSpace($Content)) { return '' }
-    $object = $Content | ConvertFrom-Json -ErrorAction Stop
-    if ($null -eq $object.hooks) { return $Content }
-    foreach ($property in @($object.hooks.PSObject.Properties)) {
-        $filtered = @($property.Value | Where-Object { -not (Test-ManagedTokenUsageHookEntry $_) })
         if ($filtered.Count -eq 0) { $object.hooks.PSObject.Properties.Remove($property.Name) }
         else { $object.hooks | Add-Member -NotePropertyName $property.Name -NotePropertyValue $filtered -Force }
     }

@@ -154,27 +154,3 @@ function Select-OptionalWindowsNotifications([bool]$AlreadyInstalled = (Test-Win
     Write-Host '尚未安裝；選擇安裝後會套用到所有專案。'
     return Read-YesNoChoice -Prompt '要安裝嗎？[y/N]' -Default $false
 }
-
-function Test-TokenUsageInterfaceInstalled([string]$Root = (Join-Path $HOME '.codex')) {
-    if (Test-Path -LiteralPath (Join-Path $Root 'hooks\show-turn-token-usage.ps1') -PathType Leaf) { return $true }
-    $hooksPath = Join-Path $Root 'hooks.json'
-    if (-not (Test-Path -LiteralPath $hooksPath -PathType Leaf)) { return $false }
-    try {
-        $hooksObject = Get-Content -LiteralPath $hooksPath -Raw | ConvertFrom-Json -ErrorAction Stop
-        foreach ($property in @($hooksObject.hooks.PSObject.Properties)) {
-            if (@($property.Value | Where-Object { Test-ManagedTokenUsageHookEntry $_ }).Count -gt 0) { return $true }
-        }
-    } catch { return $false }
-    return $false
-}
-
-function Select-OptionalTokenUsageInterface([bool]$AlreadyInstalled = (Test-TokenUsageInterfaceInstalled)) {
-    Write-Host ''
-    Write-Host '選用全域功能：每輪 Token 使用率介面'
-    if ($AlreadyInstalled) {
-        Write-Host '已偵測到既有受管理使用率介面；預設保留並更新。'
-        return Read-YesNoChoice -Prompt '要繼續安裝嗎？[Y/n]' -Default $true
-    }
-    Write-Host '尚未安裝；選擇安裝後會在每輪回覆後顯示 Token 使用率。'
-    return Read-YesNoChoice -Prompt '要安裝嗎？[y/N]' -Default $false
-}
