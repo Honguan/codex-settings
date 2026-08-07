@@ -1,48 +1,122 @@
+$script:ManagedHookManifestId = 'codex-settings'
+$script:ManagedHookManifestVersion = 3
+$script:ManagedNotificationId = 'codex-settings-notification'
+$script:ManagedNotificationVersion = 3
 $script:ManagedLineEndingHookSignaturePattern = '(?i)((?:crlf-updated-files|normalize-cvs-crlf|preserve-line-endings)\.ps1|Converting updated files? to CRLF|Normalizing updated files to CRLF|Finalizing CRLF normalization|CodexSettings CRLF (?:track|finalize)|Restoring original line endings)'
 $script:PreserveLineEndingHookSignaturePattern = '(?i)(preserve-line-endings\.ps1|Restoring original line endings)'
 $script:LegacyCrlfHookSignaturePattern = '(?i)((?:crlf-updated-files|normalize-cvs-crlf)\.ps1|Converting updated files? to CRLF|Normalizing updated files to CRLF|Finalizing CRLF normalization|CodexSettings CRLF (?:track|finalize))'
 $script:ManagedNotificationHookSignaturePattern = '(?i)(show-codex-notification\.ps1|CodexSettings Windows notification)'
 $script:ManagedTokenHookSignaturePattern = '(?i)(show-turn-token-usage\.ps1|turn-token-usage|CodexSettings turn token usage)'
 $script:ManagedGlobalHookSignaturePattern = '(?i)(show-codex-notification\.ps1|CodexSettings Windows notification|show-turn-token-usage\.ps1|turn-token-usage|CodexSettings turn token usage)'
+$script:LegacyNotificationHookSignaturePattern = '(?i)(show[-_]?(?:codex|windows|win32|toast|balloon)[-_]?(?:notification|notify|toast|completion|completed)\.ps1|(?:codex|windows|win32|toast|balloon|completion|completed)[-_]?(?:notification|notify|toast|completion|completed)\.ps1|notify[-_]?codex\.ps1|CodexSettings Windows notification|Codex 任務完成|工作已完成|請回到 Codex)'
+$script:LegacyTokenHookSignaturePattern = '(?i)(show[-_]?(?:turn[-_]?)?token[-_]?usage\.ps1|turn[-_]?token[-_]?usage|CodexSettings turn token usage)'
+
+function Get-HookEntryText {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)]$Entry)
+
+    return ($Entry | ConvertTo-Json -Depth 30 -Compress)
+}
+
+function Get-HookHandlerEntries {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)]$Entry)
+
+    $hookProperty = $Entry.PSObject.Properties['hooks']
+    if ($null -ne $hookProperty) { return @($hookProperty.Value) }
+    return @($Entry)
+}
+
+function Get-HookEntryFingerprint {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)]$Entry)
+
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = [Text.Encoding]::UTF8.GetBytes((Get-HookEntryText -Entry $Entry))
+        return 'sha256:' + ([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace('-', '').ToLowerInvariant()
+    } finally { $sha.Dispose() }
+}
+
+function Test-HookFingerprint {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)]$Entry, [string[]]$Fingerprints = @())
+
+    if (@($Fingerprints).Count -eq 0) { return $false }
+    $fingerprint = Get-HookEntryFingerprint -Entry $Entry
+    return @($Fingerprints | Where-Object { [string]$_ -eq $fingerprint }).Count -gt 0
+}
 
 function Test-ManagedLineEndingHookEntry {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)]$Entry)
 
-    return (($Entry | ConvertTo-Json -Depth 20 -Compress) -match $script:ManagedLineEndingHookSignaturePattern)
+    return (Get-HookEntryText -Entry $Entry) -match $script:ManagedLineEndingHookSignaturePattern
 }
 
-function Test-ManagedGlobalHookEntry {
+function Test-CurrentManagedNotificationHookEntry {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)]$Entry, [string[]]$ManagedHookFingerprints = @())
+
+    return (Test-HookFingerprint -Entry $Entry -Fingerprints $ManagedHookFingerprints) -or (Get-HookEntryText -Entry $Entry) -match $script:ManagedNotificationHookSignaturePattern
+}
+
+function Test-LegacyManagedNotificationHookEntry {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)]$Entry)
 
-    return (($Entry | ConvertTo-Json -Depth 20 -Compress) -match $script:ManagedGlobalHookSignaturePattern)
+    $text = Get-HookEntryText -Entry $Entry
+    if ($text -match $script:ManagedNotificationHookSignaturePattern) { return $false }
+    if ($text -match $script:LegacyNotificationHookSignaturePattern) { return $true }
+
+    $hasNativeNotifier = $text -match '(?i)(ToastNotificationManager|ToastNotification|BurntToast|NotifyIcon|ShowBalloonTip)'
+    $hasCodexSettingsOwnership = $text -match '(?i)(codex-settings|codexsettings)'
+    $hasCodexHookPath = $text -match '(?i)(\.codex[\\/]+hooks[\\/]+|Join-Path\s+\$HOME)'
+    $hasKnownNotificationText = $text -match '(?i)(CodexSettings|Codex 任務|工作已完成|請回到 Codex|等待(?:權限|回答))'
+    $hasManagedScriptName = $text -match '(?i)(show[-_]?(?:codex|windows|win32|toast|balloon)[-_]?(?:notification|notify|toast|completion|completed)|(?:codex|windows|win32|toast|balloon|completion|completed)[-_]?(?:notification|notify|toast|completion|completed)|notify[-_]?codex)\.ps1'
+    return $hasNativeNotifier -and ($hasCodexSettingsOwnership -or $hasKnownNotificationText -or ($hasCodexHookPath -and $hasManagedScriptName))
 }
 
 function Test-ManagedNotificationHookEntry {
     [CmdletBinding()]
-    param([Parameter(Mandatory = $true)]$Entry)
+    param([Parameter(Mandatory = $true)]$Entry, [string[]]$ManagedHookFingerprints = @())
 
-    return (($Entry | ConvertTo-Json -Depth 20 -Compress) -match $script:ManagedNotificationHookSignaturePattern)
+    return (Test-CurrentManagedNotificationHookEntry -Entry $Entry -ManagedHookFingerprints $ManagedHookFingerprints) -or (Test-LegacyManagedNotificationHookEntry -Entry $Entry)
+}
+
+function Test-ManagedTokenHookEntry {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)]$Entry, [string[]]$ManagedHookFingerprints = @())
+
+    $text = Get-HookEntryText -Entry $Entry
+    return (Test-HookFingerprint -Entry $Entry -Fingerprints $ManagedHookFingerprints) -or $text -match $script:ManagedTokenHookSignaturePattern -or $text -match $script:LegacyTokenHookSignaturePattern
+}
+
+function Test-ManagedGlobalHookEntry {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)]$Entry, [string[]]$ManagedHookFingerprints = @())
+
+    return (Test-HookFingerprint -Entry $Entry -Fingerprints $ManagedHookFingerprints) -or (Test-ManagedNotificationHookEntry -Entry $Entry) -or (Test-ManagedTokenHookEntry -Entry $Entry)
 }
 
 function Get-ManagedHookEntries {
     [CmdletBinding()]
-    param([Parameter(Mandatory = $true)]$Entry, [Parameter(Mandatory = $true)][string]$SignaturePattern)
+    param([Parameter(Mandatory = $true)]$Entry, [Parameter(Mandatory = $true)][string]$SignaturePattern, [scriptblock]$EntryPredicate)
 
-    $hookProperty = $Entry.PSObject.Properties['hooks']
-    if ($null -ne $hookProperty) {
-        return @($hookProperty.Value | Where-Object { (($_ | ConvertTo-Json -Depth 20 -Compress) -match $SignaturePattern) })
+    foreach ($hook in @(Get-HookHandlerEntries -Entry $Entry)) {
+        $matched = if ($null -ne $EntryPredicate) { [bool](& $EntryPredicate $hook) } else { (Get-HookEntryText -Entry $hook) -match $SignaturePattern }
+        if ($matched) { Write-Output $hook }
     }
-    if (($Entry | ConvertTo-Json -Depth 20 -Compress) -match $SignaturePattern) { return @($Entry) }
-    return @()
 }
 
-function Remove-ManagedHookEntriesJson {
+function Remove-HookEntriesJson {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Content,
-        [Parameter(Mandatory = $true)][string]$SignaturePattern
+        [Parameter(Mandatory = $true)][string]$SignaturePattern,
+        [switch]$ManagedGlobal,
+        [switch]$ManagedNotification,
+        [string[]]$ManagedHookFingerprints = @()
     )
 
     if ([string]::IsNullOrWhiteSpace($Content)) { return '' }
@@ -53,12 +127,22 @@ function Remove-ManagedHookEntriesJson {
         foreach ($group in @($property.Value)) {
             $hookProperty = $group.PSObject.Properties['hooks']
             if ($null -ne $hookProperty) {
-                $keptHooks = @($hookProperty.Value | Where-Object { (($_ | ConvertTo-Json -Depth 20 -Compress) -notmatch $SignaturePattern) })
+                $keptHooks = New-Object 'System.Collections.Generic.List[object]'
+                foreach ($hook in @($hookProperty.Value)) {
+                    $remove = if ($ManagedGlobal) {
+                        Test-ManagedGlobalHookEntry -Entry $hook -ManagedHookFingerprints $ManagedHookFingerprints
+                    } elseif ($ManagedNotification) {
+                        Test-ManagedNotificationHookEntry -Entry $hook -ManagedHookFingerprints $ManagedHookFingerprints
+                    } else {
+                        (Get-HookEntryText -Entry $hook) -match $SignaturePattern
+                    }
+                    if (-not $remove) { [void]$keptHooks.Add($hook) }
+                }
                 if ($keptHooks.Count -gt 0) {
-                    $group | Add-Member -NotePropertyName hooks -NotePropertyValue $keptHooks -Force
+                    $group | Add-Member -NotePropertyName hooks -NotePropertyValue $keptHooks.ToArray() -Force
                     [void]$keptGroups.Add($group)
                 }
-            } elseif (($group | ConvertTo-Json -Depth 20 -Compress) -notmatch $SignaturePattern) {
+            } elseif (-not (if ($ManagedGlobal) { Test-ManagedGlobalHookEntry -Entry $group -ManagedHookFingerprints $ManagedHookFingerprints } elseif ($ManagedNotification) { Test-ManagedNotificationHookEntry -Entry $group -ManagedHookFingerprints $ManagedHookFingerprints } else { (Get-HookEntryText -Entry $group) -match $SignaturePattern })) {
                 [void]$keptGroups.Add($group)
             }
         }
@@ -68,11 +152,28 @@ function Remove-ManagedHookEntriesJson {
     return ($object | ConvertTo-Json -Depth 30)
 }
 
+function Remove-ManagedHookEntriesJson {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Content,
+        [Parameter(Mandatory = $true)][string]$SignaturePattern
+    )
+
+    return Remove-HookEntriesJson -Content $Content -SignaturePattern $SignaturePattern
+}
+
 function Remove-ManagedNotificationHooksJson {
     [CmdletBinding()]
-    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Content)
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Content, [string[]]$ManagedHookFingerprints = @())
 
-    return Remove-ManagedHookEntriesJson -Content $Content -SignaturePattern $script:ManagedNotificationHookSignaturePattern
+    return Remove-HookEntriesJson -Content $Content -SignaturePattern $script:ManagedNotificationHookSignaturePattern -ManagedNotification -ManagedHookFingerprints $ManagedHookFingerprints
+}
+
+function Remove-ManagedGlobalHooksJson {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Content, [string[]]$ManagedHookFingerprints = @())
+
+    return Remove-HookEntriesJson -Content $Content -SignaturePattern $script:ManagedGlobalHookSignaturePattern -ManagedGlobal -ManagedHookFingerprints $ManagedHookFingerprints
 }
 
 function Remove-ManagedLineEndingHooksJson {
@@ -82,11 +183,86 @@ function Remove-ManagedLineEndingHooksJson {
     return Remove-ManagedHookEntriesJson -Content $Content -SignaturePattern $script:ManagedLineEndingHookSignaturePattern
 }
 
-function Remove-ManagedGlobalHooksJson {
+function Get-ManifestManagedHookFingerprints {
     [CmdletBinding()]
-    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Content)
+    param($Manifest, [ValidateSet('All', 'Notification', 'Token', 'LineEnding')][string]$Kind = 'All')
 
-    return Remove-ManagedHookEntriesJson -Content $Content -SignaturePattern $script:ManagedGlobalHookSignaturePattern
+    $fingerprints = New-Object 'System.Collections.Generic.List[string]'
+    if ($null -eq $Manifest -or $null -eq $Manifest.ManagedHooks) { return $fingerprints.ToArray() }
+    $containers = New-Object 'System.Collections.Generic.List[object]'
+    if ($Kind -eq 'All') {
+        [void]$containers.Add($Manifest.ManagedHooks)
+        foreach ($name in @('notification', 'token', 'lineEnding')) {
+            $property = $Manifest.ManagedHooks.PSObject.Properties[$name]
+            if ($null -ne $property) { [void]$containers.Add($property.Value) }
+        }
+    } else {
+        $propertyName = $Kind.Substring(0, 1).ToLowerInvariant() + $Kind.Substring(1)
+        $property = $Manifest.ManagedHooks.PSObject.Properties[$propertyName]
+        if ($null -ne $property) { [void]$containers.Add($property.Value) }
+    }
+    foreach ($container in $containers.ToArray()) {
+        $handlerProperty = $container.PSObject.Properties['handlers']
+        if ($null -eq $handlerProperty) { continue }
+        foreach ($handler in @($handlerProperty.Value)) {
+            $fingerprint = [string]$handler.fingerprint
+            if (-not [string]::IsNullOrWhiteSpace($fingerprint) -and -not $fingerprints.Contains($fingerprint)) { [void]$fingerprints.Add($fingerprint) }
+        }
+    }
+    return $fingerprints.ToArray()
+}
+
+function Get-ManagedHookHandlerId([string]$EventName, $Entry) {
+    if (Test-ManagedNotificationHookEntry -Entry $Entry) {
+        switch ($EventName) {
+            'PreToolUse' { return 'question-toast' }
+            'PermissionRequest' { return 'permission-toast' }
+            'Stop' { return 'completed-token-toast' }
+            default { return 'notification-toast' }
+        }
+    }
+    if (Test-ManagedTokenHookEntry -Entry $Entry) { return 'legacy-token-usage' }
+    if (Test-ManagedLineEndingHookEntry -Entry $Entry) { return 'line-ending-' + $EventName.ToLowerInvariant() }
+    return $null
+}
+
+function Get-ManagedHooksManifest {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    $handlers = New-Object 'System.Collections.Generic.List[object]'
+    $notificationHandlers = New-Object 'System.Collections.Generic.List[object]'
+    $tokenHandlers = New-Object 'System.Collections.Generic.List[object]'
+    $lineEndingHandlers = New-Object 'System.Collections.Generic.List[object]'
+    $hooksPath = Join-Path $Root 'hooks.json'
+    if (Test-Path -LiteralPath $hooksPath -PathType Leaf) {
+        $hooksObject = Get-Content -LiteralPath $hooksPath -Raw | ConvertFrom-Json -ErrorAction Stop
+        if ($null -ne $hooksObject.hooks) {
+            foreach ($property in @($hooksObject.hooks.PSObject.Properties)) {
+                foreach ($group in @($property.Value)) {
+                    foreach ($entry in @(Get-HookHandlerEntries -Entry $group)) {
+                        $handlerId = Get-ManagedHookHandlerId -EventName $property.Name -Entry $entry
+                        if ([string]::IsNullOrWhiteSpace($handlerId)) { continue }
+                        $managedId = if ($handlerId -eq 'completed-token-toast' -or $handlerId -match 'toast') { $script:ManagedNotificationId } else { $script:ManagedHookManifestId }
+                        $managedVersion = if ($managedId -eq $script:ManagedNotificationId) { $script:ManagedNotificationVersion } else { $script:ManagedHookManifestVersion }
+                        $record = [ordered]@{ event = $property.Name; handlerId = $handlerId; managedId = $managedId; managedVersion = $managedVersion; fingerprint = Get-HookEntryFingerprint -Entry $entry }
+                        [void]$handlers.Add([pscustomobject]$record)
+                        if ($handlerId -match 'toast') { [void]$notificationHandlers.Add([pscustomobject]$record) }
+                        elseif ($handlerId -eq 'legacy-token-usage') { [void]$tokenHandlers.Add([pscustomobject]$record) }
+                        else { [void]$lineEndingHandlers.Add([pscustomobject]$record) }
+                    }
+                }
+            }
+        }
+    }
+    return [ordered]@{
+        managedId = $script:ManagedHookManifestId
+        managedVersion = $script:ManagedHookManifestVersion
+        handlers = $handlers.ToArray()
+        notification = [ordered]@{ managedId = $script:ManagedNotificationId; managedVersion = $script:ManagedNotificationVersion; handlers = $notificationHandlers.ToArray() }
+        token = [ordered]@{ handlers = $tokenHandlers.ToArray() }
+        lineEnding = [ordered]@{ handlers = $lineEndingHandlers.ToArray() }
+    }
 }
 
 function Merge-HooksJson {
@@ -94,13 +270,14 @@ function Merge-HooksJson {
     param(
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ExistingContent,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$TemplateContent,
-        [switch]$RemoveManagedGlobalHooks
+        [switch]$RemoveManagedGlobalHooks,
+        [string[]]$ManagedHookFingerprints = @()
     )
 
     $existing = if ([string]::IsNullOrWhiteSpace($ExistingContent)) { [pscustomobject]@{ hooks = [pscustomobject]@{} } } else { $ExistingContent | ConvertFrom-Json -ErrorAction Stop }
     if ($null -eq $existing.hooks) { $existing | Add-Member -NotePropertyName hooks -NotePropertyValue ([pscustomobject]@{}) -Force }
     if ($RemoveManagedGlobalHooks) {
-        $existing = (Remove-ManagedGlobalHooksJson -Content ($existing | ConvertTo-Json -Depth 30)) | ConvertFrom-Json -ErrorAction Stop
+        $existing = (Remove-ManagedGlobalHooksJson -Content ($existing | ConvertTo-Json -Depth 30) -ManagedHookFingerprints $ManagedHookFingerprints) | ConvertFrom-Json -ErrorAction Stop
     }
     $template = $TemplateContent | ConvertFrom-Json -ErrorAction Stop
     foreach ($property in @($template.hooks.PSObject.Properties)) {

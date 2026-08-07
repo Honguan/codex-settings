@@ -1,14 +1,18 @@
 function Install-Target($Target, $Transaction, [switch]$Force) {
     if (-not (Test-Path -LiteralPath $Target.Template -PathType Container)) { throw "找不到範本：$($Target.Template)" }
     New-Item -ItemType Directory -Path $Target.Root -Force | Out-Null
+    $previous = Get-Manifest $Target.Root
+    $managedNotificationFingerprints = @(Get-ManifestManagedHookFingerprints -Manifest $previous -Kind Notification)
+    $managedTokenFingerprints = @(Get-ManifestManagedHookFingerprints -Manifest $previous -Kind Token)
+    $managedHookFingerprints = @($managedNotificationFingerprints + $managedTokenFingerprints)
     $projectRoot = $null
     if ($Target.Mode -eq 'Global') {
         Remove-GlobalLineEndingHooks -Root $Target.Root -Transaction $Transaction
+        Remove-ManagedGlobalNotificationHooks -Root $Target.Root -Transaction $Transaction -ManagedHookFingerprints $managedHookFingerprints
         $targetCwd = if ($Target.PSObject.Properties.Name -contains 'Cwd') { [string]$Target.Cwd } else { (Get-Location).Path }
         $projectRoot = Find-CvsProjectRoot -StartPath $targetCwd
-        if (-not [string]::IsNullOrWhiteSpace($projectRoot)) { Remove-ManagedProjectHooks -StartPath $projectRoot -Transaction $Transaction -KeepCvsLineEndingHooks:($Target.DevelopmentEnvironment -eq 'CVS') | Out-Null }
+        if (-not [string]::IsNullOrWhiteSpace($projectRoot)) { Remove-ManagedProjectHooks -StartPath $projectRoot -Transaction $Transaction -KeepCvsLineEndingHooks:($Target.DevelopmentEnvironment -eq 'CVS') -ManagedHookFingerprints $managedHookFingerprints | Out-Null }
     }
-    $previous = Get-Manifest $Target.Root
     $entries = New-Object 'System.Collections.Generic.List[object]'
     $templatePaths = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
 
@@ -54,7 +58,7 @@ function Install-Target($Target, $Transaction, [switch]$Force) {
                 }
                 'managed-hooks' {
                     $withoutLineEndingHooks = Remove-ManagedLineEndingHooksJson -Content $existing
-                    $merged = Merge-HooksJson -ExistingContent $withoutLineEndingHooks -TemplateContent $template -RemoveManagedGlobalHooks
+                    $merged = Merge-HooksJson -ExistingContent $withoutLineEndingHooks -TemplateContent $template -RemoveManagedGlobalHooks -ManagedHookFingerprints $managedHookFingerprints
                 }
             }
             if ($isOptionalFeatureConfig) { $merged = Add-DefaultModeRequestUserInputFeature -Content $merged -NewLine $state.NewLine }
@@ -96,7 +100,7 @@ function Install-Target($Target, $Transaction, [switch]$Force) {
         }
     }
 
-    if ($Target.Mode -eq 'Global') { Assert-GlobalLineEndingHook -DevelopmentEnvironment $Target.DevelopmentEnvironment -Root $Target.Root -InstallWindowsNotifications ([bool]$Target.InstallWindowsNotifications) -ProjectRoot $projectRoot | Out-Null }
+    if ($Target.Mode -eq 'Global') { Assert-GlobalLineEndingHook -DevelopmentEnvironment $Target.DevelopmentEnvironment -Root $Target.Root -InstallWindowsNotifications ([bool]$Target.InstallWindowsNotifications) -ProjectRoot $projectRoot -ManagedNotificationFingerprints $managedNotificationFingerprints -ManagedTokenFingerprints $managedTokenFingerprints | Out-Null }
 
     return [pscustomobject]@{ Mode = $Target.Mode; DevelopmentEnvironment = $Target.DevelopmentEnvironment; Root = $Target.Root; Previous = $previous; Files = $entries.ToArray() }
 }
@@ -147,6 +151,7 @@ function Write-Manifest($Result, $Transaction, $External) {
         TargetRoot = $Result.Root
         Files = $Result.Files
     }
+    if ($Result.Mode -eq 'Global') { $manifest.ManagedHooks = Get-ManagedHooksManifest -Root $Result.Root }
     if ($null -ne $External) { $manifest.External = $External }
     Write-JsonFileAtomic -Path $path -Value $manifest -Depth 14
 }

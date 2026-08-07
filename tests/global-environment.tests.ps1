@@ -56,6 +56,14 @@ try {
                         [ordered]@{
                             type = 'command'
                             command = 'pwsh -File ~/.codex/hooks/normalize-cvs-crlf.ps1'
+                        },
+                        [ordered]@{
+                            type = 'command'
+                            command = 'pwsh -Command "& { [void][Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier(''CodexSettings'') } # C:\\old\\.codex\\hooks\\legacy-completion-notification.ps1"'
+                        },
+                        [ordered]@{
+                            type = 'command'
+                            command = 'pwsh -Command "& { [void][Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier(''UserApp'') } # .codex/hooks/user-toast.ps1"'
                         }
                     )
                 }
@@ -66,6 +74,8 @@ try {
     $obsoleteHookScript = Join-Path $globalRoot 'hooks\normalize-cvs-crlf.ps1'
     New-Item -ItemType Directory -Path (Split-Path -Parent $obsoleteHookScript) -Force | Out-Null
     [IO.File]::WriteAllText($obsoleteHookScript, '# obsolete hook', [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText((Join-Path $globalRoot 'hooks\legacy-completion-notification.ps1'), '# legacy notification', [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText((Join-Path $globalRoot 'hooks\user-toast.ps1'), '# user notification', [Text.UTF8Encoding]::new($false))
     $legacyAgents = [IO.File]::ReadAllText((Join-Path $script:ScriptRoot 'templates\core\AGENTS.md')).TrimEnd()
     $legacyAgents = $legacyAgents.Replace(
         '- Preserve existing architecture, coding style, naming, and structure unless current requirements change them.',
@@ -98,6 +108,8 @@ try {
     if ($agents -match 'and backward compatibility\.') { throw 'Safe merge did not update a legacy AGENTS.md section.' }
     $installedHooks = Get-Content -LiteralPath (Join-Path $globalRoot 'hooks.json') -Raw | ConvertFrom-Json
     if (@($installedHooks.hooks.SessionStart).Count -ne 1) { throw 'CVS installation did not preserve the unmanaged user hook.' }
+    if (@($installedHooks.hooks.Stop | ForEach-Object { @($_.hooks) } | Where-Object { (Get-HookEntryText -Entry $_) -match 'user-toast\.ps1' }).Count -ne 1) { throw 'CVS installation removed an unrelated user Toast Hook.' }
+    if (Test-Path -LiteralPath (Join-Path $globalRoot 'hooks\legacy-completion-notification.ps1')) { throw 'CVS installation retained a legacy completion notification script.' }
     if (@($installedHooks.hooks.PreToolUse | Where-Object { Test-ManagedLineEndingHookEntry $_ }).Count -ne 1 -or @($installedHooks.hooks.PostToolUse | Where-Object { Test-ManagedLineEndingHookEntry $_ }).Count -ne 1 -or @($installedHooks.hooks.Stop | Where-Object { Test-ManagedLineEndingHookEntry $_ }).Count -ne 1) { throw 'CVS installation did not install one Track, Restore, and Finalize hook.' }
     if (@($installedHooks.hooks.PreToolUse | Where-Object { Test-ManagedNotificationHookEntry $_ }).Count -ne 1 -or @($installedHooks.hooks.PermissionRequest | Where-Object { Test-ManagedNotificationHookEntry $_ }).Count -ne 1 -or @($installedHooks.hooks.Stop | Where-Object { Test-ManagedNotificationHookEntry $_ }).Count -ne 1) { throw 'CVS installation did not install one notification hook per supported event.' }
     if (Test-Path -LiteralPath (Join-Path $globalRoot 'hooks\normalize-cvs-crlf.ps1')) { throw 'CVS installation retained an obsolete CRLF conversion script.' }
@@ -125,6 +137,8 @@ try {
             Stop = @([ordered]@{ hooks = @(
                 [ordered]@{ type = 'command'; command = 'pwsh -File .codex/hooks/show-codex-notification.ps1 -Type Completed' },
                 [ordered]@{ type = 'command'; command = 'pwsh -File .codex/hooks/show-turn-token-usage.ps1' },
+                [ordered]@{ type = 'command'; command = 'pwsh -Command "& { [void][Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier(''CodexSettings'') } # C:\\old\\.codex\\hooks\\legacy-completion-notification.ps1"' },
+                [ordered]@{ type = 'command'; command = 'pwsh -Command "& { [void][Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier(''UserApp'') } # .codex/hooks/user-toast.ps1"' },
                 [ordered]@{ type = 'command'; command = 'pwsh -File .codex/hooks/preserve-line-endings.ps1 -Mode Finalize' },
                 [ordered]@{ type = 'command'; command = 'custom-project-stop.ps1' }
             ) })
@@ -135,11 +149,13 @@ try {
         }
     }
     Write-JsonFileAtomic -Path (Join-Path $projectCodex 'hooks.json') -Value $projectHooks -Depth 10
-    foreach ($scriptName in @('crlf-updated-files.ps1', 'normalize-cvs-crlf.ps1', 'preserve-line-endings.ps1', 'show-turn-token-usage.ps1', 'show-codex-notification.ps1')) {
+    foreach ($scriptName in @('crlf-updated-files.ps1', 'normalize-cvs-crlf.ps1', 'preserve-line-endings.ps1', 'show-turn-token-usage.ps1', 'show-codex-notification.ps1', 'legacy-completion-notification.ps1')) {
         [IO.File]::WriteAllText((Join-Path $projectCodex ("hooks\$scriptName")), '# managed legacy hook', [Text.UTF8Encoding]::new($false))
     }
     $customProjectScript = Join-Path $projectCodex 'hooks\custom-project-stop.ps1'
     [IO.File]::WriteAllText($customProjectScript, '# user custom hook', [Text.UTF8Encoding]::new($false))
+    $customProjectToastScript = Join-Path $projectCodex 'hooks\user-toast.ps1'
+    [IO.File]::WriteAllText($customProjectToastScript, '# user custom notification hook', [Text.UTF8Encoding]::new($false))
     Install-TestEnvironment -Environment CVS -Cwd $projectRoot
     $projectHooksAfter = Get-Content -LiteralPath (Join-Path $projectCodex 'hooks.json') -Raw | ConvertFrom-Json
     $projectNotificationCount = @($projectHooksAfter.hooks.Stop | Where-Object { $null -ne $_ -and (Test-ManagedNotificationHookEntry $_) }).Count
@@ -147,13 +163,19 @@ try {
     $projectStopLineCount = @($projectHooksAfter.hooks.Stop | Where-Object { $null -ne $_ -and (Test-ManagedLineEndingHookEntry $_) }).Count
     if ($projectNotificationCount -ne 0 -or $projectPostLineCount -ne 1 -or $projectStopLineCount -ne 1) { throw "CVS 專案更新未清理受管理的重複 Hook：notification=$projectNotificationCount post=$projectPostLineCount stop=$projectStopLineCount" }
     $projectCheck = Assert-GlobalLineEndingHook -DevelopmentEnvironment CVS -Root $globalRoot -InstallWindowsNotifications $true -ProjectRoot $projectRoot
-    if ($projectCheck.GlobalNotificationStopHookCount -ne 1 -or $projectCheck.ProjectNotificationStopHookCount -ne 0 -or $projectCheck.ProjectLineEndingPostToolUseHookCount -ne 1 -or $projectCheck.ProjectLineEndingStopHookCount -notin @(0, 1) -or $projectCheck.LegacyCrlfHookCount -ne 0 -or $projectCheck.LegacyTokenHookCount -ne 0 -or $projectCheck.DuplicateManagedHookCount -ne 0 -or -not $projectCheck.DetachedToastCleanup) { throw 'CVS 專案 Hook 自檢結果不符合 Issue #17 驗收條件。' }
+    if ($projectCheck.GlobalNotificationStopHookCount -ne 1 -or $projectCheck.ProjectNotificationStopHookCount -ne 0 -or $projectCheck.EffectiveCompletedNotificationHookCount -ne 1 -or $projectCheck.LegacyCompletedNotificationHookCount -ne 0 -or $projectCheck.StandaloneTokenUsageHookCount -ne 0 -or $projectCheck.ProjectLineEndingPostToolUseHookCount -ne 1 -or $projectCheck.ProjectLineEndingStopHookCount -notin @(0, 1) -or $projectCheck.ProjectLineEndingFinalizeHookCount -ne $projectCheck.ProjectLineEndingStopHookCount -or $projectCheck.LegacyCrlfHookCount -ne 0 -or $projectCheck.LegacyTokenHookCount -ne 0 -or $projectCheck.DuplicateManagedHookCount -ne 0 -or -not $projectCheck.DetachedToastCleanup) { throw 'CVS 專案 Hook 自檢結果不符合 Issue #18 驗收條件。' }
     if (-not (Test-Path -LiteralPath $customProjectScript -PathType Leaf)) { throw 'CVS 專案更新誤刪使用者自訂 Hook。' }
+    if (-not (Test-Path -LiteralPath $customProjectToastScript -PathType Leaf) -or @($projectHooksAfter.hooks.Stop | ForEach-Object { @($_.hooks) } | Where-Object { (Get-HookEntryText -Entry $_) -match 'user-toast\.ps1' }).Count -ne 1) { throw 'CVS 專案更新誤刪使用者自訂 Toast Hook。' }
     foreach ($scriptName in @('crlf-updated-files.ps1', 'normalize-cvs-crlf.ps1', 'preserve-line-endings.ps1', 'show-turn-token-usage.ps1', 'show-codex-notification.ps1')) {
         if (Test-Path -LiteralPath (Join-Path $projectCodex ("hooks\$scriptName"))) { throw "CVS 專案更新保留舊受管理腳本：$scriptName" }
     }
+    if (Test-Path -LiteralPath (Join-Path $projectCodex 'hooks\legacy-completion-notification.ps1')) { throw 'CVS 專案更新保留舊完成通知腳本。' }
 
     Install-TestEnvironment -Environment Git
+    $manifest = Get-Manifest $globalRoot
+    if ($manifest.ManagedHooks.managedId -ne 'codex-settings' -or [int]$manifest.ManagedHooks.managedVersion -ne 3 -or $manifest.ManagedHooks.notification.managedId -ne 'codex-settings-notification' -or [int]$manifest.ManagedHooks.notification.managedVersion -ne 3) { throw '安裝 manifest 缺少通知 managedId/managedVersion。' }
+    $completedManifestHandlers = @($manifest.ManagedHooks.notification.handlers | Where-Object { $_.event -eq 'Stop' -and $_.handlerId -eq 'completed-token-toast' })
+    if ($completedManifestHandlers.Count -ne 1 -or [string]::IsNullOrWhiteSpace([string]$completedManifestHandlers[0].fingerprint)) { throw '安裝 manifest 未記錄唯一完成通知 Handler fingerprint。' }
     $agents = Get-Content -LiteralPath (Join-Path $globalRoot 'AGENTS.md') -Raw
     $rules = Get-Content -LiteralPath (Join-Path $globalRoot 'rules\default.rules') -Raw
     $config = Get-Content -LiteralPath (Join-Path $globalRoot 'config.toml') -Raw
@@ -163,7 +185,7 @@ try {
     if ($config -notmatch 'project_root_markers = \["\.git", "CVS"\]' -or $config -match '\.codex-root') { throw 'Global project root markers are invalid.' }
     if ((Get-DefaultDevelopmentEnvironment -Root $globalRoot) -ne 'Git') { throw 'Git was not recorded as the default project system.' }
     $installedHooks = Get-Content -LiteralPath (Join-Path $globalRoot 'hooks.json') -Raw | ConvertFrom-Json
-    if (@($installedHooks.hooks.SessionStart).Count -ne 1 -or @($installedHooks.hooks.PreToolUse).Count -ne 1 -or @($installedHooks.hooks.PermissionRequest).Count -ne 1 -or @($installedHooks.hooks.Stop).Count -ne 1 -or $installedHooks.hooks.PSObject.Properties.Name -contains 'PostToolUse') { throw 'Git installation did not preserve the global hooks.' }
+    if (@($installedHooks.hooks.SessionStart).Count -ne 1 -or @($installedHooks.hooks.PreToolUse).Count -ne 1 -or @($installedHooks.hooks.PermissionRequest).Count -ne 1 -or @($installedHooks.hooks.Stop | Where-Object { Test-ManagedNotificationHookEntry $_ }).Count -ne 1 -or $installedHooks.hooks.PSObject.Properties.Name -contains 'PostToolUse') { throw 'Git installation did not preserve the global hooks.' }
     if (-not (Test-ManagedNotificationHookEntry $installedHooks.hooks.PreToolUse[0]) -or -not (Test-ManagedNotificationHookEntry $installedHooks.hooks.PermissionRequest[0]) -or @($installedHooks.hooks.Stop | Where-Object { Test-ManagedNotificationHookEntry $_ }).Count -ne 1) { throw 'Git notification hooks are invalid.' }
     if (-not (Test-Path -LiteralPath (Join-Path $globalRoot 'hooks\show-codex-notification.ps1') -PathType Leaf)) { throw 'Git installation omitted the global notification script.' }
     $notificationScriptBytes = [IO.File]::ReadAllBytes((Join-Path $globalRoot 'hooks\show-codex-notification.ps1'))
@@ -178,7 +200,7 @@ try {
     if ([regex]::Matches($rules, 'CVS project rules supplement').Count -ne 1 -or [regex]::Matches($rules, 'Git project rules supplement').Count -ne 0) { throw 'CVS rules contain duplicate or conflicting project-type settings.' }
     $installedHooks = Get-Content -LiteralPath (Join-Path $globalRoot 'hooks.json') -Raw | ConvertFrom-Json
     if (@($installedHooks.hooks.SessionStart).Count -ne 1) { throw 'CVS installation did not preserve the unmanaged user hook.' }
-    if (@($installedHooks.hooks.PreToolUse).Count -ne 2 -or @($installedHooks.hooks.PermissionRequest).Count -ne 1 -or @($installedHooks.hooks.PostToolUse).Count -ne 1 -or @($installedHooks.hooks.Stop).Count -ne 2) { throw 'Repeated CVS installation duplicated or omitted managed hooks.' }
+    if (@($installedHooks.hooks.PreToolUse).Count -ne 2 -or @($installedHooks.hooks.PermissionRequest).Count -ne 1 -or @($installedHooks.hooks.PostToolUse).Count -ne 1 -or @($installedHooks.hooks.Stop | Where-Object { Test-ManagedNotificationHookEntry $_ }).Count -ne 1) { throw 'Repeated CVS installation duplicated or omitted managed hooks.' }
     if (@($installedHooks.hooks.PreToolUse | Where-Object { Test-ManagedLineEndingHookEntry $_ }).Count -ne 1 -or @($installedHooks.hooks.PostToolUse | Where-Object { Test-ManagedLineEndingHookEntry $_ }).Count -ne 1 -or @($installedHooks.hooks.Stop | Where-Object { Test-ManagedLineEndingHookEntry $_ }).Count -ne 1) { throw 'Repeated CVS installation duplicated or omitted the line-ending protection hooks.' }
     if (@($installedHooks.hooks.PreToolUse | Where-Object { Test-ManagedNotificationHookEntry $_ }).Count -ne 1 -or @($installedHooks.hooks.PermissionRequest | Where-Object { Test-ManagedNotificationHookEntry $_ }).Count -ne 1 -or @($installedHooks.hooks.Stop | Where-Object { Test-ManagedNotificationHookEntry $_ }).Count -ne 1) { throw 'Repeated CVS installation duplicated or omitted the global notification hooks.' }
     if (-not (Test-Path -LiteralPath (Join-Path $script:ScriptRoot 'templates\environments\cvs\hooks.json')) -or -not (Test-Path -LiteralPath (Join-Path $script:ScriptRoot 'templates\environments\cvs\hooks\preserve-line-endings.ps1'))) { throw 'CVS line-ending hook templates are missing.' }

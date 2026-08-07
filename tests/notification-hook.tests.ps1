@@ -55,7 +55,7 @@ try {
     $notificationSource = Get-Content -LiteralPath $hookScript -Raw
     $notificationBytes = [IO.File]::ReadAllBytes($hookScript)
     if ($notificationBytes.Length -lt 3 -or $notificationBytes[0] -ne 0xEF -or $notificationBytes[1] -ne 0xBB -or $notificationBytes[2] -ne 0xBF) { throw '通知腳本必須使用 UTF-8 BOM，以便 Windows PowerShell 5.1 正確解析。' }
-    foreach ($expected in @('duration="long"', 'scenario="urgent"', 'ConvertTo-ToastVisualXml', '<group>', 'hint-align="right"', 'hint-maxLines="1"', 'ToastNotificationPriority', 'ExpirationTime', 'WindowStyle =', 'UseShellExecute = $false', 'CreateNoWindow = $true', 'RedirectStandardInput', 'RedirectStandardOutput', 'RedirectStandardError', 'ToastLifetimeSeconds = 60', 'PreviousToastLifetimeSeconds = 60', 'Start-Sleep -Seconds $DelaySeconds', 'active-toast.json', 'History.Remove', 'powershell.exe', 'NativeToast', 'Invoke-WithNamedMutex')) {
+    foreach ($expected in @('duration="long"', 'scenario="urgent"', 'ConvertTo-ToastVisualXml', '<group>', 'hint-align="right"', 'hint-maxLines="1"', 'ToastNotificationPriority', 'ExpirationTime', 'WindowStyle =', 'UseShellExecute = $false', 'CreateNoWindow = $true', 'RedirectStandardInput', 'RedirectStandardOutput', 'RedirectStandardError', 'ToastLifetimeSeconds = 60', 'PreviousToastLifetimeSeconds = 60', 'Start-Sleep -Seconds $DelaySeconds', 'active-toast.json', 'claims', 'Acquire-NotificationClaim', 'state = ''showing''', 'shownAt', 'History.Remove', 'powershell.exe', 'NativeToast', 'Invoke-WithNamedMutex', 'nativeToastShown', 'fallbackAttempted', 'cleanupScheduled')) {
         if ($notificationSource -notmatch [regex]::Escape($expected)) { throw "Toast 設定缺少：$expected" }
     }
 
@@ -93,8 +93,10 @@ Get-Content -LiteralPath $env:CODEX_SETTINGS_CCSESSIONS_SNAPSHOT -Raw
         if (-not $realtimeNotification.message.Contains($expected)) { throw "即時 Token 用量未正確整合到完成通知：$expected" }
     }
     if (@($realtimeNotification.message -split '\r?\n').Count -ne 5 -or $realtimeNotification.title -ne 'Codex 任務完成') { throw '完成通知不是固定五行格式。' }
+    $realtimeClaim = @(Get-ChildItem -LiteralPath (Join-Path $notificationRoot 'claims') -Filter '*.json' | ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw | ConvertFrom-Json } | Where-Object { $_.sessionId -eq $sessionRealtime -and $_.turnId -eq 'turn-realtime' -and $_.type -eq 'Completed' })[0]
+    if ($null -eq $realtimeClaim -or $realtimeClaim.state -ne 'shown' -or $realtimeClaim.handlerId -ne 'completed-token-toast' -or [string]::IsNullOrWhiteSpace([string]$realtimeClaim.shownAt)) { throw 'Completed 通知未建立 shown 狀態的 exactly-once Claim。' }
     $realtimeDiagnostic = Get-Content -LiteralPath (Join-Path $diagnosticRoot ($sessionRealtime + '.log')) -Raw | ConvertFrom-Json
-    foreach ($field in @('timestamp', 'hookSource', 'hookCommand', 'processId', 'parentProcessId', 'startTime', 'endTime', 'elapsedMs', 'exitCode', 'GlobalStopHookCount', 'EffectiveStopHookCount', 'NotificationInvocationCount', 'CrlfInvocationCount')) {
+    foreach ($field in @('timestamp', 'hookSource', 'hookCommand', 'processId', 'parentProcessId', 'startTime', 'endTime', 'elapsedMs', 'exitCode', 'handlerId', 'claimState', 'nativeToastAttempted', 'nativeToastShown', 'fallbackAttempted', 'fallbackShown', 'cleanupScheduled', 'stopKind', 'invocationSource', 'GlobalStopHookCount', 'EffectiveStopHookCount', 'NotificationInvocationCount', 'CrlfInvocationCount')) {
         if ($realtimeDiagnostic.PSObject.Properties.Name -notcontains $field) { throw "通知診斷缺少欄位：$field" }
     }
     if ($realtimeDiagnostic.handler -ne 'windows-notification' -or $realtimeDiagnostic.result -ne 'success' -or $realtimeDiagnostic.details -notmatch 'source=realtime' -or $realtimeDiagnostic.hookSource -ne 'global' -or $realtimeDiagnostic.NotificationInvocationCount -ne 1 -or $realtimeDiagnostic.CrlfInvocationCount -ne 0) {

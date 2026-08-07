@@ -122,12 +122,13 @@ try {
     Invoke-Hook -Mode Restore -SessionId $sessionA -InputText $postInput | Out-Null
     if (-not (Test-Path -LiteralPath $statePathA -PathType Leaf)) { throw 'PostToolUse 過早清理 session 狀態檔。' }
     $restoreDiagnostic = @(Get-Content -LiteralPath (Join-Path $diagnosticRoot 'session-A.log') | ForEach-Object { $_ | ConvertFrom-Json }) | Where-Object { $_.mode -eq 'Restore' } | Select-Object -Last 1
-    foreach ($field in @('timestamp', 'hookSource', 'hookCommand', 'processId', 'parentProcessId', 'startTime', 'endTime', 'elapsedMs', 'exitCode', 'GlobalPostToolUseHookCount', 'EffectivePostToolUseHookCount', 'NotificationInvocationCount', 'CrlfInvocationCount')) {
+    foreach ($field in @('timestamp', 'hookSource', 'hookCommand', 'processId', 'parentProcessId', 'startTime', 'endTime', 'elapsedMs', 'exitCode', 'stopKind', 'GlobalPostToolUseHookCount', 'EffectivePostToolUseHookCount', 'NotificationInvocationCount', 'CrlfInvocationCount')) {
         if ($restoreDiagnostic.PSObject.Properties.Name -notcontains $field) { throw "換行診斷缺少欄位：$field" }
     }
     if ($restoreDiagnostic.event -ne 'PostToolUse' -or $restoreDiagnostic.handler -ne 'preserve-line-endings' -or $restoreDiagnostic.result -ne 'success' -or $restoreDiagnostic.changedFileCount -ne 7 -or @($restoreDiagnostic.changedFiles).Count -ne 7 -or $restoreDiagnostic.CrlfInvocationCount -ne 1 -or $restoreDiagnostic.EffectivePostToolUseHookCount -ne 1) {
         throw '換行 Hook 未寫入可診斷的還原紀錄。'
     }
+    if ($restoreDiagnostic.stopKind -ne 'line-ending-restore') { throw 'CVS 換行 Hook 未標記 line-ending-restore 類型。' }
 
     Assert-Bytes 'crlf.txt' ([Text.Encoding]::ASCII.GetBytes("before`r`nend`r`nadded1`r`nadded2`r`nadded3`r`n"))
     Assert-Bytes 'lf.txt' ([Text.Encoding]::ASCII.GetBytes("before`nend`nadded1`nadded2`nadded3`n"))
@@ -171,6 +172,8 @@ try {
     } | ConvertTo-Json -Compress
     $malformedStopInput = $malformedStopInput.Replace('\"activity_config.php\"', '"activity_config.php"')
     Invoke-Hook -Mode Finalize -SessionId $sessionA -InputText $malformedStopInput | Out-Null
+    $finalizeDiagnostic = @(Get-Content -LiteralPath (Join-Path $diagnosticRoot 'session-A.log') | ForEach-Object { $_ | ConvertFrom-Json }) | Where-Object { $_.mode -eq 'Finalize' } | Select-Object -Last 1
+    if ($finalizeDiagnostic.stopKind -ne 'line-ending-finalize') { throw 'CVS Finalize Hook 未標記 line-ending-finalize 類型。' }
     if (Test-Path -LiteralPath $statePathA) { throw 'Stop Hook 未清理完成的 session 狀態檔。' }
     if (-not (Test-Path -LiteralPath $statePathB)) { throw 'Stop Hook 誤刪其他 session 狀態檔。' }
 

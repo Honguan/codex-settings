@@ -280,6 +280,7 @@ function Write-HookDiagnostic($InputObject, [string]$Result, [string[]]$ChangedF
             timestamp = [DateTimeOffset]::Now.ToString('o')
             event = if ($null -eq $InputObject) { $Mode } else { [string]$InputObject.hook_event_name }
             handler = 'preserve-line-endings'
+            stopKind = if ($Mode -eq 'Finalize') { 'line-ending-finalize' } else { 'line-ending-' + $Mode.ToLowerInvariant() }
             mode = $Mode
             result = $Result
             sessionId = $sessionId
