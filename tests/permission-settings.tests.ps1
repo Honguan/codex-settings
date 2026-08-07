@@ -28,8 +28,8 @@ sandbox = "unelevated"
         EnableDefaultModeRequestUserInput = $false
         InstallWindowsNotifications = $false
     }
-    $result = Install-Target -Target $target -Transaction $transaction
-    Write-Manifest -Result $result -Transaction $transaction -External $null
+    $result = Invoke-TargetInstallation -Target $target -Transaction $transaction
+    Save-InstallationManifest -Result $result -Transaction $transaction -External $null
     Complete-FileTransaction -Transaction $transaction
 
     $installedConfig = Get-Content -LiteralPath $configPath -Raw
@@ -47,8 +47,8 @@ sandbox = "unelevated"
     $freshTransaction = New-FileTransaction -Root (Join-Path $testRoot 'fresh-transaction') -Mode 'Test-Fresh-Permissions'
     $freshTarget = $target.PSObject.Copy()
     $freshTarget.Root = $freshRoot
-    $freshResult = Install-Target -Target $freshTarget -Transaction $freshTransaction
-    Write-Manifest -Result $freshResult -Transaction $freshTransaction -External $null
+    $freshResult = Invoke-TargetInstallation -Target $freshTarget -Transaction $freshTransaction
+    Save-InstallationManifest -Result $freshResult -Transaction $freshTransaction -External $null
     Complete-FileTransaction -Transaction $freshTransaction
 
     $freshConfig = Get-Content -LiteralPath (Join-Path $freshRoot 'config.toml') -Raw

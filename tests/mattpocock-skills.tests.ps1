@@ -53,7 +53,7 @@ try {
         throw 'Existing mattpocock/skills installation did not select automatic update.'
     }
 
-    $installerSource = Get-Content -LiteralPath (Join-Path $script:ScriptRoot 'install.ps1') -Raw
+    $installerSource = Get-Content -LiteralPath (Join-Path $script:ScriptRoot 'installation\installation-runner.ps1') -Raw
     foreach ($fragment in @('Test-MattPocockSkillsInstalled', 'Get-MattPocockSkillsArguments', '& npx @skillsArguments')) {
         if (-not $installerSource.Contains($fragment)) { throw "Installer command is missing: $fragment" }
     }

@@ -138,9 +138,13 @@ try {
     Assert-Bytes 'utf8-bom.txt' ([byte[]](0xEF, 0xBB, 0xBF) + [Text.Encoding]::UTF8.GetBytes("before`r`nend`r`nadded`r`n"))
     Assert-Bytes 'ansi.txt' ([byte[]](0xE9, 0x0A, 0xE8, 0x0A))
 
+    $stateBeforeSecondTrack = Get-Content -LiteralPath $statePathA -Raw
+    $verifiedState = $stateBeforeSecondTrack | ConvertFrom-Json
+    $verifiedCrlfState = $verifiedState.files.PSObject.Properties[(Join-Path $projectRoot 'crlf.txt')].Value
+    if ($verifiedCrlfState.sha256 -ne $crlfState.sha256 -or $verifiedCrlfState.lineEnding -ne $crlfState.lineEnding) { throw 'PostToolUse 覆寫原始換行基準。' }
     Invoke-Hook -Mode Track -SessionId $sessionA -InputText $trackInput | Out-Null
     $stateAfterSecondTrack = Get-Content -LiteralPath $statePathA -Raw
-    if ($stateAfterSecondTrack -ne $firstStateContent) { throw '同一 session 的第二次 Track 覆寫原始狀態。' }
+    if ($stateAfterSecondTrack -ne $stateBeforeSecondTrack) { throw '同一 session 的第二次 Track 覆寫既有狀態。' }
 
     Write-TestBytes 'no-final.txt' ([Text.Encoding]::ASCII.GetBytes("before`r`nend`r`nadded`nsecond`n"))
     $directPatchInput = New-HookInput -EventName PostToolUse -SessionId $sessionA -ToolName apply_patch -Command '*** Update File: no-final.txt'

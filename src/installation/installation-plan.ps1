@@ -1,4 +1,4 @@
-function Resolve-GlobalTargets([ValidateSet('Git', 'CVS')][string]$DevelopmentEnvironment, [switch]$InstallRequestExecutionOptimizer, [switch]$EnableDefaultModeRequestUserInput, [bool]$InstallWindowsNotifications, [string]$Cwd = (Get-Location).Path) {
+function New-InstallationPlan([ValidateSet('Git', 'CVS')][string]$DevelopmentEnvironment, [switch]$InstallRequestExecutionOptimizer, [switch]$EnableDefaultModeRequestUserInput, [bool]$InstallWindowsNotifications, [string]$Cwd = (Get-Location).Path) {
     $targets = New-Object 'System.Collections.Generic.List[object]'
     [void]$targets.Add([pscustomobject]@{
         Mode = 'Global'

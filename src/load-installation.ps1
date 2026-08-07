@@ -5,3 +5,6 @@
 . (Join-Path $PSScriptRoot 'installation\hook-validation.ps1')
 . (Join-Path $PSScriptRoot 'installation\hook-trust.ps1')
 . (Join-Path $PSScriptRoot 'installation\target-installer.ps1')
+. (Join-Path $PSScriptRoot 'installation\installation-state.ps1')
+. (Join-Path $PSScriptRoot 'installation\installation-context.ps1')
+. (Join-Path $PSScriptRoot 'installation\installation-runner.ps1')

@@ -12,8 +12,8 @@ $codexShimPath = Join-Path $testRoot 'codex.cmd'
 $originalPath = $env:PATH
 
 try {
-    $installerSource = Get-Content -LiteralPath (Join-Path $script:ScriptRoot 'install.ps1') -Raw
-    if ($installerSource -notmatch 'Set-CodexSettingsHookTrust\s+-Root\s+\$globalRoot') { throw 'Global installer does not trust managed Hooks after installation.' }
+    $runnerSource = Get-Content -LiteralPath (Join-Path $script:ScriptRoot 'installation\installation-runner.ps1') -Raw
+    if ($runnerSource -notmatch 'Set-CodexSettingsHookTrust\s+-Root\s+\$Context\.GlobalRoot') { throw 'Global installer does not trust managed Hooks after installation.' }
 
     New-Item -ItemType Directory -Path $globalRoot -Force | Out-Null
     [IO.File]::WriteAllText($hooksPath, '{"hooks":{}}', [Text.UTF8Encoding]::new($false))

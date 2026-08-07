@@ -1,6 +1,7 @@
 $ErrorActionPreference = 'Stop'
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $installerSource = Get-Content -LiteralPath (Join-Path $repositoryRoot 'src\install.ps1') -Raw
+$runnerSource = Get-Content -LiteralPath (Join-Path $repositoryRoot 'src\installation\installation-runner.ps1') -Raw
 $installCommand = Get-Content -LiteralPath (Join-Path $repositoryRoot 'Install.cmd') -Raw
 $buildSource = Get-Content -LiteralPath (Join-Path $repositoryRoot 'tools\build-installer.ps1') -Raw
 $script:ScriptRoot = Join-Path $repositoryRoot 'src'
@@ -13,9 +14,9 @@ try {
     Remove-Item -LiteralPath Function:\Read-Host -ErrorAction SilentlyContinue
 }
 
-$globalPattern = '(?ms)''Global''\s*\{.*?& \$PSCommandPath -Mode Global .*?\r?\n\s*exit 0\s*\r?\n\s*\}'
-if ($installerSource -notmatch $globalPattern) {
-    throw '互動式全域安裝成功後未以 exit 0 明確結束安裝器。'
+$globalPattern = '(?ms)Invoke-Installer -Mode Global .*?\r?\n\s*return\s*\r?\n'
+if ($runnerSource -notmatch $globalPattern -or $installerSource -notmatch 'Invoke-Installer @installerParameters') {
+    throw '互動式全域安裝成功後未直接結束安裝器。'
 }
 
 $pausePattern = '(?im)^\s*(?:if\s+"%~1"==""\s+)?pause\s*$'

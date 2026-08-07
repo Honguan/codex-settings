@@ -214,7 +214,7 @@ try {
     $operationLock = Enter-CodexSettingsLock
     New-Item -ItemType Directory -Path $BackupBase -Force | Out-Null
     $recovered = @(Repair-PendingTransactions -BackupRoot $BackupBase)
-    foreach ($path in $recovered) { Write-Warning "已回復中斷的交易：$path" }
+    if ($recovered.Count -gt 0) { Write-Host "已自動回復上次中斷的交易：$($recovered.Count) 筆。" }
 
     if ($Mode -eq 'Interactive') {
         Write-Host ''

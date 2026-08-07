@@ -16,7 +16,10 @@ $expectedFiles = @(
     'core\file-transactions.ps1',
     'installation\hook-trust.ps1',
     'installation\hook-validation.ps1',
+    'installation\installation-context.ps1',
     'installation\installation-plan.ps1',
+    'installation\installation-runner.ps1',
+    'installation\installation-state.ps1',
     'installation\prerequisites.ps1',
     'installation\prompts.ps1',
     'installation\target-installer.ps1',
@@ -45,13 +48,28 @@ foreach ($commandName in @(
     'New-FileTransaction',
     'Select-Mode',
     'Test-Prerequisites',
-    'Resolve-GlobalTargets',
+    'New-InstallerContext',
+    'New-InstallationPlan',
     'Set-CodexSettingsHookTrust',
-    'Install-Target'
+    'Invoke-TargetInstallation',
+    'Set-Context7EnvironmentState',
+    'Save-InstallationManifest',
+    'Invoke-Installer'
 )) {
     if (-not (Get-Command $commandName -CommandType Function -ErrorAction SilentlyContinue)) {
         throw "載入安裝模組後缺少函式：$commandName"
     }
+}
+
+foreach ($obsoleteCommand in @('Resolve-GlobalTargets', 'Install-Target', 'Set-Context7Key', 'Write-Manifest')) {
+    if (Get-Command $obsoleteCommand -CommandType Function -ErrorAction SilentlyContinue) {
+        throw "仍載入舊安裝函式：$obsoleteCommand"
+    }
+}
+
+$entrySource = Get-Content -LiteralPath (Join-Path $sourceRoot 'install.ps1') -Raw
+if ($entrySource -match 'New-FileTransaction|Install-Target|Write-Manifest' -or @($entrySource -split '\r?\n').Count -gt 40) {
+    throw 'install.ps1 必須維持為參數解析與 runner 呼叫的薄入口。'
 }
 
 Write-Host 'Module layout tests passed.'
