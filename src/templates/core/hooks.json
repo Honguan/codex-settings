@@ -9,8 +9,7 @@
             "type": "command",
             "command": "pwsh -NoProfile -Command '& (Join-Path $HOME \".codex/hooks/show-codex-notification.ps1\") -Type QuestionRequired'",
             "commandWindows": "pwsh.exe -NoProfile -ExecutionPolicy Bypass -Command \"& (Join-Path $HOME '.codex\\hooks\\show-codex-notification.ps1') -Type QuestionRequired\"",
-            "timeout": 15,
-            "statusMessage": "CodexSettings Windows notification"
+            "timeout": 15
           }
         ]
       }
@@ -23,8 +22,7 @@
             "type": "command",
             "command": "pwsh -NoProfile -Command '& (Join-Path $HOME \".codex/hooks/show-codex-notification.ps1\") -Type PermissionRequired'",
             "commandWindows": "pwsh.exe -NoProfile -ExecutionPolicy Bypass -Command \"& (Join-Path $HOME '.codex\\hooks\\show-codex-notification.ps1') -Type PermissionRequired\"",
-            "timeout": 15,
-            "statusMessage": "CodexSettings Windows notification"
+            "timeout": 15
           }
         ]
       }
@@ -36,8 +34,7 @@
             "type": "command",
             "command": "pwsh -NoProfile -Command '& (Join-Path $HOME \".codex/hooks/show-codex-notification.ps1\") -Type Completed'",
             "commandWindows": "pwsh.exe -NoProfile -ExecutionPolicy Bypass -Command \"& (Join-Path $HOME '.codex\\hooks\\show-codex-notification.ps1') -Type Completed\"",
-            "timeout": 30,
-            "statusMessage": "CodexSettings Windows notification"
+            "timeout": 30
           }
         ]
       }
