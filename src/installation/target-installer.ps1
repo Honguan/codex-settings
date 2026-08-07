@@ -1,7 +1,13 @@
 function Install-Target($Target, $Transaction, [switch]$Force) {
     if (-not (Test-Path -LiteralPath $Target.Template -PathType Container)) { throw "找不到範本：$($Target.Template)" }
     New-Item -ItemType Directory -Path $Target.Root -Force | Out-Null
-    if ($Target.Mode -eq 'Global') { Remove-GlobalLineEndingHooks -Root $Target.Root -Transaction $Transaction }
+    $projectRoot = $null
+    if ($Target.Mode -eq 'Global') {
+        Remove-GlobalLineEndingHooks -Root $Target.Root -Transaction $Transaction
+        $targetCwd = if ($Target.PSObject.Properties.Name -contains 'Cwd') { [string]$Target.Cwd } else { (Get-Location).Path }
+        $projectRoot = Find-CvsProjectRoot -StartPath $targetCwd
+        if (-not [string]::IsNullOrWhiteSpace($projectRoot)) { Remove-ManagedProjectHooks -StartPath $projectRoot -Transaction $Transaction -KeepCvsLineEndingHooks:($Target.DevelopmentEnvironment -eq 'CVS') | Out-Null }
+    }
     $previous = Get-Manifest $Target.Root
     $entries = New-Object 'System.Collections.Generic.List[object]'
     $templatePaths = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
@@ -80,7 +86,17 @@ function Install-Target($Target, $Transaction, [switch]$Force) {
         }
     }
 
-    if ($Target.Mode -eq 'Global') { Assert-GlobalLineEndingHook -DevelopmentEnvironment $Target.DevelopmentEnvironment -Root $Target.Root -InstallWindowsNotifications ([bool]$Target.InstallWindowsNotifications) }
+    if ($Target.Mode -eq 'Global' -and $Target.DevelopmentEnvironment -eq 'CVS' -and -not [string]::IsNullOrWhiteSpace($projectRoot)) {
+        $projectHooksPath = Join-Path $projectRoot '.codex\hooks.json'
+        if (Test-Path -LiteralPath $projectHooksPath -PathType Leaf) {
+            $projectHooks = Get-Content -LiteralPath $projectHooksPath -Raw | ConvertFrom-Json -ErrorAction Stop
+            $projectPreHookCount = if ($null -ne $projectHooks.hooks -and $null -ne $projectHooks.hooks.PreToolUse) { @($projectHooks.hooks.PreToolUse | Where-Object { Test-ManagedLineEndingHookEntry $_ }).Count } else { 0 }
+            $projectPostHookCount = if ($null -ne $projectHooks.hooks -and $null -ne $projectHooks.hooks.PostToolUse) { @($projectHooks.hooks.PostToolUse | Where-Object { Test-ManagedLineEndingHookEntry $_ }).Count } else { 0 }
+            if ($projectPreHookCount -eq 1 -and $projectPostHookCount -eq 1) { Remove-GlobalLineEndingHookEntries -Root $Target.Root -Transaction $Transaction }
+        }
+    }
+
+    if ($Target.Mode -eq 'Global') { Assert-GlobalLineEndingHook -DevelopmentEnvironment $Target.DevelopmentEnvironment -Root $Target.Root -InstallWindowsNotifications ([bool]$Target.InstallWindowsNotifications) -ProjectRoot $projectRoot | Out-Null }
 
     return [pscustomobject]@{ Mode = $Target.Mode; DevelopmentEnvironment = $Target.DevelopmentEnvironment; Root = $Target.Root; Previous = $previous; Files = $entries.ToArray() }
 }

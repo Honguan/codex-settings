@@ -6,7 +6,7 @@ $script:ScriptRoot = Join-Path $repositoryRoot 'src'
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('codex-settings-global-environment-' + [guid]::NewGuid().ToString('N'))
 $globalRoot = Join-Path $testRoot '.codex'
 
-function Install-TestEnvironment([ValidateSet('Git', 'CVS')][string]$Environment, [bool]$InstallWindowsNotifications = $true) {
+function Install-TestEnvironment([ValidateSet('Git', 'CVS')][string]$Environment, [bool]$InstallWindowsNotifications = $true, [string]$Cwd = '') {
     $transaction = New-FileTransaction -Root (Join-Path $testRoot ("transaction-$Environment-" + [guid]::NewGuid().ToString('N'))) -Mode "Test-$Environment"
     $target = [pscustomobject]@{
         Mode = 'Global'
@@ -14,6 +14,7 @@ function Install-TestEnvironment([ValidateSet('Git', 'CVS')][string]$Environment
         EnvironmentTemplate = Join-Path $script:ScriptRoot ("templates\environments\{0}" -f $Environment.ToLowerInvariant())
         DevelopmentEnvironment = $Environment
         Root = $globalRoot
+        Cwd = $Cwd
         EnableDefaultModeRequestUserInput = $false
         InstallWindowsNotifications = $InstallWindowsNotifications
     }
@@ -114,6 +115,43 @@ try {
         throw 'CVS installation did not replace the obsolete config.toml marker with a scoped marker.'
     }
     if ((Get-DefaultDevelopmentEnvironment -Root $globalRoot) -ne 'CVS') { throw 'CVS was not recorded as the default project system.' }
+
+    $projectRoot = Join-Path $testRoot 'cvs-project'
+    $projectCodex = Join-Path $projectRoot '.codex'
+    New-Item -ItemType Directory -Path (Join-Path $projectRoot 'CVS'), (Join-Path $projectCodex 'hooks') -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $projectRoot 'CVS\Entries'), '', [Text.Encoding]::ASCII)
+    $projectHooks = [ordered]@{
+        hooks = [ordered]@{
+            Stop = @([ordered]@{ hooks = @(
+                [ordered]@{ type = 'command'; command = 'pwsh -File .codex/hooks/show-codex-notification.ps1 -Type Completed' },
+                [ordered]@{ type = 'command'; command = 'pwsh -File .codex/hooks/show-turn-token-usage.ps1' },
+                [ordered]@{ type = 'command'; command = 'pwsh -File .codex/hooks/preserve-line-endings.ps1 -Mode Finalize' },
+                [ordered]@{ type = 'command'; command = 'custom-project-stop.ps1' }
+            ) })
+            PostToolUse = @([ordered]@{ matcher = '*'; hooks = @(
+                [ordered]@{ type = 'command'; command = 'pwsh -File .codex/hooks/preserve-line-endings.ps1 -Mode Restore' },
+                [ordered]@{ type = 'command'; command = 'custom-project-post.ps1' }
+            ) })
+        }
+    }
+    Write-JsonFileAtomic -Path (Join-Path $projectCodex 'hooks.json') -Value $projectHooks -Depth 10
+    foreach ($scriptName in @('crlf-updated-files.ps1', 'normalize-cvs-crlf.ps1', 'preserve-line-endings.ps1', 'show-turn-token-usage.ps1', 'show-codex-notification.ps1')) {
+        [IO.File]::WriteAllText((Join-Path $projectCodex ("hooks\$scriptName")), '# managed legacy hook', [Text.UTF8Encoding]::new($false))
+    }
+    $customProjectScript = Join-Path $projectCodex 'hooks\custom-project-stop.ps1'
+    [IO.File]::WriteAllText($customProjectScript, '# user custom hook', [Text.UTF8Encoding]::new($false))
+    Install-TestEnvironment -Environment CVS -Cwd $projectRoot
+    $projectHooksAfter = Get-Content -LiteralPath (Join-Path $projectCodex 'hooks.json') -Raw | ConvertFrom-Json
+    $projectNotificationCount = @($projectHooksAfter.hooks.Stop | Where-Object { $null -ne $_ -and (Test-ManagedNotificationHookEntry $_) }).Count
+    $projectPostLineCount = @($projectHooksAfter.hooks.PostToolUse | Where-Object { $null -ne $_ -and (Test-ManagedLineEndingHookEntry $_) }).Count
+    $projectStopLineCount = @($projectHooksAfter.hooks.Stop | Where-Object { $null -ne $_ -and (Test-ManagedLineEndingHookEntry $_) }).Count
+    if ($projectNotificationCount -ne 0 -or $projectPostLineCount -ne 1 -or $projectStopLineCount -ne 1) { throw "CVS 專案更新未清理受管理的重複 Hook：notification=$projectNotificationCount post=$projectPostLineCount stop=$projectStopLineCount" }
+    $projectCheck = Assert-GlobalLineEndingHook -DevelopmentEnvironment CVS -Root $globalRoot -InstallWindowsNotifications $true -ProjectRoot $projectRoot
+    if ($projectCheck.GlobalNotificationStopHookCount -ne 1 -or $projectCheck.ProjectNotificationStopHookCount -ne 0 -or $projectCheck.ProjectLineEndingPostToolUseHookCount -ne 1 -or $projectCheck.ProjectLineEndingStopHookCount -notin @(0, 1) -or $projectCheck.LegacyCrlfHookCount -ne 0 -or $projectCheck.LegacyTokenHookCount -ne 0 -or $projectCheck.DuplicateManagedHookCount -ne 0 -or -not $projectCheck.DetachedToastCleanup) { throw 'CVS 專案 Hook 自檢結果不符合 Issue #17 驗收條件。' }
+    if (-not (Test-Path -LiteralPath $customProjectScript -PathType Leaf)) { throw 'CVS 專案更新誤刪使用者自訂 Hook。' }
+    foreach ($scriptName in @('crlf-updated-files.ps1', 'normalize-cvs-crlf.ps1', 'preserve-line-endings.ps1', 'show-turn-token-usage.ps1', 'show-codex-notification.ps1')) {
+        if (Test-Path -LiteralPath (Join-Path $projectCodex ("hooks\$scriptName"))) { throw "CVS 專案更新保留舊受管理腳本：$scriptName" }
+    }
 
     Install-TestEnvironment -Environment Git
     $agents = Get-Content -LiteralPath (Join-Path $globalRoot 'AGENTS.md') -Raw

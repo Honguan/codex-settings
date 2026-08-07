@@ -5,6 +5,15 @@ $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('codex-settings-line-endings-'
 $projectRoot = Join-Path $testRoot 'project'
 $stateRoot = Join-Path $testRoot 'state'
 $diagnosticRoot = Join-Path $testRoot 'logs'
+$invocationRoot = Join-Path $testRoot 'invocations'
+$projectRootB = Join-Path $testRoot 'project-b'
+
+function Get-StatePath([string]$SessionId, [string]$ProjectPath = $projectRoot) {
+    $key = "$([IO.Path]::GetFullPath($ProjectPath).TrimEnd('\', '/'))|$SessionId"
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { return Join-Path $stateRoot (([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($key)))).Replace('-', '').ToLowerInvariant() + '.json') }
+    finally { $sha.Dispose() }
+}
 
 function Write-TestBytes([string]$Name, [byte[]]$Bytes) {
     $path = Join-Path $projectRoot $Name
@@ -17,17 +26,18 @@ function Assert-Bytes([string]$Name, [byte[]]$Expected) {
     if (-not [Linq.Enumerable]::SequenceEqual([byte[]]$actual, [byte[]]$Expected)) { throw "位元組內容不符：$Name" }
 }
 
-function Invoke-Hook([ValidateSet('Track', 'Restore', 'Finalize')][string]$Mode, [string]$SessionId, [string]$InputText) {
+function Invoke-Hook([ValidateSet('Track', 'Restore', 'Finalize')][string]$Mode, [string]$SessionId, [string]$InputText, [string]$WorkingDirectory = $projectRoot) {
     $startInfo = [Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = 'pwsh'
     foreach ($argument in @('-NoLogo', '-NoProfile', '-File', $hookScript, '-Mode', $Mode)) { $startInfo.ArgumentList.Add($argument) }
-    $startInfo.WorkingDirectory = $projectRoot
+    $startInfo.WorkingDirectory = $WorkingDirectory
     $startInfo.UseShellExecute = $false
     $startInfo.RedirectStandardInput = $true
     $startInfo.RedirectStandardOutput = $true
     $startInfo.RedirectStandardError = $true
     $startInfo.Environment['CODEX_SETTINGS_LINE_ENDING_STATE_ROOT'] = $stateRoot
     $startInfo.Environment['CODEX_SETTINGS_HOOK_LOG_ROOT'] = $diagnosticRoot
+    $startInfo.Environment['CODEX_SETTINGS_HOOK_INVOCATION_STATE_ROOT'] = $invocationRoot
     $process = [Diagnostics.Process]::Start($startInfo)
     $process.StandardInput.Write($InputText)
     $process.StandardInput.Close()
@@ -39,10 +49,10 @@ function Invoke-Hook([ValidateSet('Track', 'Restore', 'Finalize')][string]$Mode,
     return [pscustomobject]@{ Output = $output; Stdout = $stdout; Stderr = $stderr }
 }
 
-function New-HookInput([string]$EventName, [string]$SessionId, [string]$ToolName = 'apply_patch', [string]$Command = '*** Begin Patch') {
+function New-HookInput([string]$EventName, [string]$SessionId, [string]$ToolName = 'apply_patch', [string]$Command = '*** Begin Patch', [string]$ProjectPath = $projectRoot) {
     return ([ordered]@{
         session_id = $SessionId
-        cwd = $projectRoot
+        cwd = $ProjectPath
         hook_event_name = $EventName
         tool_name = $ToolName
         tool_input = [ordered]@{ command = $Command }
@@ -88,7 +98,7 @@ try {
     $execCommand = 'const patch = getPatch(); text(await tools.apply_patch(patch));'
     $trackInput = New-HookInput -EventName PreToolUse -SessionId $sessionA -ToolName exec -Command $execCommand
     Invoke-Hook -Mode Track -SessionId $sessionA -InputText $trackInput | Out-Null
-    $statePathA = Join-Path $stateRoot 'session-A.json'
+    $statePathA = Get-StatePath -SessionId $sessionA
     if (-not (Test-Path -LiteralPath $statePathA -PathType Leaf)) { throw 'PreToolUse 未建立 session 狀態檔。' }
     $firstStateContent = Get-Content -LiteralPath $statePathA -Raw
     $stateA = $firstStateContent | ConvertFrom-Json
@@ -112,7 +122,10 @@ try {
     Invoke-Hook -Mode Restore -SessionId $sessionA -InputText $postInput | Out-Null
     if (-not (Test-Path -LiteralPath $statePathA -PathType Leaf)) { throw 'PostToolUse 過早清理 session 狀態檔。' }
     $restoreDiagnostic = @(Get-Content -LiteralPath (Join-Path $diagnosticRoot 'session-A.log') | ForEach-Object { $_ | ConvertFrom-Json }) | Where-Object { $_.mode -eq 'Restore' } | Select-Object -Last 1
-    if ($restoreDiagnostic.event -ne 'PostToolUse' -or $restoreDiagnostic.handler -ne 'preserve-line-endings' -or $restoreDiagnostic.result -ne 'success' -or $restoreDiagnostic.changedFileCount -ne 7 -or @($restoreDiagnostic.changedFiles).Count -ne 7) {
+    foreach ($field in @('timestamp', 'hookSource', 'hookCommand', 'processId', 'parentProcessId', 'startTime', 'endTime', 'elapsedMs', 'exitCode', 'GlobalPostToolUseHookCount', 'EffectivePostToolUseHookCount', 'NotificationInvocationCount', 'CrlfInvocationCount')) {
+        if ($restoreDiagnostic.PSObject.Properties.Name -notcontains $field) { throw "換行診斷缺少欄位：$field" }
+    }
+    if ($restoreDiagnostic.event -ne 'PostToolUse' -or $restoreDiagnostic.handler -ne 'preserve-line-endings' -or $restoreDiagnostic.result -ne 'success' -or $restoreDiagnostic.changedFileCount -ne 7 -or @($restoreDiagnostic.changedFiles).Count -ne 7 -or $restoreDiagnostic.CrlfInvocationCount -ne 1 -or $restoreDiagnostic.EffectivePostToolUseHookCount -ne 1) {
         throw '換行 Hook 未寫入可診斷的還原紀錄。'
     }
 
@@ -135,7 +148,18 @@ try {
 
     $sessionB = 'session-B'
     Invoke-Hook -Mode Track -SessionId $sessionB -InputText (New-HookInput -EventName PreToolUse -SessionId $sessionB) | Out-Null
-    if (-not (Test-Path -LiteralPath (Join-Path $stateRoot 'session-B.json'))) { throw '不同 session 未建立獨立狀態檔。' }
+    $statePathB = Get-StatePath -SessionId $sessionB
+    if (-not (Test-Path -LiteralPath $statePathB)) { throw '不同 session 未建立獨立狀態檔。' }
+
+    New-Item -ItemType Directory -Path (Join-Path $projectRootB 'CVS') -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $projectRootB 'CVS\Entries'), '/shared.txt/1.1///', [Text.Encoding]::ASCII)
+    Write-TestBytes -Name 'shared.txt' -Bytes ([Text.Encoding]::ASCII.GetBytes("shared`r`n"))
+    Move-Item -LiteralPath (Join-Path $projectRoot 'shared.txt') -Destination (Join-Path $projectRootB 'shared.txt') -Force
+    $sharedSession = 'same-session-two-projects'
+    Invoke-Hook -Mode Track -SessionId $sharedSession -InputText (New-HookInput -EventName PreToolUse -SessionId $sharedSession -ProjectPath $projectRoot) -WorkingDirectory $projectRoot | Out-Null
+    Invoke-Hook -Mode Track -SessionId $sharedSession -InputText (New-HookInput -EventName PreToolUse -SessionId $sharedSession -ProjectPath $projectRootB) -WorkingDirectory $projectRootB | Out-Null
+    $sharedStates = @(Get-ChildItem -LiteralPath $stateRoot -Filter '*.json' | Where-Object { try { (Get-Content -LiteralPath $_.FullName -Raw | ConvertFrom-Json).sessionId -eq $sharedSession } catch { $false } })
+    if ($sharedStates.Count -ne 2) { throw '不同 CVS 專案的相同 session 不應共用狀態檔。' }
 
     Write-TestBytes 'crlf.txt' ([Text.Encoding]::ASCII.GetBytes("before`r`nend`r`nadded1`nfinal`n"))
     $malformedStopInput = [ordered]@{
@@ -148,7 +172,7 @@ try {
     $malformedStopInput = $malformedStopInput.Replace('\"activity_config.php\"', '"activity_config.php"')
     Invoke-Hook -Mode Finalize -SessionId $sessionA -InputText $malformedStopInput | Out-Null
     if (Test-Path -LiteralPath $statePathA) { throw 'Stop Hook 未清理完成的 session 狀態檔。' }
-    if (-not (Test-Path -LiteralPath (Join-Path $stateRoot 'session-B.json'))) { throw 'Stop Hook 誤刪其他 session 狀態檔。' }
+    if (-not (Test-Path -LiteralPath $statePathB)) { throw 'Stop Hook 誤刪其他 session 狀態檔。' }
 
     Assert-Bytes 'crlf.txt' ([Text.Encoding]::ASCII.GetBytes("before`r`nend`r`nadded1`r`nfinal`r`n"))
     Assert-Bytes 'lf.txt' ([Text.Encoding]::ASCII.GetBytes("before`nend`nadded1`nadded2`nadded3`n"))
@@ -169,7 +193,7 @@ try {
     } | ConvertTo-Json -Compress)
     $truncatedStopInput = $truncatedStopInput.Substring(0, $truncatedStopInput.IndexOf('unfinished') + 'unfinished'.Length)
     Invoke-Hook -Mode Finalize -SessionId $sessionB -InputText $truncatedStopInput | Out-Null
-    if (Test-Path -LiteralPath (Join-Path $stateRoot 'session-B.json')) { throw '截斷的 Stop payload 未完成換行修復與狀態清理。' }
+    if (Test-Path -LiteralPath $statePathB) { throw '截斷的 Stop payload 未完成換行修復與狀態清理。' }
 
     $invalid = Invoke-Hook -Mode Track -SessionId 'invalid' -InputText '{invalid-json'
     if ([string]::IsNullOrWhiteSpace([string]$invalid.Output.systemMessage)) { throw '無效 payload 沒有回傳清楚錯誤。' }
