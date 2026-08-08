@@ -20,7 +20,8 @@ function Invoke-InteractiveMode {
     param(
         [ValidateSet('Git', 'CVS')]
         [string]$DevelopmentEnvironment,
-        [string]$GlobalRoot
+        [string]$GlobalRoot,
+        [string]$SourceRoot
     )
 
     while ($true) {
@@ -35,11 +36,11 @@ function Invoke-InteractiveMode {
                 $installMattPocockSkills = Select-OptionalMattPocockSkills
                 $enableDefaultModeRequestUserInput = Select-OptionalDefaultModeRequestUserInput
                 $installWindowsNotifications = Select-OptionalWindowsNotifications -AlreadyInstalled:(Test-WindowsNotificationsInstalled -Root $GlobalRoot)
-                Invoke-Installer -Mode Global -InstallStyle $style -DevelopmentEnvironment $selectedEnvironment -InstallRequestExecutionOptimizer:$installRequestExecutionOptimizer -InstallMattPocockSkills:$installMattPocockSkills -EnableDefaultModeRequestUserInput:$enableDefaultModeRequestUserInput -InstallWindowsNotifications:$installWindowsNotifications
+                Invoke-Installer -Mode Global -InstallStyle $style -DevelopmentEnvironment $selectedEnvironment -InstallRequestExecutionOptimizer:$installRequestExecutionOptimizer -InstallMattPocockSkills:$installMattPocockSkills -EnableDefaultModeRequestUserInput:$enableDefaultModeRequestUserInput -InstallWindowsNotifications:$installWindowsNotifications -SourceRoot $SourceRoot
                 return
             }
 
-            Invoke-ManagementMode -Mode $selection -SourceRoot $ScriptRoot
+            Invoke-ManagementMode -Mode $selection -SourceRoot $SourceRoot
         } catch {
             Write-Host "作業失敗：$($_.Exception.Message)" -ForegroundColor Red
         }
@@ -97,10 +98,10 @@ function Write-InstallationSummary {
     Write-Host "預設專案體系：$DevelopmentEnvironment（已記錄於全域設定）"
     Write-Host "目標：$($Results.Count)"
     foreach ($result in $Results) {
-        $changedCount = @($result.Files | Where-Object Changed).Count
-        $createdCount = @($result.Files | Where-Object { -not $_.ExistedBefore }).Count
-        $updatedCount = @($result.Files | Where-Object { $_.ExistedBefore -and $_.Changed }).Count
-        $unchangedCount = $result.Files.Count - $changedCount
+        $resultSummary = $result.Summary
+        $createdCount = if ($null -ne $resultSummary) { [int]$resultSummary.Created } else { @($result.Files | Where-Object { -not $_.ExistedBefore }).Count }
+        $updatedCount = if ($null -ne $resultSummary) { [int]$resultSummary.Updated } else { @($result.Files | Where-Object { $_.ExistedBefore -and $_.Changed }).Count }
+        $unchangedCount = if ($null -ne $resultSummary) { [int]$resultSummary.Unchanged } else { $result.Files.Count - @($result.Files | Where-Object Changed).Count }
         Write-Host "目標：$($result.Root)"
         Write-Host "類型：$($result.Mode)"
         Write-Host "檔案：$($result.Files.Count)（新增：$createdCount、更新：$updatedCount、未變更：$unchangedCount）"
@@ -143,7 +144,7 @@ function Invoke-GlobalInstallation {
     if (-not $InstallMattPocockSkills -and (Test-MattPocockSkillsInstalled)) {
         $InstallMattPocockSkills = $true
     }
-    $targets = @(New-InstallationPlan -DevelopmentEnvironment $Context.DevelopmentEnvironment -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput -InstallWindowsNotifications $Context.InstallWindowsNotifications)
+    $targets = @(New-InstallationPlan -DevelopmentEnvironment $Context.DevelopmentEnvironment -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput -InstallWindowsNotifications $Context.InstallWindowsNotifications -SourceRoot $Context.ScriptRoot -IncludeExistingSkills $Context.ExistingSkillsInstalled)
     $steps = New-InstallationProgressSteps -TargetCount $targets.Count -IncludeContext7:(-not $SkipContext7Key) -IncludeSkills:$InstallMattPocockSkills -IncludeNotifications:$Context.InstallWindowsNotifications
     $progress = Start-InstallProgress -Steps $steps -Root $Context.GlobalRoot -Metadata @{
         Mode = 'Global'
@@ -158,10 +159,12 @@ function Invoke-GlobalInstallation {
     $transactionRoot = $null
     $notificationStatus = ''
     $skippedCount = 0
+    $discovery = $null
 
     try {
         Set-InstallProgress -Progress $progress -StepId 'Plan' -Detail '整理目標與外部套件狀態'
         $ccusageBefore = Get-CcusageState
+        $discovery = Get-InstallationDiscovery -Context $Context -Targets $targets -CcusageBefore $ccusageBefore
         Write-InstallationPlan -Progress $progress -Context $Context -Targets $targets -CcusageBefore $ccusageBefore -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -InstallMattPocockSkills:$InstallMattPocockSkills -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput -SkipContext7Key:$SkipContext7Key
         Complete-InstallStep -Progress $progress -Result ("已建立 $($targets.Count) 個目標")
 
@@ -186,6 +189,7 @@ function Invoke-GlobalInstallation {
         Save-TransactionMetadata -Transaction $transaction -Metadata @{
             Mode = 'Global'
             Status = 'InProgress'
+            Discovery = $discovery
             CcusageBefore = $ccusageBefore
             Context7KeyWasPresent = $context7KeyWasPresent
             Context7InstallerMayCreate = $context7MayCreate
@@ -195,9 +199,7 @@ function Invoke-GlobalInstallation {
 
         try {
             Set-InstallProgress -Progress $progress -StepId 'Targets' -Detail ("處理 $($targets.Count) 個全域安裝目標")
-            foreach ($target in $targets) {
-                [void]$results.Add((Invoke-TargetInstallation -Target $target -Transaction $transaction -Force:$Context.Force))
-            }
+            foreach ($result in @(Invoke-InstallationPlan -Targets $targets -Transaction $transaction -Force:$Context.Force)) { [void]$results.Add($result) }
             Complete-InstallStep -Progress $progress -Result ("完成 $($results.Count) 個目標")
 
             Set-InstallProgress -Progress $progress -StepId 'Hooks' -Detail '驗證受管理 Hook 狀態；未變更時略過昂貴的 trust 呼叫'
@@ -214,6 +216,10 @@ function Invoke-GlobalInstallation {
                 $configHash = (Get-FileHash -LiteralPath (Join-Path $Context.GlobalRoot 'config.toml') -Algorithm SHA256).Hash
                 if ([string]$configEntry.Sha256 -ne $configHash) { $configEntry.Changed = $true; $configEntry.Status = 'Updated' }
                 $configEntry.Sha256 = $configHash
+            }
+            foreach ($result in @($results)) {
+                $result.validation = Get-InstallationVerificationResult -Result $result
+                if (-not [bool]$result.validation.Valid) { throw "安裝結果驗證失敗：$($result.validation.errors -join '; ')" }
             }
             Complete-InstallStep -Progress $progress -Result $(if ($hookTrust.Skipped) { 'Hook 未變更，略過重新 trust' } else { "已驗證 $($hookTrust.TrustedCount) 個" })
 
@@ -268,9 +274,7 @@ function Invoke-GlobalInstallation {
                 }
             }
 
-            foreach ($result in $results) {
-                Save-InstallationManifest -Result $result -Transaction $transaction -External $(if ($result.Mode -eq 'Global') { $external } else { $null })
-            }
+            Complete-Installation -Results $results.ToArray() -Transaction $transaction -External $external | Out-Null
 
             if ($Context.InstallWindowsNotifications) {
                 Set-InstallProgress -Progress $progress -StepId 'Notifications' -Detail '最後執行非關鍵通知測試'
@@ -288,7 +292,7 @@ function Invoke-GlobalInstallation {
             }
 
             Set-InstallProgress -Progress $progress -StepId 'Final' -Detail '寫入 Manifest 並完成交易驗證'
-            Complete-FileTransaction -Transaction $transaction
+            Complete-Installation -Results $results.ToArray() -Transaction $transaction -External $external -FinalizeTransaction | Out-Null
             Complete-InstallStep -Progress $progress -Result 'Manifest 與交易驗證通過'
             Write-InstallationSummary -InstallStyle $Context.InstallStyle -DevelopmentEnvironment $Context.DevelopmentEnvironment -Results $results.ToArray() -Ccusage $ccusage -CcusageBefore $ccusageBefore -HookTrust $hookTrust -TransactionRoot $transactionRoot -InstallWindowsNotifications $Context.InstallWindowsNotifications -Progress $progress -NotificationStatus $notificationStatus -SkippedCount $skippedCount
         } catch {
@@ -337,17 +341,19 @@ function Invoke-Installer {
         [string]$DevelopmentEnvironment,
         [switch]$Force,
         [ValidateSet('Merge', 'Replace')]
-        [string]$InstallStyle = 'Merge'
+        [string]$InstallStyle = 'Merge',
+        [string]$SourceRoot = ''
     )
 
+    if ([string]::IsNullOrWhiteSpace($SourceRoot)) { $SourceRoot = [string]$ScriptRoot }
     if ($Mode -in @('Backup', 'Restore', 'Uninstall')) {
-        Invoke-ManagementMode -Mode $Mode -SourceRoot $ScriptRoot
+        Invoke-ManagementMode -Mode $Mode -SourceRoot $SourceRoot
         return
     }
 
-    $context = New-InstallerContext -DevelopmentEnvironment $DevelopmentEnvironment -InstallStyle $InstallStyle -Force:$Force -InstallWindowsNotifications $InstallWindowsNotifications
+    $context = New-InstallerContext -SourceRoot $SourceRoot -DevelopmentEnvironment $DevelopmentEnvironment -InstallStyle $InstallStyle -Force:$Force -InstallWindowsNotifications $InstallWindowsNotifications
     if ($Mode -eq 'Interactive') {
-        Invoke-InteractiveMode -DevelopmentEnvironment $context.DevelopmentEnvironment -GlobalRoot $context.GlobalRoot
+        Invoke-InteractiveMode -DevelopmentEnvironment $context.DevelopmentEnvironment -GlobalRoot $context.GlobalRoot -SourceRoot $context.ScriptRoot
         return
     }
 

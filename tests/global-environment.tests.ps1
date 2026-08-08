@@ -8,16 +8,7 @@ $globalRoot = Join-Path $testRoot '.codex'
 
 function Install-TestEnvironment([ValidateSet('Git', 'CVS')][string]$Environment, [bool]$InstallWindowsNotifications = $true, [string]$Cwd = '') {
     $transaction = New-FileTransaction -Root (Join-Path $testRoot ("transaction-$Environment-" + [guid]::NewGuid().ToString('N'))) -Mode "Test-$Environment"
-    $target = [pscustomobject]@{
-        Mode = 'Global'
-        Template = Join-Path $script:ScriptRoot 'templates\core'
-        EnvironmentTemplate = Join-Path $script:ScriptRoot ("templates\environments\{0}" -f $Environment.ToLowerInvariant())
-        DevelopmentEnvironment = $Environment
-        Root = $globalRoot
-        Cwd = $Cwd
-        EnableDefaultModeRequestUserInput = $false
-        InstallWindowsNotifications = $InstallWindowsNotifications
-    }
+    $target = New-InstallTarget -Id 'test-global' -Mode 'Global' -TemplateRoot (Join-Path $script:ScriptRoot 'templates\core') -EnvironmentTemplateRoot (Join-Path $script:ScriptRoot ("templates\environments\{0}" -f $Environment.ToLowerInvariant())) -DevelopmentEnvironment $Environment -Root $globalRoot -Cwd $Cwd -EnableDefaultModeRequestUserInput $false -InstallWindowsNotifications $InstallWindowsNotifications -SourceRoot $script:ScriptRoot
     $result = Invoke-TargetInstallation -Target $target -Transaction $transaction
     Save-InstallationManifest -Result $result -Transaction $transaction -External $null
     Complete-FileTransaction -Transaction $transaction

@@ -1,19 +1,10 @@
-function New-InstallationPlan([ValidateSet('Git', 'CVS')][string]$DevelopmentEnvironment, [switch]$InstallRequestExecutionOptimizer, [switch]$EnableDefaultModeRequestUserInput, [bool]$InstallWindowsNotifications, [string]$Cwd = (Get-Location).Path) {
+function New-InstallationPlan([ValidateSet('Git', 'CVS')][string]$DevelopmentEnvironment, [switch]$InstallRequestExecutionOptimizer, [switch]$EnableDefaultModeRequestUserInput, [bool]$InstallWindowsNotifications, [string]$Cwd = (Get-Location).Path, [string]$SourceRoot = '', [bool]$IncludeExistingSkills = $false) {
+    if ([string]::IsNullOrWhiteSpace($SourceRoot)) { $SourceRoot = [string]$ScriptRoot }
     $targets = New-Object 'System.Collections.Generic.List[object]'
-    [void]$targets.Add([pscustomobject]@{
-        Mode = 'Global'
-        Template = Join-Path $ScriptRoot 'templates\core'
-        EnvironmentTemplate = Join-Path $ScriptRoot ("templates\environments\{0}" -f $DevelopmentEnvironment.ToLowerInvariant())
-        DevelopmentEnvironment = $DevelopmentEnvironment
-        Root = Join-Path $HOME '.codex'
-        Cwd = $Cwd
-        EnableDefaultModeRequestUserInput = [bool]$EnableDefaultModeRequestUserInput
-        InstallWindowsNotifications = $InstallWindowsNotifications
-    })
+    [void]$targets.Add((New-InstallTarget -Id 'global' -Mode 'Global' -TemplateRoot (Join-Path $SourceRoot 'templates\core') -EnvironmentTemplateRoot (Join-Path $SourceRoot ("templates\environments\{0}" -f $DevelopmentEnvironment.ToLowerInvariant())) -DevelopmentEnvironment $DevelopmentEnvironment -Root (Join-Path $HOME '.codex') -Cwd $Cwd -EnableDefaultModeRequestUserInput ([bool]$EnableDefaultModeRequestUserInput) -InstallWindowsNotifications $InstallWindowsNotifications -SourceRoot $SourceRoot))
     $skillsRoot = Join-Path $HOME '.codex\skills'
-    $skillManifest = Join-Path $skillsRoot '.codex-settings-manifest.json'
-    if ($InstallRequestExecutionOptimizer -or (Test-Path -LiteralPath $skillManifest -PathType Leaf)) {
-        [void]$targets.Add([pscustomobject]@{ Mode = 'GlobalSkills'; Template = Join-Path $ScriptRoot 'templates\skills'; Root = $skillsRoot })
+    if ($InstallRequestExecutionOptimizer -or $IncludeExistingSkills) {
+        [void]$targets.Add((New-InstallTarget -Id 'global-skills' -Mode 'GlobalSkills' -TemplateRoot (Join-Path $SourceRoot 'templates\skills') -Root $skillsRoot -Cwd $Cwd -SourceRoot $SourceRoot))
     }
     return $targets.ToArray()
 }
@@ -21,8 +12,8 @@ function New-InstallationPlan([ValidateSet('Git', 'CVS')][string]$DevelopmentEnv
 function Get-InstallTemplateEntries($Target) {
     $entries = New-Object 'System.Collections.Generic.List[object]'
     $globalPaths = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
-    foreach ($source in Get-ChildItem -LiteralPath $Target.Template -Recurse -File) {
-        $relative = $source.FullName.Substring($Target.Template.Length).TrimStart([char[]]'\/')
+    foreach ($source in Get-ChildItem -LiteralPath $Target.TemplateRoot -Recurse -File) {
+        $relative = $source.FullName.Substring($Target.TemplateRoot.Length).TrimStart([char[]]'\/')
         if ($Target.Mode -eq 'Global' -and -not [bool]$Target.InstallWindowsNotifications -and $relative.Replace('\', '/') -eq 'hooks/show-codex-notification.ps1') { continue }
         [void]$globalPaths.Add($relative)
         $content = [IO.File]::ReadAllText($source.FullName)
@@ -31,7 +22,7 @@ function Get-InstallTemplateEntries($Target) {
             if (-not [bool]$Target.InstallWindowsNotifications -and $relative.Replace('\', '/') -eq 'hooks.json') {
                 $content = Remove-ManagedNotificationHooksJson -Content $content
             }
-            $environmentSource = Join-Path $Target.EnvironmentTemplate $relative
+            $environmentSource = Join-Path $Target.EnvironmentTemplateRoot $relative
             if (Test-Path -LiteralPath $environmentSource -PathType Leaf) {
                 if ($relative.Replace('\', '/') -eq 'hooks.json') {
                     $content = Merge-HooksJson -ExistingContent $content -TemplateContent ([IO.File]::ReadAllText($environmentSource))
@@ -44,8 +35,8 @@ function Get-InstallTemplateEntries($Target) {
     }
 
     if ($Target.Mode -eq 'Global') {
-        foreach ($source in Get-ChildItem -LiteralPath $Target.EnvironmentTemplate -Recurse -File) {
-            $relative = $source.FullName.Substring($Target.EnvironmentTemplate.Length).TrimStart([char[]]'\/')
+        foreach ($source in Get-ChildItem -LiteralPath $Target.EnvironmentTemplateRoot -Recurse -File) {
+            $relative = $source.FullName.Substring($Target.EnvironmentTemplateRoot.Length).TrimStart([char[]]'\/')
             if ($globalPaths.Contains($relative)) { continue }
             [void]$entries.Add([pscustomobject]@{ RelativePath = $relative; Content = [IO.File]::ReadAllText($source.FullName) })
         }
@@ -88,13 +79,14 @@ function Get-Strategy([string]$ModeName, [string]$RelativePath) {
     return [pscustomobject]@{ Name = 'replace'; Start = $null; End = $null }
 }
 
-function Remove-LegacyDefaultRulesContent([string]$ExistingContent, [string]$NewLine) {
+function Remove-LegacyDefaultRulesContent([string]$ExistingContent, [string]$NewLine, [string]$SourceRoot = '') {
+    if ([string]::IsNullOrWhiteSpace($SourceRoot)) { $SourceRoot = [string]$ScriptRoot }
     $cleaned = $ExistingContent -replace "`r`n|`r", "`n"
     $cleaned = Remove-ManagedBlock -Content $cleaned -StartMarker '# >>> CODEX-SETTINGS: >>>' -EndMarker '# <<< CODEX-SETTINGS: <<<'
     $templatePaths = @(
-        (Join-Path $ScriptRoot 'templates\core\rules\default.rules'),
-        (Join-Path $ScriptRoot 'templates\environments\git\rules\default.rules'),
-        (Join-Path $ScriptRoot 'templates\environments\cvs\rules\default.rules')
+        (Join-Path $SourceRoot 'templates\core\rules\default.rules'),
+        (Join-Path $SourceRoot 'templates\environments\git\rules\default.rules'),
+        (Join-Path $SourceRoot 'templates\environments\cvs\rules\default.rules')
     )
     foreach ($templatePath in $templatePaths) {
         $managedContent = ([IO.File]::ReadAllText($templatePath) -replace "`r`n|`r", "`n").Trim()

@@ -1,5 +1,5 @@
 function Invoke-TargetInstallation($Target, $Transaction, [switch]$Force) {
-    if (-not (Test-Path -LiteralPath $Target.Template -PathType Container)) { throw "找不到範本：$($Target.Template)" }
+    if (-not (Test-Path -LiteralPath $Target.TemplateRoot -PathType Container)) { throw "找不到範本：$($Target.TemplateRoot)" }
     New-Item -ItemType Directory -Path $Target.Root -Force | Out-Null
     $transactionEntriesBeforeCleanup = $Transaction.Entries.Count
     $previous = Get-Manifest $Target.Root
@@ -48,7 +48,7 @@ function Invoke-TargetInstallation($Target, $Transaction, [switch]$Force) {
                     if ($relative.Replace('\', '/').EndsWith('AGENTS.md')) {
                         Merge-ManagedMarkdownBlock $existing $template $strategy.Start $strategy.End $state.NewLine
                     } elseif ($relative.Replace('\', '/') -eq 'rules/default.rules') {
-                        $rulesBase = Remove-LegacyDefaultRulesContent -ExistingContent $existing -NewLine $state.NewLine
+                        $rulesBase = Remove-LegacyDefaultRulesContent -ExistingContent $existing -NewLine $state.NewLine -SourceRoot $Target.SourceRoot
                         Merge-ManagedBlock $rulesBase $template $strategy.Start $strategy.End $state.NewLine
                     } else {
                         Merge-ManagedBlock $existing $template $strategy.Start $strategy.End $state.NewLine
@@ -73,18 +73,8 @@ function Invoke-TargetInstallation($Target, $Transaction, [switch]$Force) {
         }
         $afterHash = if ($changed) { (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash } else { $beforeHash }
 
-        [void]$entries.Add([pscustomobject]@{
-            Path = $relative
-            Strategy = $strategy.Name
-            StartMarker = $strategy.Start
-            EndMarker = $strategy.End
-            ExistedBefore = [bool]$state.Exists
-            OriginalEncoding = [string]$state.EncodingName
-            OriginalCodePage = [int]$state.CodePage
-            Sha256 = $afterHash
-            Changed = $changed
-            Status = if (-not $state.Exists) { 'Installed' } elseif ($changed) { 'Updated' } else { 'Unchanged' }
-        })
+        $status = if (-not $state.Exists) { 'Installed' } elseif ($changed) { 'Updated' } else { 'Unchanged' }
+        [void]$entries.Add((New-InstallFileResult -Path $relative -RelativePath $relative -Strategy $strategy.Name -StartMarker $strategy.Start -EndMarker $strategy.End -ExistedBefore ([bool]$state.Exists) -Changed $changed -Created (-not $state.Exists) -Updated ([bool]($state.Exists -and $changed)) -Sha256Before $beforeHash -Sha256After $afterHash -Status $status -OriginalEncoding ([string]$state.EncodingName) -OriginalCodePage ([int]$state.CodePage)))
     }
 
     if ($null -ne $previous -and $null -ne $previous.Files) {
@@ -112,5 +102,5 @@ function Invoke-TargetInstallation($Target, $Transaction, [switch]$Force) {
     if ($Target.Mode -eq 'Global') { Assert-GlobalLineEndingHook -DevelopmentEnvironment $Target.DevelopmentEnvironment -Root $Target.Root -InstallWindowsNotifications ([bool]$Target.InstallWindowsNotifications) -ProjectRoot $projectRoot -ManagedNotificationFingerprints $managedNotificationFingerprints -ManagedTokenFingerprints $managedTokenFingerprints | Out-Null }
 
     $hookPathsChanged = @($entries | Where-Object { $_.Changed -and ([string]$_.Path -eq 'hooks.json' -or [string]$_.Path -like 'hooks\*') }).Count -gt 0
-    return [pscustomobject]@{ Mode = $Target.Mode; DevelopmentEnvironment = $Target.DevelopmentEnvironment; Root = $Target.Root; Previous = $previous; Files = $entries.ToArray(); HookChanged = $hookPathsChanged -or $hookCleanupChanged }
+    return New-InstallationResult -Mode $Target.Mode -Root $Target.Root -DevelopmentEnvironment $Target.DevelopmentEnvironment -Files $entries.ToArray() -Previous $previous -HookChanged ($hookPathsChanged -or $hookCleanupChanged) -TransactionId ([string]$Transaction.Root)
 }

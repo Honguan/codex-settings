@@ -6,6 +6,12 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$runtimeCorePath = Join-Path $PSScriptRoot 'runtime-core.ps1'
+if (-not (Test-Path -LiteralPath $runtimeCorePath -PathType Leaf)) {
+    $templateRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
+    $runtimeCorePath = Join-Path $templateRoot 'core\hooks\runtime-core.ps1'
+}
+if (Test-Path -LiteralPath $runtimeCorePath -PathType Leaf) { . $runtimeCorePath }
 $script:HookStartTime = [DateTimeOffset]::Now
 $script:HookStopwatch = [Diagnostics.Stopwatch]::StartNew()
 $script:HookCommand = if ([string]::IsNullOrWhiteSpace([string]$MyInvocation.Line)) { $PSCommandPath } else { [string]$MyInvocation.Line }
@@ -40,24 +46,6 @@ $script:HookTimings = [ordered]@{
 
 function Add-HookTiming([string]$Name, [long]$Milliseconds) {
     if ($script:HookTimings.Contains($Name)) { $script:HookTimings[$Name] = [long]$script:HookTimings[$Name] + $Milliseconds }
-}
-
-function ConvertFrom-HookInputJson([string]$Text) {
-    try { return $Text | ConvertFrom-Json -ErrorAction Stop }
-    catch {
-        $originalError = $_
-        $pattern = '(?s)(?<prefix>"last_assistant_message"\s*:\s*)".*"(?<suffix>\s*}\s*)$'
-        $sanitized = [regex]::Replace($Text, $pattern, '${prefix}null${suffix}')
-        if ($sanitized -ne $Text) {
-            try { return $sanitized | ConvertFrom-Json -ErrorAction Stop } catch {}
-        }
-        $messageProperty = @([regex]::Matches($Text, ',\s*"last_assistant_message"\s*:'))[-1]
-        if ($null -ne $messageProperty) {
-            $prefix = $Text.Substring(0, $messageProperty.Index).TrimEnd()
-            try { return ($prefix + '}') | ConvertFrom-Json -ErrorAction Stop } catch {}
-        }
-        throw $originalError
-    }
 }
 
 function Get-Sha256([byte[]]$Bytes) {
@@ -224,7 +212,10 @@ function Write-LineEndingIndex([string]$Path, $Index) {
     New-Item -ItemType Directory -Path $root -Force | Out-Null
     $temporaryPath = $Path + '.tmp-' + [guid]::NewGuid().ToString('N')
     try {
-        [IO.File]::WriteAllText($temporaryPath, ($Index | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
+        $envelope = [ordered]@{ schemaVersion = 1; kind = 'line-ending-index'; createdAt = [DateTimeOffset]::UtcNow.ToString('o'); updatedAt = [DateTimeOffset]::UtcNow.ToString('o'); payload = $Index }
+        if ($Index -is [Collections.IDictionary]) { foreach ($property in $Index.Keys) { $envelope[$property] = $Index[$property] } }
+        else { foreach ($property in $Index.PSObject.Properties) { $envelope[$property.Name] = $property.Value } }
+        [IO.File]::WriteAllText($temporaryPath, ($envelope | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
         Move-Item -LiteralPath $temporaryPath -Destination $Path -Force
     } finally {
         if (Test-Path -LiteralPath $temporaryPath -PathType Leaf) { Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue }
@@ -251,56 +242,24 @@ function New-LineEndingFileState([string]$Path, [IO.FileInfo]$FileInfo) {
         $script:HookTimings.fileReadMs = [long]$script:HookTimings.fileReadMs + $stopwatch.ElapsedMilliseconds
         if (Test-BinaryBytes -Bytes $bytes) { return $null }
         $lineEndings = Get-LineEndingState -Bytes $bytes
+        $sha256 = Get-Sha256 -Bytes $bytes
         return [ordered]@{
+            schemaVersion = 1
+            path = $Path
+            length = $FileInfo.Length
+            lastWriteTimeUtc = $FileInfo.LastWriteTimeUtc.ToString('o')
+            optionalSha256 = $sha256
             lineEnding = $lineEndings.Style
             preferredLineEnding = $lineEndings.PreferredStyle
             finalNewline = $lineEndings.FinalNewline
             finalNewlineStyle = $lineEndings.FinalStyle
             bom = Get-BomName -Bytes $bytes
-            sha256 = Get-Sha256 -Bytes $bytes
+            sha256 = $sha256
             verifiedLength = $FileInfo.Length
             verifiedLastWriteTimeUtcTicks = $FileInfo.LastWriteTimeUtc.Ticks
         }
     } finally {
         if ($stopwatch.IsRunning) { $stopwatch.Stop() }
-    }
-}
-
-function Get-HookSource {
-    try {
-        $current = [IO.Path]::GetFullPath($PSScriptRoot).TrimEnd('\', '/')
-        $globalRoot = [IO.Path]::GetFullPath((Join-Path $HOME '.codex\hooks')).TrimEnd('\', '/')
-        if ($current.Equals($globalRoot, [StringComparison]::OrdinalIgnoreCase)) { return 'global' }
-        if ([IO.Path]::GetFileName($current).Equals('hooks', [StringComparison]::OrdinalIgnoreCase) -and [IO.Path]::GetFileName((Split-Path -Parent $current)).Equals('.codex', [StringComparison]::OrdinalIgnoreCase)) { return 'project' }
-    } catch {}
-    return 'global'
-}
-
-function Get-HookParentProcessId {
-    if ($null -ne $script:HookParentProcessId) { return [int]$script:HookParentProcessId }
-    $parentProcessId = 0
-    try {
-        $parent = (Get-Process -Id $PID -ErrorAction Stop).Parent
-        if ($null -ne $parent) { $parentProcessId = [int]$parent.Id }
-    } catch {}
-    if ($parentProcessId -eq 0) {
-        try { $parentProcessId = [int](Get-CimInstance Win32_Process -Filter "ProcessId=$PID" -ErrorAction Stop).ParentProcessId }
-        catch { $parentProcessId = 0 }
-    }
-    $script:HookParentProcessId = $parentProcessId
-    return $parentProcessId
-}
-
-function New-HookInvocationCounts {
-    return [ordered]@{
-        GlobalStopHookCount = 0
-        ProjectStopHookCount = 0
-        EffectiveStopHookCount = 0
-        GlobalPostToolUseHookCount = 0
-        ProjectPostToolUseHookCount = 0
-        EffectivePostToolUseHookCount = 0
-        NotificationInvocationCount = 0
-        CrlfInvocationCount = 0
     }
 }
 
@@ -344,69 +303,17 @@ function Invoke-WithIndexLock([string]$ProjectRoot, [scriptblock]$Action) {
 
 function Write-LineEndingState([string]$Path, $State) {
     $stopwatch = [Diagnostics.Stopwatch]::StartNew()
+    if ($null -ne $State -and $null -ne $State.PSObject.Properties['payload'] -and $null -ne $State.PSObject.Properties['schemaVersion']) { $State = $State.payload }
     New-Item -ItemType Directory -Path (Split-Path -Parent $Path) -Force | Out-Null
     $temporaryPath = $Path + '.tmp-' + [guid]::NewGuid().ToString('N')
     try {
-        [IO.File]::WriteAllText($temporaryPath, ($State | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
+        $envelope = [ordered]@{ schemaVersion = 1; kind = 'line-ending-session'; createdAt = [DateTimeOffset]::UtcNow.ToString('o'); updatedAt = [DateTimeOffset]::UtcNow.ToString('o'); payload = $State }
+        if ($State -is [Collections.IDictionary]) { foreach ($property in $State.Keys) { $envelope[$property] = $State[$property] } }
+        else { foreach ($property in $State.PSObject.Properties) { if ($property.Name -notin @('payload')) { $envelope[$property.Name] = $property.Value } } }
+        [IO.File]::WriteAllText($temporaryPath, ($envelope | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
         try { Move-Item -LiteralPath $temporaryPath -Destination $Path -Force }
         finally { if (Test-Path -LiteralPath $temporaryPath -PathType Leaf) { Remove-Item -LiteralPath $temporaryPath -Force } }
     } finally { Add-HookTiming -Name 'stateWriteMs' -Milliseconds $stopwatch.ElapsedMilliseconds }
-}
-
-function Invoke-WithNamedMutex([string]$Name, [scriptblock]$Action, [int]$TimeoutMilliseconds = 5000) {
-    $mutex = $null
-    $lockHeld = $false
-    try {
-        $mutex = [Threading.Mutex]::new($false, $Name)
-        try { $lockHeld = $mutex.WaitOne($TimeoutMilliseconds) } catch [Threading.AbandonedMutexException] { $lockHeld = $true }
-        if (-not $lockHeld) { throw "Unable to acquire hook mutex: $Name" }
-        return & $Action
-    } finally {
-        if ($lockHeld -and $null -ne $mutex) { try { $mutex.ReleaseMutex() } catch {} }
-        if ($null -ne $mutex) { $mutex.Dispose() }
-    }
-}
-
-function Get-HookInvocationCounts($InputObject) {
-    $counts = New-HookInvocationCounts
-    $stopwatch = [Diagnostics.Stopwatch]::StartNew()
-    try {
-        $root = if ([string]::IsNullOrWhiteSpace($env:CODEX_SETTINGS_HOOK_INVOCATION_STATE_ROOT)) { Join-Path $HOME '.codex\state\hook-invocations' } else { [IO.Path]::GetFullPath($env:CODEX_SETTINGS_HOOK_INVOCATION_STATE_ROOT) }
-        $sessionId = if ($null -eq $InputObject -or [string]::IsNullOrWhiteSpace([string]$InputObject.session_id)) { 'unknown-session' } else { [string]$InputObject.session_id }
-        $turnId = if ($null -eq $InputObject -or [string]::IsNullOrWhiteSpace([string]$InputObject.turn_id)) { 'unknown-turn' } else { [string]$InputObject.turn_id }
-        $eventName = if ($null -eq $InputObject -or [string]::IsNullOrWhiteSpace([string]$InputObject.hook_event_name)) { $Mode } else { [string]$InputObject.hook_event_name }
-        $cwd = if ($null -eq $InputObject) { '' } else { [string]$InputObject.cwd }
-        $key = "$cwd|$sessionId|$turnId|$eventName"
-        $sha = [Security.Cryptography.SHA256]::Create()
-        try { $hash = ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($key)))).Replace('-', '').ToLowerInvariant() }
-        finally { $sha.Dispose() }
-        $path = Join-Path $root ($hash + '.json')
-        $counts = Invoke-WithNamedMutex -Name ('CodexSettings.HookInvocation.' + $hash) -Action {
-            $value = New-HookInvocationCounts
-            $stored = $null
-            if (Test-Path -LiteralPath $path -PathType Leaf) { try { $stored = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json -ErrorAction Stop } catch {} }
-            if ($null -ne $stored) { foreach ($property in @($value.Keys)) { if ($null -ne $stored.PSObject.Properties[$property]) { $value[$property] = [int]$stored.$property } } }
-            $value.CrlfInvocationCount = [int]$value.CrlfInvocationCount + 1
-            if ($eventName -eq 'Stop') {
-                if ($script:HookSource -eq 'project') { $value.ProjectStopHookCount = [int]$value.ProjectStopHookCount + 1 } else { $value.GlobalStopHookCount = [int]$value.GlobalStopHookCount + 1 }
-            }
-            if ($eventName -eq 'PostToolUse') {
-                if ($script:HookSource -eq 'project') { $value.ProjectPostToolUseHookCount = [int]$value.ProjectPostToolUseHookCount + 1 } else { $value.GlobalPostToolUseHookCount = [int]$value.GlobalPostToolUseHookCount + 1 }
-            }
-            $value.EffectiveStopHookCount = $value.GlobalStopHookCount + $value.ProjectStopHookCount
-            $value.EffectivePostToolUseHookCount = $value.GlobalPostToolUseHookCount + $value.ProjectPostToolUseHookCount
-            New-Item -ItemType Directory -Path $root -Force | Out-Null
-            $temporaryPath = $path + '.tmp-' + [guid]::NewGuid().ToString('N')
-            try {
-                [IO.File]::WriteAllText($temporaryPath, ($value | ConvertTo-Json -Compress), [Text.UTF8Encoding]::new($false))
-                Move-Item -LiteralPath $temporaryPath -Destination $path -Force
-            } finally {
-                if (Test-Path -LiteralPath $temporaryPath -PathType Leaf) { Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue }
-            }
-            return [pscustomobject]$value
-        }
-    } catch {} finally { Add-HookTiming -Name 'invocationCounterMs' -Milliseconds $stopwatch.ElapsedMilliseconds }
-    return [pscustomobject]$counts
 }
 
 function Write-HookDiagnostic($InputObject, [string]$Result, [string[]]$ChangedFiles, [string]$Details) {
@@ -415,7 +322,7 @@ function Write-HookDiagnostic($InputObject, [string]$Result, [string[]]$ChangedF
         $root = if ([string]::IsNullOrWhiteSpace($env:CODEX_SETTINGS_HOOK_LOG_ROOT)) { Join-Path $HOME '.codex\logs\hooks' } else { $env:CODEX_SETTINGS_HOOK_LOG_ROOT }
         $sessionId = if ($null -eq $InputObject) { 'unknown' } else { [string]$InputObject.session_id }
         $safeSessionId = [regex]::Replace($sessionId, '[^A-Za-z0-9._-]', '_')
-        $counts = if ($null -eq $script:HookInvocationCounts) { [pscustomobject](New-HookInvocationCounts) } else { $script:HookInvocationCounts }
+        $counts = if ($null -eq $script:HookInvocationCounts) { [pscustomobject](New-CodexHookInvocationCounts) } else { $script:HookInvocationCounts }
         $entry = [ordered]@{
             timestamp = [DateTimeOffset]::Now.ToString('o')
             event = if ($null -eq $InputObject) { $Mode } else { [string]$InputObject.hook_event_name }
@@ -432,7 +339,7 @@ function Write-HookDiagnostic($InputObject, [string]$Result, [string[]]$ChangedF
             hookSource = $script:HookSource
             hookCommand = $script:HookCommand
             processId = $PID
-            parentProcessId = Get-HookParentProcessId
+            parentProcessId = Get-CodexHookParentProcessId
             startTime = $script:HookStartTime.ToString('o')
             endTime = [DateTimeOffset]::Now.ToString('o')
             elapsedMs = $script:HookStopwatch.ElapsedMilliseconds
@@ -663,10 +570,11 @@ $changedFiles = @()
 try {
     $inputText = [Console]::In.ReadToEnd()
     if ([string]::IsNullOrWhiteSpace($inputText)) { throw 'Hook input JSON is empty.' }
-    $inputObject = ConvertFrom-HookInputJson -Text $inputText
+    $inputObject = ConvertFrom-CodexHookInputJson -Text $inputText
     if ([string]::IsNullOrWhiteSpace([string]$inputObject.session_id)) { throw 'Hook input is missing session_id.' }
-    $script:HookSource = Get-HookSource
-    $script:HookInvocationCounts = Get-HookInvocationCounts -InputObject $inputObject
+    $script:HookSource = Get-CodexHookSource
+    $script:HookInvocationContext = New-CodexHookInvocationContext -InputObject $inputObject -HookSource $script:HookSource
+    $script:HookInvocationCounts = Get-CodexHookInvocationCounts -InputObject $inputObject -Kind crlf -EventName $Mode -HookSource $script:HookSource
     if ($Mode -eq 'Track') {
         if ([string]::IsNullOrWhiteSpace([string]$inputObject.cwd)) { throw 'Hook input is missing cwd.' }
         if (Test-NeedsLineEndingState -InputObject $inputObject) { Save-InitialState -InputObject $inputObject }

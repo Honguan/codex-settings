@@ -30,16 +30,7 @@ try {
     if ((Get-Command Write-InstallResult -CommandType Function).Name -ne 'Write-InstallResult') { throw '缺少安裝結果函式。' }
 
     $targetRoot = Join-Path $testRoot 'target'
-    $target = [pscustomobject]@{
-        Mode = 'Global'
-        Template = Join-Path $script:ScriptRoot 'templates\core'
-        EnvironmentTemplate = Join-Path $script:ScriptRoot 'templates\environments\git'
-        DevelopmentEnvironment = 'Git'
-        Root = $targetRoot
-        Cwd = $testRoot
-        EnableDefaultModeRequestUserInput = $false
-        InstallWindowsNotifications = $false
-    }
+    $target = New-InstallTarget -Id 'test-global' -Mode 'Global' -TemplateRoot (Join-Path $script:ScriptRoot 'templates\core') -EnvironmentTemplateRoot (Join-Path $script:ScriptRoot 'templates\environments\git') -DevelopmentEnvironment 'Git' -Root $targetRoot -Cwd $testRoot -EnableDefaultModeRequestUserInput $false -InstallWindowsNotifications $false -SourceRoot $script:ScriptRoot
     $firstTransaction = New-FileTransaction -Root (Join-Path $testRoot 'first-transaction') -Mode 'Test'
     $firstResult = Invoke-TargetInstallation -Target $target -Transaction $firstTransaction
     Save-InstallationManifest -Result $firstResult -Transaction $firstTransaction -External $null

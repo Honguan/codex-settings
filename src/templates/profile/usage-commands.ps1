@@ -170,6 +170,29 @@ function global:Invoke-CodexUsageJson {
     throw "ccusage query failed.`n$($attemptErrors -join "`n")"
 }
 
+function global:New-CodexUsageQuery {
+    [CmdletBinding()]
+    param(
+        [ValidateSet('session', 'daily')][string]$ReportKind = 'session',
+        [ValidateRange(1, 3650)][int]$Days = 7
+    )
+
+    return [pscustomobject][ordered]@{
+        schemaVersion = 1
+        kind = $ReportKind
+        days = $Days
+        timezone = 'Asia/Taipei'
+        renderer = 'table'
+    }
+}
+
+function global:Invoke-CodexUsageQuery {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)]$Query)
+
+    return Invoke-CodexUsageJson -ReportKind $Query.kind -Days ([int]$Query.days)
+}
+
 function global:Write-CodexUsageProfile {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)]$Metrics)
@@ -420,7 +443,8 @@ function global:ccsessions {
     }
 
     try {
-        $usageResult = Invoke-CodexUsageJson -ReportKind 'session'
+        $query = New-CodexUsageQuery -ReportKind 'session'
+        $usageResult = Invoke-CodexUsageQuery -Query $query
         $commandContext.Text = $usageResult.CommandText
         foreach ($metric in $usageResult.Metrics.PSObject.Properties) { $usageProfile[$metric.Name] = $metric.Value }
 
@@ -644,7 +668,8 @@ function global:cdaily {
     }
 
     try {
-        $usageResult = Invoke-CodexUsageJson -ReportKind 'daily' -Days $Days
+        $query = New-CodexUsageQuery -ReportKind 'daily' -Days $Days
+        $usageResult = Invoke-CodexUsageQuery -Query $query
         foreach ($metric in $usageResult.Metrics.PSObject.Properties) { $usageProfile[$metric.Name] = $metric.Value }
         $commandText = $usageResult.CommandText
         $normalizeStopwatch = if ($usageProfileEnabled) { [Diagnostics.Stopwatch]::StartNew() } else { $null }

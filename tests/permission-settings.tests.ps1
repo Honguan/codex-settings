@@ -19,15 +19,7 @@ sandbox = "unelevated"
     [IO.File]::WriteAllText($configPath, $existingConfig.Trim() + "`r`n", [Text.UTF8Encoding]::new($false))
 
     $transaction = New-FileTransaction -Root (Join-Path $testRoot 'transaction') -Mode 'Test-Permissions'
-    $target = [pscustomobject]@{
-        Mode = 'Global'
-        Template = Join-Path $script:ScriptRoot 'templates\core'
-        EnvironmentTemplate = Join-Path $script:ScriptRoot 'templates\environments\git'
-        DevelopmentEnvironment = 'Git'
-        Root = $globalRoot
-        EnableDefaultModeRequestUserInput = $false
-        InstallWindowsNotifications = $false
-    }
+    $target = New-InstallTarget -Id 'test-global' -Mode 'Global' -TemplateRoot (Join-Path $script:ScriptRoot 'templates\core') -EnvironmentTemplateRoot (Join-Path $script:ScriptRoot 'templates\environments\git') -DevelopmentEnvironment 'Git' -Root $globalRoot -EnableDefaultModeRequestUserInput $false -InstallWindowsNotifications $false -SourceRoot $script:ScriptRoot
     $result = Invoke-TargetInstallation -Target $target -Transaction $transaction
     Save-InstallationManifest -Result $result -Transaction $transaction -External $null
     Complete-FileTransaction -Transaction $transaction

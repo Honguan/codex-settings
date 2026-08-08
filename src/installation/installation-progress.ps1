@@ -198,6 +198,13 @@ function Get-InstallResultSummary {
 
     $summary = @{ Installed = 0; Updated = 0; Unchanged = 0; Skipped = 0 }
     foreach ($result in @($Results)) {
+        if ($null -ne $result.Summary) {
+            $summary.Installed += [int]$result.Summary.Installed
+            $summary.Updated += [int]$result.Summary.Updated
+            $summary.Unchanged += [int]$result.Summary.Unchanged
+            $summary.Skipped += [int]$result.Summary.Failed
+            continue
+        }
         foreach ($file in @($result.Files)) {
             $status = [string]$file.Status
             if ($summary.ContainsKey($status)) { $summary[$status] = [int]$summary[$status] + 1 }
