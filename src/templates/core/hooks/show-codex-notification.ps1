@@ -31,6 +31,23 @@ $script:NativeToastShown = $false
 $script:FallbackAttempted = $false
 $script:FallbackShown = $false
 $script:CleanupScheduled = $false
+$script:HookParentProcessId = $null
+$script:HookTimings = [ordered]@{
+    invocationCounterMs = 0
+    diagnosticWriteMs = 0
+    ccsessionsResolveMs = 0
+    ccsessionsRunMs = 0
+    ccsessionsRetrySleepMs = 0
+    transcriptReadMs = 0
+}
+$script:TranscriptTokenEventCache = @{}
+$script:CcSessionsCommandName = $null
+$script:CcSessionsCommandKind = $null
+$script:CcSessionsCommandPath = $null
+
+function Add-HookTiming([string]$Name, [long]$Milliseconds) {
+    if ($script:HookTimings.Contains($Name)) { $script:HookTimings[$Name] = [long]$script:HookTimings[$Name] + $Milliseconds }
+}
 
 function Write-HookResult { [Console]::Out.Write('{}') }
 
@@ -113,12 +130,18 @@ function Get-HookSource {
 }
 
 function Get-HookParentProcessId {
+    if ($null -ne $script:HookParentProcessId) { return [int]$script:HookParentProcessId }
+    $parentProcessId = 0
     try {
         $parent = (Get-Process -Id $PID -ErrorAction Stop).Parent
-        if ($null -ne $parent) { return [int]$parent.Id }
+        if ($null -ne $parent) { $parentProcessId = [int]$parent.Id }
     } catch {}
-    try { return [int](Get-CimInstance Win32_Process -Filter "ProcessId=$PID" -ErrorAction Stop).ParentProcessId }
-    catch { return 0 }
+    if ($parentProcessId -eq 0) {
+        try { $parentProcessId = [int](Get-CimInstance Win32_Process -Filter "ProcessId=$PID" -ErrorAction Stop).ParentProcessId }
+        catch { $parentProcessId = 0 }
+    }
+    $script:HookParentProcessId = $parentProcessId
+    return $parentProcessId
 }
 
 function New-HookInvocationCounts {
@@ -136,6 +159,7 @@ function New-HookInvocationCounts {
 
 function Get-HookInvocationCounts($InputObject, [ValidateSet('notification', 'crlf')][string]$Kind) {
     $counts = New-HookInvocationCounts
+    $stopwatch = [Diagnostics.Stopwatch]::StartNew()
     try {
         $root = if ([string]::IsNullOrWhiteSpace($env:CODEX_SETTINGS_HOOK_INVOCATION_STATE_ROOT)) { Join-Path $HOME '.codex\state\hook-invocations' } else { [IO.Path]::GetFullPath($env:CODEX_SETTINGS_HOOK_INVOCATION_STATE_ROOT) }
         $sessionId = if ($null -eq $InputObject -or [string]::IsNullOrWhiteSpace([string]$InputObject.session_id)) { 'unknown-session' } else { [string]$InputObject.session_id }
@@ -175,12 +199,13 @@ function Get-HookInvocationCounts($InputObject, [ValidateSet('notification', 'cr
             }
             return [pscustomobject]$value
         }
-    } catch {}
+    } catch {} finally { Add-HookTiming -Name 'invocationCounterMs' -Milliseconds $stopwatch.ElapsedMilliseconds }
     if ($counts -is [hashtable] -or $counts -is [Collections.IDictionary]) { return [pscustomobject]$counts }
     return $counts
 }
 
 function Write-HookDiagnostic($InputObject, [string]$Result, [string]$Details) {
+    $stopwatch = [Diagnostics.Stopwatch]::StartNew()
     try {
         $root = if ([string]::IsNullOrWhiteSpace($env:CODEX_SETTINGS_HOOK_LOG_ROOT)) { Join-Path $HOME '.codex\logs\hooks' } else { $env:CODEX_SETTINGS_HOOK_LOG_ROOT }
         $sessionId = if ($null -eq $InputObject -or [string]::IsNullOrWhiteSpace([string]$InputObject.session_id)) { 'unknown' } else { [string]$InputObject.session_id }
@@ -225,11 +250,17 @@ function Write-HookDiagnostic($InputObject, [string]$Result, [string]$Details) {
             NotificationInvocationCount = [int]$counts.NotificationInvocationCount
             notificationInvocationIndex = [int]$counts.NotificationInvocationCount
             CrlfInvocationCount = [int]$counts.CrlfInvocationCount
+            invocationCounterMs = [long]$script:HookTimings.invocationCounterMs
+            diagnosticWriteMs = [long]$stopwatch.ElapsedMilliseconds
+            ccsessionsResolveMs = [long]$script:HookTimings.ccsessionsResolveMs
+            ccsessionsRunMs = [long]$script:HookTimings.ccsessionsRunMs
+            ccsessionsRetrySleepMs = [long]$script:HookTimings.ccsessionsRetrySleepMs
+            transcriptReadMs = [long]$script:HookTimings.transcriptReadMs
             details = $Details
         }
         New-Item -ItemType Directory -Path $root -Force | Out-Null
         [IO.File]::AppendAllText((Join-Path $root ($safeSessionId + '.log')), (($entry | ConvertTo-Json -Compress) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
-    } catch {}
+    } catch {} finally { Add-HookTiming -Name 'diagnosticWriteMs' -Milliseconds $stopwatch.ElapsedMilliseconds }
 }
 
 function Get-NotificationSettings([string]$Root) {
@@ -672,21 +703,42 @@ function Show-BalloonFallback([string]$Title, [string]$Message, [string]$Notific
     return [pscustomobject]@{ Shown = $true; CleanupScheduled = $false }
 }
 
+function Resolve-CcSessionsCommand {
+    if (-not [string]::IsNullOrWhiteSpace($env:CODEX_SETTINGS_CCSESSIONS_TEST_COMMAND)) {
+        return [pscustomobject]@{ Kind = 'test'; Name = 'pwsh'; Path = $env:CODEX_SETTINGS_CCSESSIONS_TEST_COMMAND }
+    }
+    if ($null -ne $script:CcSessionsCommandName) {
+        return [pscustomobject]@{ Kind = $script:CcSessionsCommandKind; Name = $script:CcSessionsCommandName; Path = $script:CcSessionsCommandPath }
+    }
+
+    $stopwatch = [Diagnostics.Stopwatch]::StartNew()
+    try {
+        foreach ($profilePath in @($PROFILE.CurrentUserAllHosts, $PROFILE.CurrentUserCurrentHost) | Select-Object -Unique) {
+            if (Test-Path -LiteralPath $profilePath -PathType Leaf) { . $profilePath *> $null }
+            if (Get-Command ccsessions -ErrorAction SilentlyContinue) { break }
+        }
+        $command = Get-Command ccsessions -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($null -eq $command) { throw 'ccsessions not found' }
+        $script:CcSessionsCommandName = [string]$command.Name
+        $script:CcSessionsCommandKind = 'profile'
+        $script:CcSessionsCommandPath = [string]$command.Source
+        return [pscustomobject]@{ Kind = 'profile'; Name = [string]$command.Name; Path = [string]$command.Source }
+    } finally { Add-HookTiming -Name 'ccsessionsResolveMs' -Milliseconds $stopwatch.ElapsedMilliseconds }
+}
+
 function Invoke-CcSessionsJson([string]$SessionId, $Baseline) {
     $lastError = $null
     $retryDelays = @(150, 250, 400, 650, 900, 1200)
+    $command = Resolve-CcSessionsCommand
     for ($attempt = 0; $attempt -le $retryDelays.Count; $attempt++) {
         try {
-            if (-not [string]::IsNullOrWhiteSpace($env:CODEX_SETTINGS_CCSESSIONS_TEST_COMMAND)) {
-                $output = & pwsh -NoLogo -NoProfile -File $env:CODEX_SETTINGS_CCSESSIONS_TEST_COMMAND -SessionId $SessionId 2>&1
+            $runStopwatch = [Diagnostics.Stopwatch]::StartNew()
+            if ($command.Kind -eq 'test') {
+                $output = & pwsh -NoLogo -NoProfile -File $command.Path -SessionId $SessionId 2>&1
             } else {
-                foreach ($profilePath in @($PROFILE.CurrentUserAllHosts, $PROFILE.CurrentUserCurrentHost) | Select-Object -Unique) {
-                    if (Test-Path -LiteralPath $profilePath -PathType Leaf) { . $profilePath *> $null }
-                    if (Get-Command ccsessions -ErrorAction SilentlyContinue) { break }
-                }
-                if (-not (Get-Command ccsessions -ErrorAction SilentlyContinue)) { throw 'ccsessions not found' }
-                $output = & ccsessions -Json $SessionId 2>&1
+                $output = & $command.Name -Json $SessionId 2>&1
             }
+            Add-HookTiming -Name 'ccsessionsRunMs' -Milliseconds $runStopwatch.ElapsedMilliseconds
             $text = ($output | Out-String).Trim()
             $start = $text.IndexOf('{')
             $end = $text.LastIndexOf('}')
@@ -699,7 +751,9 @@ function Invoke-CcSessionsJson([string]$SessionId, $Baseline) {
                 $candidate = ConvertTo-Snapshot -Usage $result -SessionId $SessionId -Source 'ccsessions'
                 if (-not (Test-SnapshotChanged -Current $candidate -Previous $Baseline)) {
                     if ($attempt -ge $retryDelays.Count) { return [pscustomobject]@{ Data = $result; RetryCount = $attempt } }
+                    $sleepStopwatch = [Diagnostics.Stopwatch]::StartNew()
                     Start-Sleep -Milliseconds $retryDelays[$attempt]
+                    Add-HookTiming -Name 'ccsessionsRetrySleepMs' -Milliseconds $sleepStopwatch.ElapsedMilliseconds
                     continue
                 }
             }
@@ -708,10 +762,28 @@ function Invoke-CcSessionsJson([string]$SessionId, $Baseline) {
             $lastError = $_
             try { $lastError.Exception.Data['ccsessionsRetryCount'] = $attempt } catch {}
             if ($_.Exception.Message -match 'ccsessions not found' -or $attempt -ge $retryDelays.Count) { throw }
+            $sleepStopwatch = [Diagnostics.Stopwatch]::StartNew()
             Start-Sleep -Milliseconds $retryDelays[$attempt]
+            Add-HookTiming -Name 'ccsessionsRetrySleepMs' -Milliseconds $sleepStopwatch.ElapsedMilliseconds
         }
     }
     throw $lastError
+}
+
+function Get-LastTokenCountEvent([string]$TranscriptPath) {
+    if ($script:TranscriptTokenEventCache.ContainsKey($TranscriptPath)) { return $script:TranscriptTokenEventCache[$TranscriptPath] }
+    $stopwatch = [Diagnostics.Stopwatch]::StartNew()
+    $event = $null
+    try {
+        $event = Get-Content -LiteralPath $TranscriptPath -Tail 512 | ForEach-Object {
+            try { $_ | ConvertFrom-Json -ErrorAction Stop } catch { $null }
+        } | Where-Object {
+            $_.type -eq 'event_msg' -and $_.payload.type -eq 'token_count'
+        } | Select-Object -Last 1
+    } catch {}
+    $script:TranscriptTokenEventCache[$TranscriptPath] = $event
+    Add-HookTiming -Name 'transcriptReadMs' -Milliseconds $stopwatch.ElapsedMilliseconds
+    return $event
 }
 
 function Get-RealtimeUsage($InputObject) {
@@ -721,12 +793,8 @@ function Get-RealtimeUsage($InputObject) {
     $transcriptPath = [string](Get-UsageValue -Usage $InputObject -Names @('transcript_path') -Default '')
     if ([string]::IsNullOrWhiteSpace($transcriptPath) -or -not (Test-Path -LiteralPath $transcriptPath -PathType Leaf)) { return $null }
     try {
-        $event = Get-Content -LiteralPath $transcriptPath -Tail 512 | ForEach-Object {
-            try { $_ | ConvertFrom-Json -ErrorAction Stop } catch { $null }
-        } | Where-Object {
-            $_.type -eq 'event_msg' -and $_.payload.type -eq 'token_count' -and $null -ne $_.payload.info.last_token_usage
-        } | Select-Object -Last 1
-        if ($null -ne $event) { return $event.payload.info.last_token_usage }
+        $event = Get-LastTokenCountEvent -TranscriptPath $transcriptPath
+        if ($null -ne $event -and $null -ne $event.payload.info.last_token_usage) { return $event.payload.info.last_token_usage }
     } catch {}
     return $null
 }
@@ -759,11 +827,7 @@ function Get-ModelNamesFromInput($InputObject) {
     $transcriptPath = [string](Get-UsageValue -Usage $InputObject -Names @('transcript_path') -Default '')
     if (-not [string]::IsNullOrWhiteSpace($transcriptPath) -and (Test-Path -LiteralPath $transcriptPath -PathType Leaf)) {
         try {
-            $event = Get-Content -LiteralPath $transcriptPath -Tail 512 | ForEach-Object {
-                try { $_ | ConvertFrom-Json -ErrorAction Stop } catch { $null }
-            } | Where-Object {
-                $_.type -eq 'event_msg' -and $_.payload.type -eq 'token_count'
-            } | Select-Object -Last 1
+            $event = Get-LastTokenCountEvent -TranscriptPath $transcriptPath
             if ($null -ne $event) {
                 $models = @(Get-ModelNamesFromUsage -Usage $event.payload.info)
                 if ($models.Count -eq 0) { $models = @(Get-ModelNamesFromUsage -Usage $event.payload) }

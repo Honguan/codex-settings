@@ -4,6 +4,7 @@ $hookScript = Join-Path $repositoryRoot 'src\templates\environments\cvs\hooks\pr
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('codex-settings-line-endings-' + [guid]::NewGuid().ToString('N'))
 $projectRoot = Join-Path $testRoot 'project'
 $stateRoot = Join-Path $testRoot 'state'
+$indexRoot = Join-Path $testRoot 'line-ending-index'
 $diagnosticRoot = Join-Path $testRoot 'logs'
 $invocationRoot = Join-Path $testRoot 'invocations'
 $projectRootB = Join-Path $testRoot 'project-b'
@@ -36,6 +37,7 @@ function Invoke-Hook([ValidateSet('Track', 'Restore', 'Finalize')][string]$Mode,
     $startInfo.RedirectStandardOutput = $true
     $startInfo.RedirectStandardError = $true
     $startInfo.Environment['CODEX_SETTINGS_LINE_ENDING_STATE_ROOT'] = $stateRoot
+    $startInfo.Environment['CODEX_SETTINGS_LINE_ENDING_INDEX_ROOT'] = $indexRoot
     $startInfo.Environment['CODEX_SETTINGS_HOOK_LOG_ROOT'] = $diagnosticRoot
     $startInfo.Environment['CODEX_SETTINGS_HOOK_INVOCATION_STATE_ROOT'] = $invocationRoot
     $process = [Diagnostics.Process]::Start($startInfo)
@@ -64,10 +66,11 @@ try {
     foreach ($eventName in @('PreToolUse', 'PostToolUse')) {
         $entry = @($hooksTemplate.hooks.$eventName)[0]
         if ($entry.matcher -ne '*' -or $entry.hooks[0].PSObject.Properties.Name -contains 'statusMessage') { throw "$eventName matcher 或 UI 狀態設定錯誤。" }
+        if ($entry.hooks[0].command -notmatch '-NoLogo.*-NonInteractive.*-File' -or $entry.hooks[0].commandWindows -notmatch '-NoLogo.*-NonInteractive.*-File') { throw "$eventName 未使用低啟動成本的 -File Hook 啟動方式。" }
     }
     if (@($hooksTemplate.hooks.Stop)[0].hooks[0].PSObject.Properties.Name -contains 'statusMessage') { throw 'Stop Hook 不應持續顯示執行狀態。' }
 
-    New-Item -ItemType Directory -Path (Join-Path $testRoot 'CVS'), (Join-Path $projectRoot 'CVS'), $stateRoot -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $testRoot 'CVS'), (Join-Path $projectRoot 'CVS'), $stateRoot, $indexRoot -Force | Out-Null
     [IO.File]::WriteAllText((Join-Path $testRoot 'CVS\Entries'), '', [Text.Encoding]::ASCII)
     $trackedFiles = @('crlf.txt', 'lf.txt', 'mixed.txt', 'no-final.txt', 'with-final.txt', 'utf8-bom.txt', 'ansi.txt', 'unchanged.txt', 'binary.bin', '.codex\ignored.txt')
     $entries = @($trackedFiles | Where-Object { $_ -notmatch '\\' } | ForEach-Object { "/$_/1.1///" }) + 'D/.codex////'
@@ -109,6 +112,13 @@ try {
     $bomState = $stateA.files.PSObject.Properties[(Join-Path $projectRoot 'utf8-bom.txt')].Value
     if ($crlfState.lineEnding -ne 'CRLF' -or $mixedState.lineEnding -ne 'MIXED' -or $mixedState.preferredLineEnding -ne 'CRLF' -or -not [bool]$crlfState.finalNewline -or $noFinalState.finalNewline -ne $false -or $bomState.bom -ne 'UTF8-BOM') { throw 'PreToolUse 狀態內容不完整或錯誤。' }
 
+    $indexSession = 'session-index'
+    $indexTrackInput = New-HookInput -EventName PreToolUse -SessionId $indexSession -ToolName exec -Command $execCommand
+    Invoke-Hook -Mode Track -SessionId $indexSession -InputText $indexTrackInput | Out-Null
+    $indexStatePath = Get-StatePath -SessionId $indexSession
+    $indexDiagnostic = @(Get-Content -LiteralPath (Join-Path $diagnosticRoot ($indexSession + '.log')) | ForEach-Object { $_ | ConvertFrom-Json }) | Where-Object { $_.mode -eq 'Track' } | Select-Object -Last 1
+    if (-not (Test-Path -LiteralPath $indexStatePath -PathType Leaf) -or $indexDiagnostic.lineEndingIndexHitCount -ne 9 -or $indexDiagnostic.lineEndingIndexMissCount -ne 0 -or $indexDiagnostic.fileReadMs -ne 0) { throw 'Warm Session 未重用換行索引，仍重新讀取所有 tracked files。' }
+
     Write-TestBytes 'crlf.txt' ([Text.Encoding]::ASCII.GetBytes("before`r`nend`r`nadded1`nadded2`nadded3`n"))
     Write-TestBytes 'lf.txt' ([Text.Encoding]::ASCII.GetBytes("before`nend`nadded1`r`nadded2`r`nadded3`r`n"))
     Write-TestBytes 'mixed.txt' ([Text.Encoding]::ASCII.GetBytes("before`r`nmiddle`nend`nadded`n"))
@@ -146,9 +156,16 @@ try {
     $stateAfterSecondTrack = Get-Content -LiteralPath $statePathA -Raw
     if ($stateAfterSecondTrack -ne $stateBeforeSecondTrack) { throw '同一 session 的第二次 Track 覆寫既有狀態。' }
 
+    $readOnlyInput = New-HookInput -EventName PreToolUse -SessionId $sessionA -ToolName exec -Command 'rg --files .'
+    Invoke-Hook -Mode Track -SessionId $sessionA -InputText $readOnlyInput | Out-Null
+    $readOnlyTrackDiagnostic = @(Get-Content -LiteralPath (Join-Path $diagnosticRoot 'session-A.log') | ForEach-Object { $_ | ConvertFrom-Json }) | Where-Object { $_.mode -eq 'Track' -and $_.tool -eq 'exec' } | Select-Object -Last 1
+    if ($readOnlyTrackDiagnostic.stateFileCountChecked -ne 0 -or $readOnlyTrackDiagnostic.lineEndingIndexHitCount -ne 0) { throw '安全只讀命令未走零狀態 I/O fast path。' }
+
     Write-TestBytes 'no-final.txt' ([Text.Encoding]::ASCII.GetBytes("before`r`nend`r`nadded`nsecond`n"))
     $directPatchInput = New-HookInput -EventName PostToolUse -SessionId $sessionA -ToolName apply_patch -Command '*** Update File: no-final.txt'
     Invoke-Hook -Mode Restore -SessionId $sessionA -InputText $directPatchInput | Out-Null
+    $candidateDiagnostic = @(Get-Content -LiteralPath (Join-Path $diagnosticRoot 'session-A.log') | ForEach-Object { $_ | ConvertFrom-Json }) | Where-Object { $_.mode -eq 'Restore' } | Select-Object -Last 1
+    if (-not [bool]$candidateDiagnostic.candidateScoped -or $candidateDiagnostic.stateFileCountChecked -ne 1) { throw '已知 patch 未限定 Restore 到候選檔案。' }
     Assert-Bytes 'no-final.txt' ([Text.Encoding]::ASCII.GetBytes("before`r`nend`r`nadded`r`nsecond"))
 
     $sessionB = 'session-B'

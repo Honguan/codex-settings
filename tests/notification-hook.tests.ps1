@@ -50,7 +50,7 @@ try {
     $hooksTemplate = Get-Content -LiteralPath (Join-Path $repositoryRoot 'src\templates\core\hooks.json') -Raw | ConvertFrom-Json
     if (@($hooksTemplate.hooks.Stop).Count -ne 1) { throw 'Stop Hook 必須只保留一個完成通知 Hook。' }
     $stopCommand = $hooksTemplate.hooks.Stop[0].hooks[0]
-    if (($stopCommand | ConvertTo-Json -Compress) -notmatch 'show-codex-notification\.ps1' -or $stopCommand.timeout -ne 30 -or $stopCommand.PSObject.Properties.Name -contains 'statusMessage') {
+    if (($stopCommand | ConvertTo-Json -Compress) -notmatch 'show-codex-notification\.ps1' -or $stopCommand.command -notmatch '-NoLogo.*-NonInteractive.*-File' -or $stopCommand.commandWindows -notmatch '-NoLogo.*-NonInteractive.*-File' -or $stopCommand.timeout -ne 30 -or $stopCommand.PSObject.Properties.Name -contains 'statusMessage') {
         throw 'Stop 完成通知 Hook 設定錯誤。'
     }
     $notificationSource = Get-Content -LiteralPath $hookScript -Raw

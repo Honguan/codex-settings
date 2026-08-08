@@ -1,5 +1,5 @@
 # Source: https://github.com/ccusage/ccusage
-# Managed by codex-settings. Commands intentionally use ccusage@latest.
+# Managed by codex-settings. Prefer the installer-managed global ccusage binary; use npx latest only as fallback.
 
 # >>> CS CODEX SESSION VIEWER >>>
 Remove-Item -LiteralPath Alias:\ccsessions -Force -ErrorAction SilentlyContinue
@@ -14,12 +14,12 @@ function global:ccsessions {
     $commandContext = [pscustomobject]@{ Text = $null; Raw = $null }
 
     function Invoke-CcusageJson {
-        if (Get-Command npx -ErrorAction SilentlyContinue) {
-            $commandContext.Text = 'npx --yes ccusage@latest codex session --timezone Asia/Taipei --json'
-            $output = & npx --yes 'ccusage@latest' codex session --timezone 'Asia/Taipei' --json 2>&1
-        } elseif (Get-Command ccusage -ErrorAction SilentlyContinue) {
+        if (Get-Command ccusage -ErrorAction SilentlyContinue) {
             $commandContext.Text = 'ccusage codex session --timezone Asia/Taipei --json'
             $output = & ccusage codex session --timezone 'Asia/Taipei' --json 2>&1
+        } elseif (Get-Command npx -ErrorAction SilentlyContinue) {
+            $commandContext.Text = 'npx --yes ccusage@latest codex session --timezone Asia/Taipei --json'
+            $output = & npx --yes 'ccusage@latest' codex session --timezone 'Asia/Taipei' --json 2>&1
         } else {
             throw 'Neither npx nor ccusage is available. Install Node.js and run the codex-settings global installer.'
         }
@@ -480,12 +480,12 @@ function global:cdaily {
 
     try {
         $commandText = $null
-        if (Get-Command npx -ErrorAction SilentlyContinue) {
-            $commandText = "npx --yes ccusage@latest codex daily --last $Days --timezone Asia/Taipei"
-            $output = & npx --yes 'ccusage@latest' codex daily --last $Days --timezone 'Asia/Taipei' --json 2>&1
-        } elseif (Get-Command ccusage -ErrorAction SilentlyContinue) {
+        if (Get-Command ccusage -ErrorAction SilentlyContinue) {
             $commandText = "ccusage codex daily --last $Days --timezone Asia/Taipei"
             $output = & ccusage codex daily --last $Days --timezone 'Asia/Taipei' --json 2>&1
+        } elseif (Get-Command npx -ErrorAction SilentlyContinue) {
+            $commandText = "npx --yes ccusage@latest codex daily --last $Days --timezone Asia/Taipei"
+            $output = & npx --yes 'ccusage@latest' codex daily --last $Days --timezone 'Asia/Taipei' --json 2>&1
         } else {
             throw 'Neither npx nor ccusage is available. Install Node.js and run the codex-settings global installer.'
         }
