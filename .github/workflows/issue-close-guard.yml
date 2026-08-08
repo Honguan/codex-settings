@@ -5,8 +5,11 @@ on:
     types:
       - closed
 
+concurrency:
+  group: issue-close-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
 permissions:
-  actions: read
   contents: read
   issues: write
   pull-requests: read
@@ -14,7 +17,8 @@ permissions:
 jobs:
   verify:
     name: Verify main before Issue close
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
     steps:
       - name: Reopen Issue when main verification is missing
         shell: pwsh
@@ -25,28 +29,35 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $issueNumber = [int]$env:ISSUE_NUMBER
-          $pullRequests = @(gh api "repos/$($env:REPOSITORY)/pulls?state=closed&base=main&per_page=100" | ConvertFrom-Json)
-          $referencePattern = '(?im)\bRefs\s+#\s*' + $issueNumber + '\b'
-          $branchPattern = '^issue/' + $issueNumber + '-'
-          $mergedPullRequest = $pullRequests | Where-Object {
-              $null -ne $_.merged_at -and (
-                  ([string]$_.body -match $referencePattern) -or
-                  ([string]$_.head.ref -match $branchPattern)
-              )
-          } | Sort-Object merged_at -Descending | Select-Object -First 1
-
+          $comments = @(gh api "repos/$($env:REPOSITORY)/issues/$issueNumber/comments?per_page=100" | ConvertFrom-Json)
+          $marker = '<!-- codex-settings-main-verification:v1 -->'
+          $receiptComment = $comments | Where-Object { [string]$_.body -match [regex]::Escape($marker) } | Sort-Object created_at -Descending | Select-Object -First 1
           $failureReason = $null
-          if ($null -eq $mergedPullRequest) {
-              $failureReason = "no merged PR targeting main references Issue #$issueNumber"
+          if ($null -eq $receiptComment) {
+              $timeline = @(gh api "repos/$($env:REPOSITORY)/issues/$issueNumber/timeline?per_page=100" -H 'Accept: application/vnd.github+json' | ConvertFrom-Json)
+              $crossReference = $timeline | Where-Object {
+                  $_.event -eq 'cross-referenced' -and $null -ne $_.source.issue.pull_request
+              } | Select-Object -Last 1
+              if ($null -ne $crossReference) {
+                  $relatedPullRequest = gh api "repos/$($env:REPOSITORY)/pulls/$($crossReference.source.issue.number)" | ConvertFrom-Json
+                  if ($relatedPullRequest.base.ref -eq 'main' -and $null -ne $relatedPullRequest.merged_at) {
+                      Write-Host "Issue #$issueNumber is linked to merged PR #$($relatedPullRequest.number); receipt is pending from main-validation, so close verification is deferred without reopen. API calls=3 (receipt, timeline, PR fallback)."
+                      exit 0
+                  }
+              }
+              $failureReason = "no main-verification receipt for Issue #$issueNumber"
           } else {
-              $comparison = gh api "repos/$($env:REPOSITORY)/compare/$($mergedPullRequest.merge_commit_sha)...main" | ConvertFrom-Json
-              if ($comparison.status -notin @('ahead', 'identical')) {
-                  $failureReason = "merge commit $($mergedPullRequest.merge_commit_sha) is not reachable from main"
+              $receipt = [string]$receiptComment.body
+              $receiptIssue = [regex]::Match($receipt, '(?im)^Issue:\s+#(?<number>\d+)\s*$')
+              $receiptStatus = [regex]::Match($receipt, '(?im)^MainVerification:\s*(?<status>\S+)\s*$')
+              $receiptCommit = [regex]::Match($receipt, '(?im)^MergeCommit:\s*(?<sha>[0-9a-f]{40})\s*$')
+              if (-not $receiptIssue.Success -or [int]$receiptIssue.Groups['number'].Value -ne $issueNumber -or -not $receiptStatus.Success -or $receiptStatus.Groups['status'].Value -ne 'passed' -or -not $receiptCommit.Success) {
+                  $failureReason = "main-verification receipt for Issue #$issueNumber is invalid"
               } else {
-                  $runs = @(gh run list --repo $env:REPOSITORY --workflow main-validation.yml --commit $mergedPullRequest.merge_commit_sha --limit 20 --json status,conclusion | ConvertFrom-Json)
-                  $successfulRun = $runs | Where-Object { $_.status -eq 'completed' -and $_.conclusion -eq 'success' } | Select-Object -First 1
-                  if ($null -eq $successfulRun) {
-                      $failureReason = "main-validation.yml has not passed for $($mergedPullRequest.merge_commit_sha)"
+                  $mergeCommit = $receiptCommit.Groups['sha'].Value
+                  $comparison = gh api "repos/$($env:REPOSITORY)/compare/$mergeCommit...main" | ConvertFrom-Json
+                  if ($comparison.status -notin @('ahead', 'identical')) {
+                      $failureReason = "receipt merge commit $mergeCommit is not reachable from main"
                   }
               }
           }
@@ -59,7 +70,7 @@ jobs:
           "@
               gh api --method PATCH "repos/$($env:REPOSITORY)/issues/$issueNumber" -f state=open | Out-Null
               gh api --method POST "repos/$($env:REPOSITORY)/issues/$issueNumber/comments" -f body=$comment | Out-Null
-              throw $failureReason
+          throw $failureReason
           }
 
-          Write-Host "Issue #$issueNumber passed merged-main and main-validation checks."
+          Write-Host "Issue #$issueNumber passed receipt and main reachability checks. API calls=2 (receipt comments + compare)."

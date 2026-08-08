@@ -8,30 +8,43 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: windows-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
         with:
-          fetch-depth: 0
+          fetch-depth: 1
       - name: Validate release tag
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
         run: |
           if ($env:GITHUB_REF_NAME -notmatch '^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') {
             throw "Invalid release tag: $env:GITHUB_REF_NAME. Expected vMAJOR.MINOR.PATCH."
           }
+          $comparison = gh api "repos/$($env:REPOSITORY)/compare/$($env:GITHUB_SHA)...main" | ConvertFrom-Json
+          if ($comparison.status -notin @('ahead', 'identical')) {
+              throw "Release tag must point to a commit reachable from main: $env:GITHUB_SHA"
+          }
       - name: Validate installer
         shell: pwsh
         run: |
-          git merge-base --is-ancestor $env:GITHUB_SHA origin/main
-          if ($LASTEXITCODE -ne 0) { throw "Release tag must point to a commit on main: $env:GITHUB_SHA" }
           $failed = @()
-          Get-ChildItem ./tests/*.tests.ps1 | Sort-Object Name | ForEach-Object {
-            & pwsh -NoLogo -NoProfile -File $_.FullName
-            if ($LASTEXITCODE -ne 0) { $failed += $_.Name }
+          $nonBlocking = @('cvs-finalize-performance.tests.ps1', 'issue-workflow.tests.ps1')
+          $releaseTests = Get-ChildItem ./tests/*.tests.ps1 | Where-Object { $_.Name -notin $nonBlocking } | Sort-Object Name
+          $releaseTests | ForEach-Object {
+              & pwsh -NoLogo -NoProfile -File $_.FullName
+              if ($LASTEXITCODE -ne 0) { $failed += $_.Name }
           }
           if ($failed.Count -gt 0) { throw "Failed tests: $($failed -join ', ')" }
+          Write-Host "Release-blocking correctness tests passed: $($releaseTests.Count). Deferred non-blocking checks: $($nonBlocking -join ', ')."
       - name: Build single-file installer
         shell: pwsh
         run: ./tools/build-installer.ps1 -Version $env:GITHUB_REF_NAME

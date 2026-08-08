@@ -2,25 +2,36 @@ $ErrorActionPreference = 'Stop'
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $gitAgentsPath = Join-Path $repositoryRoot 'src\templates\environments\git\AGENTS.md'
 $readmePath = Join-Path $repositoryRoot 'README.md'
-$workflowPaths = @(
-    (Join-Path $repositoryRoot '.github\workflows\pull-request-validation.yml'),
-    (Join-Path $repositoryRoot '.github\workflows\main-validation.yml'),
-    (Join-Path $repositoryRoot '.github\workflows\issue-close-guard.yml'),
-    (Join-Path $repositoryRoot '.github\workflows\release.yml')
-)
+$workflowRoot = Join-Path $repositoryRoot '.github\workflows'
+$workflowFiles = [ordered]@{
+    pullRequest = Join-Path $workflowRoot 'pull-request-validation.yml'
+    main = Join-Path $workflowRoot 'main-validation.yml'
+    closeGuard = Join-Path $workflowRoot 'issue-close-guard.yml'
+    release = Join-Path $workflowRoot 'release.yml'
+    changedArea = Join-Path $workflowRoot 'changed-area-regression.yml'
+}
+
+function Assert-Contains([string]$Text, [string]$Pattern, [string]$Message) {
+    if ($Text -notmatch [regex]::Escape($Pattern)) { throw $Message }
+}
+
+function Assert-NotContains([string]$Text, [string]$Pattern, [string]$Message) {
+    if ($Text -match [regex]::Escape($Pattern)) { throw $Message }
+}
 
 if (-not (Test-Path -LiteralPath $gitAgentsPath -PathType Leaf)) { throw 'Git Issue workflow template is missing.' }
 if (-not (Test-Path -LiteralPath $readmePath -PathType Leaf)) { throw 'README Issue workflow documentation is missing.' }
-foreach ($workflowPath in $workflowPaths) {
+foreach ($workflowPath in $workflowFiles.Values) {
     if (-not (Test-Path -LiteralPath $workflowPath -PathType Leaf)) { throw "Issue workflow is missing: $workflowPath" }
 }
 
 $gitAgents = Get-Content -LiteralPath $gitAgentsPath -Raw
 $readme = Get-Content -LiteralPath $readmePath -Raw
-$pullRequestWorkflow = Get-Content -LiteralPath $workflowPaths[0] -Raw
-$mainWorkflow = Get-Content -LiteralPath $workflowPaths[1] -Raw
-$closeGuardWorkflow = Get-Content -LiteralPath $workflowPaths[2] -Raw
-$releaseWorkflow = Get-Content -LiteralPath $workflowPaths[3] -Raw
+$pullRequestWorkflow = Get-Content -LiteralPath $workflowFiles.pullRequest -Raw
+$mainWorkflow = Get-Content -LiteralPath $workflowFiles.main -Raw
+$closeGuardWorkflow = Get-Content -LiteralPath $workflowFiles.closeGuard -Raw
+$releaseWorkflow = Get-Content -LiteralPath $workflowFiles.release -Raw
+$changedAreaWorkflow = Get-Content -LiteralPath $workflowFiles.changedArea -Raw
 
 foreach ($expected in @(
     'git pull --ff-only origin main',
@@ -28,9 +39,10 @@ foreach ($expected in @(
     'Never modify or commit an Issue fix directly on `main`',
     'Refs #<issue-number>',
     'Main verification',
-    'Close the Issue only after'
+    'Close the Issue only after',
+    'PR title must contain the Issue number'
 )) {
-    if ($gitAgents -notmatch [regex]::Escape($expected)) { throw "Git Issue workflow rule is missing: $expected" }
+    Assert-Contains $gitAgents $expected "Git Issue workflow rule is missing: $expected"
 }
 
 foreach ($expected in @(
@@ -38,53 +50,98 @@ foreach ($expected in @(
     'pull-request-validation.yml',
     'main-validation.yml',
     'issue-close-guard.yml',
-    '完整測試只在發佈新版時執行'
+    'codex-settings-main-verification:v1',
+    'changed-area-regression.yml',
+    'release-blocking'
 )) {
-    if ($readme -notmatch [regex]::Escape($expected)) { throw "README Issue workflow documentation is missing: $expected" }
+    Assert-Contains $readme $expected "README Issue workflow documentation is missing: $expected"
 }
 
 foreach ($expected in @(
     'pull_request:',
+    'concurrency:',
+    'cancel-in-progress: true',
+    'runs-on: ubuntu-latest',
+    'timeout-minutes: 3',
     'issue/<issue-number>-<short-description>',
     'Refs #',
+    'PR title',
     'main',
     'issues: read'
 )) {
-    if ($pullRequestWorkflow -notmatch [regex]::Escape($expected)) { throw "PR validation workflow is missing: $expected" }
+    Assert-Contains $pullRequestWorkflow $expected "PR validation workflow is missing: $expected"
 }
-if ($pullRequestWorkflow -match '(?i)PR body.*(?:Fixes|Closes|Resolves)') { throw 'PR validation workflow permits automatic Issue closure in the PR body.' }
-if ($pullRequestWorkflow -match 'Get-ChildItem ./tests/\*\.tests\.ps1|workflow_dispatch') { throw 'PR workflow must only validate Issue metadata.' }
+Assert-NotContains $pullRequestWorkflow '/commits?per_page=100' 'PR validation still fetches 100 commits.'
+Assert-NotContains $pullRequestWorkflow 'windows-latest' 'PR metadata workflow should use the Ubuntu runner.'
+Assert-NotContains $pullRequestWorkflow 'Get-ChildItem ./tests/*.tests.ps1' 'PR metadata workflow must not run the full test suite.'
+Assert-NotContains $pullRequestWorkflow 'workflow_dispatch' 'PR metadata workflow must remain event-driven.'
 
 foreach ($expected in @(
     'push:',
     'branches:',
     'commits/',
-    'merged PR targeting main'
+    'merged PR targeting main',
+    'codex-settings-main-verification:v1',
+    'MainVerification: passed',
+    'issues: write',
+    'timeout-minutes: 3',
+    'ubuntu-latest'
 )) {
-    if ($mainWorkflow -notmatch [regex]::Escape($expected)) { throw "Main validation workflow is missing: $expected" }
+    Assert-Contains $mainWorkflow $expected "Main validation workflow is missing: $expected"
 }
-if ($mainWorkflow -match 'Get-ChildItem ./tests/\*\.tests\.ps1|workflow_dispatch') { throw 'Main workflow must only verify merged PR provenance.' }
+Assert-NotContains $mainWorkflow 'gh run list' 'Main validation must not search workflow runs after the receipt is written.'
+Assert-NotContains $mainWorkflow 'Get-ChildItem ./tests/*.tests.ps1' 'Main validation must not run the full test suite.'
+Assert-NotContains $mainWorkflow 'workflow_dispatch' 'Main validation workflow must remain push-driven.'
 
 foreach ($expected in @(
     'issues:',
     '- closed',
     'issues: write',
-    'state=open',
-    'main-validation.yml',
-    'Merge commit'
+    'concurrency:',
+    'cancel-in-progress: true',
+    'runs-on: ubuntu-latest',
+    'timeout-minutes: 3',
+    'comments',
+    'codex-settings-main-verification:v1',
+    'timeline',
+    'compare/',
+    'state=open'
 )) {
-    if ($closeGuardWorkflow -notmatch [regex]::Escape($expected)) { throw "Issue close guard is missing: $expected" }
+    Assert-Contains $closeGuardWorkflow $expected "Issue close guard is missing: $expected"
 }
+Assert-NotContains $closeGuardWorkflow 'pulls?state=closed&base=main&per_page=100' 'Issue close guard still scans 100 closed PRs.'
+Assert-NotContains $closeGuardWorkflow 'gh run list' 'Issue close guard must trust the main-verification receipt.'
+Assert-Contains $closeGuardWorkflow 'deferred without reopen' 'Issue close guard does not handle the merge/close receipt race.'
 
 foreach ($expected in @(
-    "tags:",
+    'tags:',
     "- 'v*'",
-    'git merge-base --is-ancestor',
-    'Get-ChildItem ./tests/*.tests.ps1',
+    'fetch-depth: 1',
+    'compare/',
+    '$nonBlocking',
+    'releaseTests',
     'build-installer.ps1',
     'gh release create'
 )) {
-    if ($releaseWorkflow -notmatch [regex]::Escape($expected)) { throw "Release validation workflow is missing: $expected" }
+    Assert-Contains $releaseWorkflow $expected "Release validation workflow is missing: $expected"
+}
+Assert-NotContains $releaseWorkflow 'fetch-depth: 0' 'Release workflow still downloads the complete repository history.'
+Assert-NotContains $releaseWorkflow 'git merge-base --is-ancestor' 'Release workflow is still coupled to local full-history ancestry checks.'
+
+foreach ($expected in @(
+    'paths:',
+    '.github/workflows/**',
+    'tests/issue-workflow.tests.ps1',
+    'runs-on: ubuntu-latest',
+    'timeout-minutes: 5',
+    'concurrency:'
+)) {
+    Assert-Contains $changedAreaWorkflow $expected "Changed-area regression workflow is missing: $expected"
 }
 
-Write-Host 'Issue workflow tests passed.'
+if ($pullRequestWorkflow -match '(?i)PR body.*(?:Fixes|Closes|Resolves)') { throw 'PR validation workflow permits automatic Issue closure in the PR body.' }
+if ($mainWorkflow -match 'git merge-base|Get-ChildItem ./tests/\*\.tests\.ps1') { throw 'Main validation workflow contains a release-only implementation detail.' }
+if ($releaseWorkflow -match '(?i)Issue close guard|pull-request-validation') { throw 'Release workflow must not repeat Issue lifecycle checks.' }
+if ($closeGuardWorkflow -match 'main-validation\.yml.*gh run list|gh run list.*main-validation\.yml') { throw 'Close guard still polls main-validation runs.' }
+
+Write-Host 'Issue workflow contract tests passed.'
