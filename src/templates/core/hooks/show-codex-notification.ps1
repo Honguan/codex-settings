@@ -63,15 +63,6 @@ function Get-UsageValue($Usage, [string[]]$Names, $Default = 0) {
     return $Default
 }
 
-function Test-UsageProperty($Usage, [string[]]$Names) {
-    if ($null -eq $Usage) { return $false }
-    foreach ($name in $Names) {
-        $property = $Usage.PSObject.Properties[$name]
-        if ($null -ne $property -and $null -ne $property.Value) { return $true }
-    }
-    return $false
-}
-
 function Get-UsageField($Usage, [string[]]$Names) {
     if ($null -eq $Usage) { return [pscustomobject]@{ Present = $false; Value = $null; Name = $null } }
     foreach ($name in $Names) {
@@ -221,11 +212,6 @@ function Get-NotificationClaimIdentity($InputObject, [string]$NotificationType) 
     try { $hash = ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($key)))).Replace('-', '').ToLowerInvariant() }
     finally { $sha.Dispose() }
     return [pscustomobject]@{ SessionId = $sessionId; TurnId = $turnId; Type = $NotificationType; Key = $key; Hash = $hash }
-}
-
-function Get-DeduplicationPath([string]$Root, $InputObject, [string]$NotificationType) {
-    $identity = Get-NotificationClaimIdentity -InputObject $InputObject -NotificationType $NotificationType
-    return Join-Path (Join-Path $Root 'claims') ($identity.Hash + '.json')
 }
 
 function Write-NotificationJsonAtomic([string]$Path, $Value) {

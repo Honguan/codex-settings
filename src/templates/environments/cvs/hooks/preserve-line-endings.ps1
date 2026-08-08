@@ -601,16 +601,8 @@ function Restore-InitialState($InputObject, [Collections.Generic.List[string]]$W
     return $changedFiles.ToArray()
 }
 
-function Test-IsSafeReadOnlyCommand($InputObject) {
-    return [string](Get-CodexToolImpactClassification -InputObject $InputObject).classification -eq 'ReadOnly'
-}
-
 function Test-IsScopedPatchInput($InputObject) {
     return [string](Get-CodexToolImpactClassification -InputObject $InputObject).classification -eq 'KnownWriteTargets'
-}
-
-function Test-NeedsLineEndingState($InputObject) {
-    return [string](Get-CodexToolImpactClassification -InputObject $InputObject).classification -notin @('NoFileImpact', 'ReadOnly')
 }
 
 $warnings = [Collections.Generic.List[string]]::new()

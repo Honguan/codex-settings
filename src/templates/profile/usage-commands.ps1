@@ -277,11 +277,6 @@ function global:ccsessions {
         return @($Models) -join [Environment]::NewLine
     }
 
-    function Format-Number($Number) {
-        try { return ([long]$Number).ToString('N0', [Globalization.CultureInfo]::InvariantCulture) }
-        catch { return '0' }
-    }
-
     function Format-TokenCount($Number) {
         try {
             $value = [double]$Number

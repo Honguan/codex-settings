@@ -64,7 +64,6 @@ function New-InstallationChangePlan {
         runNotificationTest = $runNotificationTest
         runContext7 = $runContext7
         runSkills = $runSkills
-        runMaintenance = $false
         critical = @('ownership-conflict', 'transaction-rollback', 'changed-file-integrity')
         conditional = @('hook-trust', 'hook-validation', 'config-validation', 'usage-runtime-validation', 'notification-test', 'external-package-resolution')
         deferred = @('state-ttl-cleanup', 'log-rotation', 'manifest-reconciliation')
@@ -89,24 +88,4 @@ function Test-CodexWorkflowDecision {
         'Skills' { 'runSkills' }
     }
     return $null -ne $Plan -and $null -ne $Plan.PSObject.Properties[$property] -and [bool]$Plan.$property
-}
-
-function Get-CodexMaintenanceDecision {
-    [CmdletBinding()]
-    param(
-        [AllowNull()][string]$LastMaintenanceAt = '',
-        [datetime]$Now = (Get-Date).ToUniversalTime(),
-        [timespan]$Interval = ([timespan]::FromDays(1))
-    )
-
-    if ([string]::IsNullOrWhiteSpace($LastMaintenanceAt)) {
-        return [pscustomobject][ordered]@{ due = $true; reason = 'never-run'; lastMaintenanceAt = $null }
-    }
-    try {
-        $last = [datetime]::Parse($LastMaintenanceAt).ToUniversalTime()
-        $due = $Now.ToUniversalTime() - $last -lt [timespan]::Zero -or $Now.ToUniversalTime() - $last -ge $Interval
-        return [pscustomobject][ordered]@{ due = $due; reason = if ($due) { 'interval-elapsed' } else { 'recently-completed' }; lastMaintenanceAt = $last.ToString('o') }
-    } catch {
-        return [pscustomobject][ordered]@{ due = $true; reason = 'invalid-state'; lastMaintenanceAt = $LastMaintenanceAt }
-    }
 }

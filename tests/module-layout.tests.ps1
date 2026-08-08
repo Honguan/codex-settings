@@ -12,7 +12,6 @@ $expectedFiles = @(
     'commands\uninstall-settings.ps1',
     'core\file-system.ps1',
     'core\models.ps1',
-    'core\errors.ps1',
     'core\state-repository.ps1',
     'core\workflow-policy.ps1',
     'core\hook-configuration.ps1',

@@ -291,7 +291,6 @@ function Invoke-GlobalInstallation {
 
             if ($Context.InstallWindowsNotifications) {
                 Set-InstallProgress -Progress $progress -StepId 'Notifications' -Detail '最後執行非關鍵通知測試'
-                $notificationChanged = [bool]$global.HookChanged -or @($global.Files | Where-Object { $_.Changed -and ([string]$_.Path -eq 'hooks.json' -or [string]$_.Path -eq 'hooks\show-codex-notification.ps1') }).Count -gt 0
                 if (Test-CodexWorkflowDecision -Plan $changePlan -Operation NotificationTest) {
                     & (Join-Path $Context.GlobalRoot 'hooks\show-codex-notification.ps1') -Type Completed -Test | Out-Null
                     $notificationStatus = '已送出測試通知'
