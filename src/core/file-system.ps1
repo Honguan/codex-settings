@@ -37,6 +37,26 @@ function Copy-FileAtomic {
     Write-BytesAtomic -Path $Destination -Bytes ([IO.File]::ReadAllBytes($Source))
 }
 
+function Get-StringSha256 {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Content)
+
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { return ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($Content)))).Replace('-', '') }
+    finally { $sha.Dispose() }
+}
+
+function Get-FileMetadata {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return [pscustomobject][ordered]@{ Exists = $false; Length = 0L; LastWriteTimeUtcTicks = 0L }
+    }
+    $info = [IO.FileInfo]::new($Path)
+    return [pscustomobject][ordered]@{ Exists = $true; Length = [long]$info.Length; LastWriteTimeUtcTicks = [long]$info.LastWriteTimeUtc.Ticks }
+}
+
 function Write-JsonFileAtomic {
     [CmdletBinding()]
     param(

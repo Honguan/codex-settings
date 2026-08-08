@@ -25,6 +25,42 @@ function Get-CcusageState {
     } catch { return [pscustomobject]@{ Installed = $false; Version = $null } }
 }
 
+function Test-CcusageProfileCurrent {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$TemplatePath)
+
+    if (-not (Test-Path -LiteralPath $TemplatePath -PathType Leaf)) { return $false }
+    $managed = ([IO.File]::ReadAllText($TemplatePath) -replace "`r`n|`r", "`n").Trim()
+    if ([string]::IsNullOrWhiteSpace($managed)) { return $false }
+    foreach ($profilePath in @($PROFILE.CurrentUserAllHosts, $PROFILE.CurrentUserCurrentHost) | Select-Object -Unique) {
+        if (-not (Test-Path -LiteralPath $profilePath -PathType Leaf)) { return $false }
+        $content = ([IO.File]::ReadAllText($profilePath) -replace "`r`n|`r", "`n")
+        if (-not $content.Contains($managed)) { return $false }
+    }
+    return $true
+}
+
+function New-CcusageUnchangedResult {
+    [CmdletBinding()]
+    param([AllowNull()]$PackageState = $null)
+
+    $paths = @($PROFILE.CurrentUserAllHosts, $PROFILE.CurrentUserCurrentHost) | Select-Object -Unique
+    return [pscustomobject][ordered]@{
+        ProfilePath = $paths[0]
+        ProfileExistedBefore = [bool](Test-Path -LiteralPath $paths[0] -PathType Leaf)
+        ProfileBackupPath = $null
+        ProfilePaths = $paths
+        ProfileStates = @($paths | ForEach-Object { [pscustomobject]@{ Path = $_; ExistedBefore = [bool](Test-Path -LiteralPath $_ -PathType Leaf) } })
+        ProfileBackupPaths = @()
+        PackageBefore = $PackageState
+        PackageAfter = $PackageState
+        PackageInstalledNow = $false
+        CommandsUpdated = $false
+        PowerShellVersion = [string]$PSVersionTable.PSVersion
+        Skipped = $true
+    }
+}
+
 function Restore-CcusageState {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)]$State)

@@ -160,6 +160,7 @@ function Invoke-GlobalInstallation {
     $notificationStatus = ''
     $skippedCount = 0
     $discovery = $null
+    $changePlan = $null
 
     try {
         Set-InstallProgress -Progress $progress -StepId 'Plan' -Detail '整理目標與外部套件狀態'
@@ -199,42 +200,54 @@ function Invoke-GlobalInstallation {
 
         try {
             Set-InstallProgress -Progress $progress -StepId 'Targets' -Detail ("處理 $($targets.Count) 個全域安裝目標")
-            foreach ($result in @(Invoke-InstallationPlan -Targets $targets -Transaction $transaction -Force:$Context.Force)) { [void]$results.Add($result) }
+            foreach ($result in @(Invoke-InstallationPlan -Targets $targets -Transaction $transaction -Discovery $discovery -Force:$Context.Force)) { [void]$results.Add($result) }
             Complete-InstallStep -Progress $progress -Result ("完成 $($results.Count) 個目標")
+
+            $changePlan = New-InstallationChangePlan -Discovery $discovery -Results $results.ToArray() -CcusageBefore $ccusageBefore -ForceValidation:$ForceValidation -Force:$Context.Force -ForceNotificationTest:$ForceNotificationTest -SkipContext7Key:$SkipContext7Key -InstallMattPocockSkills:$InstallMattPocockSkills -SkipPackageInstall:$SkipCcusageInstall
+            Save-TransactionMetadata -Transaction $transaction -Metadata @{ ChangePlan = $changePlan }
+            Write-InstallLog -Progress $progress -Message ("WORKFLOW PLAN level={0}; hooksChanged={1}; configChanged={2}; usageToolsChanged={3}; notificationTest={4}; context7={5}" -f $changePlan.validationLevel, $changePlan.hooksChanged, $changePlan.configChanged, $changePlan.usageToolsChanged, $changePlan.runNotificationTest, $changePlan.runContext7)
 
             Set-InstallProgress -Progress $progress -StepId 'Hooks' -Detail '驗證受管理 Hook 狀態；未變更時略過昂貴的 trust 呼叫'
             $global = @($results | Where-Object Mode -eq 'Global' | Select-Object -First 1)[0]
-            $hookChanged = [bool]$global.HookChanged -or $null -eq $global.Previous
-            if ($hookChanged) {
+            if (Test-CodexWorkflowDecision -Plan $changePlan -Operation HookTrust) {
                 $hookTrust = Set-CodexSettingsHookTrust -Root $Context.GlobalRoot -Cwd $Context.GlobalRoot
             } else {
                 $hookTrust = [pscustomobject]@{ TrustedCount = 0; UpdatedCount = 0; Verified = $true; Skipped = $true }
                 Write-InstallLog -Progress $progress -Message 'HOOK TRUST skipped; no managed Hook changes detected'
             }
             $configEntry = @($global.Files | Where-Object Path -eq 'config.toml' | Select-Object -First 1)[0]
-            if ($null -ne $configEntry) {
+            if ($null -ne $configEntry -and (Test-CodexWorkflowDecision -Plan $changePlan -Operation ConfigValidation)) {
                 $configHash = (Get-FileHash -LiteralPath (Join-Path $Context.GlobalRoot 'config.toml') -Algorithm SHA256).Hash
                 if ([string]$configEntry.Sha256 -ne $configHash) { $configEntry.Changed = $true; $configEntry.Status = 'Updated' }
                 $configEntry.Sha256 = $configHash
             }
-            foreach ($result in @($results)) {
-                $result.validation = Get-InstallationVerificationResult -Result $result
-                if (-not [bool]$result.validation.Valid) { throw "安裝結果驗證失敗：$($result.validation.errors -join '; ')" }
+            $validateResults = $changePlan.validationLevel -ne 'Fast' -or @($results | Where-Object { $_.Summary.Created -gt 0 -or $_.Summary.Updated -gt 0 }).Count -gt 0
+            if ($validateResults) {
+                foreach ($result in @($results)) {
+                    $result.validation = Get-InstallationVerificationResult -Result $result
+                    if (-not [bool]$result.validation.Valid) { throw "安裝結果驗證失敗：$($result.validation.errors -join '; ')" }
+                }
+            } else {
+                Write-InstallLog -Progress $progress -Message 'VALIDATION skipped; no managed content changes detected'
             }
             Complete-InstallStep -Progress $progress -Result $(if ($hookTrust.Skipped) { 'Hook 未變更，略過重新 trust' } else { "已驗證 $($hookTrust.TrustedCount) 個" })
 
             if (-not $SkipContext7Key) {
-                Set-InstallProgress -Progress $progress -StepId 'Context7' -Detail '沿用或設定 Context7 API Key'
+                Set-InstallProgress -Progress $progress -StepId 'Context7' -Detail $(if ($changePlan.runContext7) { '沿用或設定 Context7 API Key' } else { 'Context7 未變更，略過設定流程' })
             }
-            $contextState = Set-Context7EnvironmentState -Skip:$SkipContext7Key -PreviousManifest $global.Previous
+            $contextState = if ($changePlan.runContext7) { Set-Context7EnvironmentState -Skip:$SkipContext7Key -PreviousManifest $global.Previous } else { Set-Context7EnvironmentState -Skip:$true -PreviousManifest $global.Previous }
             Save-TransactionMetadata -Transaction $transaction -Metadata @{
                 Context7KeyCreatedNow = [bool]$contextState.CreatedNow
             }
-            if (-not $SkipContext7Key) { Complete-InstallStep -Progress $progress -Result $(if ($contextState.CreatedNow) { '已建立' } elseif ($contextState.CreatedByInstaller) { '已沿用' } else { '未設定' }) }
+            if (-not $SkipContext7Key) { Complete-InstallStep -Progress $progress -Result $(if (-not $changePlan.runContext7) { '未變更，略過' } elseif ($contextState.CreatedNow) { '已建立' } elseif ($contextState.CreatedByInstaller) { '已沿用' } else { '未設定' }) }
 
-            Set-InstallProgress -Progress $progress -StepId 'Ccusage' -Detail '只偵測一次套件狀態，更新必要的 Profile 區塊'
-            $ccusage = & (Join-Path $Context.ScriptRoot 'integrations\install-usage-tools.ps1') -SkipPackageInstall:$SkipCcusageInstall -ForceRuntimeValidation:$ForceValidation -PackageState $ccusageBefore -Transaction $transaction -PassThru
-            Write-InstallLog -Progress $progress -Message ("COMMAND usage-tools packageBeforeInstalled={0}; forceValidation={1}" -f $ccusageBefore.Installed, $ForceValidation)
+            Set-InstallProgress -Progress $progress -StepId 'Ccusage' -Detail $(if ($changePlan.usageToolsChanged -or $changePlan.runUsageRuntimeValidation) { '只偵測一次套件狀態，更新必要的 Profile 區塊' } else { 'usage tools 未變更，略過外部程序' })
+            $ccusage = if ($changePlan.usageToolsChanged -or $changePlan.runUsageRuntimeValidation) {
+                & (Join-Path $Context.ScriptRoot 'integrations\install-usage-tools.ps1') -SkipPackageInstall:$SkipCcusageInstall -ForceRuntimeValidation:$ForceValidation -PackageState $ccusageBefore -Transaction $transaction -PassThru
+            } else {
+                New-CcusageUnchangedResult -PackageState $ccusageBefore
+            }
+            Write-InstallLog -Progress $progress -Message ("COMMAND usage-tools packageBeforeInstalled={0}; forceValidation={1}; skipped={2}" -f $ccusageBefore.Installed, $ForceValidation, $ccusage.Skipped)
             Complete-InstallStep -Progress $progress -Result $(if ($ccusage.CommandsUpdated) { 'Profile 已更新' } else { 'Profile 未變更' })
 
             if ($InstallMattPocockSkills) {
@@ -279,7 +292,7 @@ function Invoke-GlobalInstallation {
             if ($Context.InstallWindowsNotifications) {
                 Set-InstallProgress -Progress $progress -StepId 'Notifications' -Detail '最後執行非關鍵通知測試'
                 $notificationChanged = [bool]$global.HookChanged -or @($global.Files | Where-Object { $_.Changed -and ([string]$_.Path -eq 'hooks.json' -or [string]$_.Path -eq 'hooks\show-codex-notification.ps1') }).Count -gt 0
-                if ($ForceNotificationTest -or $notificationChanged) {
+                if (Test-CodexWorkflowDecision -Plan $changePlan -Operation NotificationTest) {
                     & (Join-Path $Context.GlobalRoot 'hooks\show-codex-notification.ps1') -Type Completed -Test | Out-Null
                     $notificationStatus = '已送出測試通知'
                     Write-InstallLog -Progress $progress -Message 'COMMAND notification test completed'
