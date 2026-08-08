@@ -14,9 +14,9 @@ if ($source -notmatch 'Taipei Standard Time') {
 }
 
 . $profileTemplate
-function global:npx {
+function global:ccusage {
     $global:LASTEXITCODE = 0
-    $global:CcSessionsNpxArguments = @($args)
+    $global:CcSessionsGlobalArguments = @($args)
     '{"sessions":[{"sessionId":"019fd1f8-4928-7432-9697-8070ae4a87a2","lastActivity":"2026-01-01T00:30:00Z","models":{"gpt-5.6-sol":{},"gpt-5.6-terra":{}},"inputTokens":1,"outputTokens":2,"reasoningOutputTokens":3,"cacheReadTokens":4,"cacheCreationTokens":5,"totalTokens":10,"costUSD":0.01}]}'
 }
 
@@ -32,8 +32,8 @@ if ($modelLines.Count -ne 2 -or $modelLines[0] -notmatch 'gpt-5\.6-sol' -or $mod
 if ($outputText -notmatch '01-01 08:30 AM') {
     throw "ccsessions did not render the Taipei time. Output: $($output -join "`n")"
 }
-if (($global:CcSessionsNpxArguments -join ' ') -notmatch '--timezone Asia/Taipei') {
-    throw "ccsessions did not request the Taipei timezone. Arguments: $($global:CcSessionsNpxArguments -join ' ')"
+if (($global:CcSessionsGlobalArguments -join ' ') -notmatch '--timezone Asia/Taipei') {
+    throw "ccsessions did not request the Taipei timezone through global ccusage. Arguments: $($global:CcSessionsGlobalArguments -join ' ')"
 }
 
 $jsonText = (& ccsessions -Json '019fd1f8-4928-7432-9697-8070ae4a87a2' | Out-String).Trim()
