@@ -28,6 +28,9 @@ $indexRoot = if ([string]::IsNullOrWhiteSpace($env:CODEX_SETTINGS_LINE_ENDING_IN
     $env:CODEX_SETTINGS_LINE_ENDING_INDEX_ROOT
 }
 $script:HookParentProcessId = $null
+$script:WorkflowDecision = $null
+$script:ImpactClassification = 'UnknownWriteScope'
+$script:SkippedReason = ''
 $script:HookTimings = [ordered]@{
     stateLockWaitMs = 0
     stateReadMs = 0
@@ -141,13 +144,11 @@ function Get-HookCandidateFiles($InputObject, [string]$Root) {
     $files = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     $canonicalRoot = [IO.Path]::GetFullPath($Root).TrimEnd('\', '/')
     $rootPrefix = $canonicalRoot + [IO.Path]::DirectorySeparatorChar
-    $command = ([string]$InputObject.tool_input.command).Replace('\n', "`n")
-    foreach ($match in [regex]::Matches($command, '(?m)^\*\*\* (?:Update|Add|Delete) File:\s*(?<path>[^\r\n]+)$')) {
-        $candidate = $match.Groups['path'].Value.Trim().Replace('\\', '\')
+    foreach ($candidate in @(Get-CodexPatchTargetPaths -InputObject $InputObject)) {
         try {
             $path = if ([IO.Path]::IsPathRooted($candidate)) { [IO.Path]::GetFullPath($candidate) } else { [IO.Path]::GetFullPath((Join-Path ([string]$InputObject.cwd) $candidate)) }
             if ($path.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase) -and (Test-CvsTrackedFile -Path $path)) { [void]$files.Add($path) }
-        } catch {}
+        } catch { }
     }
     return @($files)
 }
@@ -323,6 +324,8 @@ function Write-HookDiagnostic($InputObject, [string]$Result, [string[]]$ChangedF
         $sessionId = if ($null -eq $InputObject) { 'unknown' } else { [string]$InputObject.session_id }
         $safeSessionId = [regex]::Replace($sessionId, '[^A-Za-z0-9._-]', '_')
         $counts = if ($null -eq $script:HookInvocationCounts) { [pscustomobject](New-CodexHookInvocationCounts) } else { $script:HookInvocationCounts }
+        $elapsedMs = [long]$script:HookStopwatch.ElapsedMilliseconds
+        $slowThresholdMs = if ($Mode -eq 'Finalize') { 1000 } else { 500 }
         $entry = [ordered]@{
             timestamp = [DateTimeOffset]::Now.ToString('o')
             event = if ($null -eq $InputObject) { $Mode } else { [string]$InputObject.hook_event_name }
@@ -342,7 +345,9 @@ function Write-HookDiagnostic($InputObject, [string]$Result, [string[]]$ChangedF
             parentProcessId = Get-CodexHookParentProcessId
             startTime = $script:HookStartTime.ToString('o')
             endTime = [DateTimeOffset]::Now.ToString('o')
-            elapsedMs = $script:HookStopwatch.ElapsedMilliseconds
+            elapsedMs = $elapsedMs
+            slowThresholdMs = $slowThresholdMs
+            slowPath = $elapsedMs -ge $slowThresholdMs
             exitCode = $script:HookExitCode
             GlobalStopHookCount = [int]$counts.GlobalStopHookCount
             ProjectStopHookCount = [int]$counts.ProjectStopHookCount
@@ -365,6 +370,11 @@ function Write-HookDiagnostic($InputObject, [string]$Result, [string[]]$ChangedF
             stateFileCountChecked = [long]$script:HookTimings.stateFileCountChecked
             lineEndingIndexHitCount = [long]$script:HookTimings.lineEndingIndexHitCount
             lineEndingIndexMissCount = [long]$script:HookTimings.lineEndingIndexMissCount
+            impactClassification = $script:ImpactClassification
+            workClass = if ($null -eq $script:WorkflowDecision) { 'Critical' } else { [string]$script:WorkflowDecision.workClass }
+            validationLevel = if ($null -eq $script:WorkflowDecision) { 'Full' } else { [string]$script:WorkflowDecision.validationLevel }
+            knownWriteTargetCount = if ($null -eq $script:WorkflowDecision) { 0 } else { @($script:WorkflowDecision.knownWriteTargets).Count }
+            skippedReason = $script:SkippedReason
             details = $Details
         }
         New-Item -ItemType Directory -Path $root -Force | Out-Null
@@ -372,15 +382,20 @@ function Write-HookDiagnostic($InputObject, [string]$Result, [string[]]$ChangedF
     } catch {} finally { Add-HookTiming -Name 'diagnosticWriteMs' -Milliseconds $stopwatch.ElapsedMilliseconds }
 }
 
-function Save-InitialState($InputObject) {
+function Save-InitialState($InputObject, [string[]]$CandidateFiles = @(), [string]$Impact = 'UnknownWriteScope') {
+    $CandidateFiles = @($CandidateFiles | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
     $root = Get-CvsRoot -StartPath ([string]$InputObject.cwd)
     if ([string]::IsNullOrWhiteSpace($root)) { return }
     $statePath = Get-StatePath -SessionId ([string]$InputObject.session_id) -ProjectRoot $root
-    $stateExists = Invoke-WithStateLock -ProjectRoot $root -SessionId ([string]$InputObject.session_id) -Action { Test-Path -LiteralPath $statePath -PathType Leaf }
-    if ($stateExists) { return }
+    $existingState = Invoke-WithStateLock -ProjectRoot $root -SessionId ([string]$InputObject.session_id) -Action {
+        if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) { return $null }
+        try { return [IO.File]::ReadAllText($statePath) | ConvertFrom-Json -ErrorAction Stop } catch { return $null }
+    }
+    $existingPending = $null -eq $existingState -or $null -eq $existingState.PSObject.Properties['restorePending'] -or [bool]$existingState.restorePending -or [bool]$existingState.lineEndingDirty -or [bool]$existingState.unknownWriteObserved
+    if ($null -ne $existingState -and $existingPending) { return }
 
     $discoveryStopwatch = [Diagnostics.Stopwatch]::StartNew()
-    $trackedPaths = @(Get-CvsTrackedFiles -Root $root)
+    $trackedPaths = if (@($CandidateFiles).Count -gt 0) { @($CandidateFiles) } else { @(Get-CvsTrackedFiles -Root $root) }
     Add-HookTiming -Name 'trackedFileDiscoveryMs' -Milliseconds $discoveryStopwatch.ElapsedMilliseconds
     $indexPath = Get-LineEndingIndexPath -ProjectRoot $root
     $indexReadStopwatch = [Diagnostics.Stopwatch]::StartNew()
@@ -388,6 +403,11 @@ function Save-InitialState($InputObject) {
     Add-HookTiming -Name 'stateReadMs' -Milliseconds $indexReadStopwatch.ElapsedMilliseconds
     $indexFiles = [ordered]@{}
     $files = [ordered]@{}
+
+    $cachedIndexFiles = if ($null -ne $index -and $null -ne $index.files) { $index.files } elseif ($null -ne $index -and $null -ne $index.payload -and $null -ne $index.payload.files) { $index.payload.files } else { $null }
+    if ($null -ne $cachedIndexFiles) {
+        foreach ($property in $cachedIndexFiles.PSObject.Properties) { $indexFiles[$property.Name] = $property.Value }
+    }
 
     foreach ($path in $trackedPaths) {
         $metadataStopwatch = [Diagnostics.Stopwatch]::StartNew()
@@ -415,7 +435,22 @@ function Save-InitialState($InputObject) {
         $indexFiles[$path] = $record
     }
 
-    $state = [ordered]@{ sessionId = [string]$InputObject.session_id; projectRoot = $root; files = $files }
+    $generation = if ($null -ne $existingState -and $null -ne $existingState.PSObject.Properties['generation']) { [long]$existingState.generation + 1 } else { 1L }
+    $lastSuccessfulGeneration = if ($null -ne $existingState -and $null -ne $existingState.PSObject.Properties['lastSuccessfulRestoreGeneration']) { [long]$existingState.lastSuccessfulRestoreGeneration } else { 0L }
+    $state = [ordered]@{
+        schemaVersion = 1
+        sessionId = [string]$InputObject.session_id
+        projectRoot = $root
+        validationLevel = if (@($CandidateFiles).Count -gt 0) { 'ChangedOnly' } else { 'Full' }
+        impactClassification = $Impact
+        knownWriteTargets = @($CandidateFiles)
+        lineEndingDirty = $true
+        unknownWriteObserved = $Impact -eq 'UnknownWriteScope'
+        restorePending = $true
+        generation = $generation
+        lastSuccessfulRestoreGeneration = $lastSuccessfulGeneration
+        files = $files
+    }
     Invoke-WithStateLock -ProjectRoot $root -SessionId ([string]$InputObject.session_id) -Action {
         if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) { Write-LineEndingState -Path $statePath -State $state }
     } | Out-Null
@@ -432,6 +467,16 @@ function Restore-InitialState($InputObject, [Collections.Generic.List[string]]$W
     $root = Get-CvsRoot -StartPath ([string]$InputObject.cwd)
     $statePath = if ([string]::IsNullOrWhiteSpace($root)) { $null } else { Get-StatePath -SessionId ([string]$InputObject.session_id) -ProjectRoot $root }
     $candidateFiles = if ([string]::IsNullOrWhiteSpace($root)) { @() } else { @(Get-HookCandidateFiles -InputObject $InputObject -Root $root) }
+    $stateSnapshot = if ($null -ne $statePath -and (Test-Path -LiteralPath $statePath -PathType Leaf)) {
+        try { [IO.File]::ReadAllText($statePath) | ConvertFrom-Json -ErrorAction Stop } catch { $null }
+    } else { $null }
+    if ($null -ne $stateSnapshot) {
+        $pending = $null -eq $stateSnapshot.PSObject.Properties['restorePending'] -or [bool]$stateSnapshot.restorePending -or [bool]$stateSnapshot.lineEndingDirty -or [bool]$stateSnapshot.unknownWriteObserved
+        if (-not $pending) {
+            if ($Cleanup) { Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue }
+            return $changedFiles.ToArray()
+        }
+    }
     $useScopedCandidateScan = -not $Cleanup -and $candidateFiles.Count -gt 0 -and (Test-IsScopedPatchInput -InputObject $InputObject)
     $script:HookTimings.candidateScoped = $useScopedCandidateScan
     if ($null -ne $statePath -and (Test-Path -LiteralPath $statePath -PathType Leaf)) {
@@ -507,6 +552,19 @@ function Restore-InitialState($InputObject, [Collections.Generic.List[string]]$W
                     } | Out-Null
                 }
             }
+            if (-not $Cleanup -and $Warnings.Count -eq 0) {
+                Invoke-WithStateLock -ProjectRoot $root -SessionId ([string]$InputObject.session_id) -Action {
+                    if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) { return }
+                    $latestState = [IO.File]::ReadAllText($statePath) | ConvertFrom-Json -ErrorAction Stop
+                    $generation = if ($null -ne $latestState.PSObject.Properties['generation']) { [long]$latestState.generation + 1 } else { 1L }
+                    $latestState.lineEndingDirty = $false
+                    $latestState.unknownWriteObserved = $false
+                    $latestState.restorePending = $false
+                    $latestState.generation = $generation
+                    $latestState.lastSuccessfulRestoreGeneration = $generation
+                    Write-LineEndingState -Path $statePath -State $latestState
+                } | Out-Null
+            }
             }
         } finally {
             if ($Cleanup) {
@@ -544,24 +602,15 @@ function Restore-InitialState($InputObject, [Collections.Generic.List[string]]$W
 }
 
 function Test-IsSafeReadOnlyCommand($InputObject) {
-    $toolName = [string]$InputObject.tool_name
-    if ($toolName -in @('request_user_input', 'view_image', 'read_mcp_resource', 'list_mcp_resources', 'list_mcp_resource_templates')) { return $true }
-    if ($toolName -notin @('exec', 'shell_command', 'run_shell_command')) { return $false }
-    $command = ([string]$InputObject.tool_input.command).Trim()
-    if ([string]::IsNullOrWhiteSpace($command) -or $command -match '[\r\n;|&<>`]' -or $command -match '\$[({]' -or $command -match '(?i)(?:--pre\b|Invoke-Expression|Start-Process|powershell(?:\.exe)?|pwsh(?:\.exe)?|cmd(?:\.exe)?|bash|sh)') { return $false }
-    return $command -match '^(?:(?:Get-Content|rg|ripgrep|php\s+-l|cvs\s+(?:status|diff)|git\s+(?:status|diff))(?:\s|$))'
+    return [string](Get-CodexToolImpactClassification -InputObject $InputObject).classification -eq 'ReadOnly'
 }
 
 function Test-IsScopedPatchInput($InputObject) {
-    $toolName = [string]$InputObject.tool_name
-    if ($toolName -eq 'apply_patch') { return $true }
-    $command = ([string]$InputObject.tool_input.command).Trim()
-    if ($command -match '[\r\n;|&<>`]' -or $command -match '\$[({]') { return $false }
-    return $command -match '(?s)^.*\btools\.apply_patch\s*\('
+    return [string](Get-CodexToolImpactClassification -InputObject $InputObject).classification -eq 'KnownWriteTargets'
 }
 
 function Test-NeedsLineEndingState($InputObject) {
-    return -not (Test-IsSafeReadOnlyCommand -InputObject $InputObject)
+    return [string](Get-CodexToolImpactClassification -InputObject $InputObject).classification -notin @('NoFileImpact', 'ReadOnly')
 }
 
 $warnings = [Collections.Generic.List[string]]::new()
@@ -575,18 +624,30 @@ try {
     $script:HookSource = Get-CodexHookSource
     $script:HookInvocationContext = New-CodexHookInvocationContext -InputObject $inputObject -HookSource $script:HookSource
     $script:HookInvocationCounts = Get-CodexHookInvocationCounts -InputObject $inputObject -Kind crlf -EventName $Mode -HookSource $script:HookSource
+    $script:WorkflowDecision = Get-CodexToolImpactClassification -InputObject $inputObject
+    $script:ImpactClassification = [string]$script:WorkflowDecision.classification
     if ($Mode -eq 'Track') {
         if ([string]::IsNullOrWhiteSpace([string]$inputObject.cwd)) { throw 'Hook input is missing cwd.' }
-        if (Test-NeedsLineEndingState -InputObject $inputObject) { Save-InitialState -InputObject $inputObject }
-    } elseif ($Mode -eq 'Finalize' -or (Test-NeedsLineEndingState -InputObject $inputObject)) {
-        $changedFiles = @(Restore-InitialState -InputObject $inputObject -Warnings $warnings -Cleanup:($Mode -eq 'Finalize'))
+        if ($script:ImpactClassification -in @('NoFileImpact', 'ReadOnly')) {
+            $script:SkippedReason = [string]$script:WorkflowDecision.reason
+        } else {
+            $projectRoot = Get-CvsRoot -StartPath ([string]$inputObject.cwd)
+            $candidateFiles = if ($script:ImpactClassification -eq 'KnownWriteTargets' -and -not [string]::IsNullOrWhiteSpace($projectRoot)) { @(Get-HookCandidateFiles -InputObject $inputObject -Root $projectRoot) } else { @() }
+            Save-InitialState -InputObject $inputObject -CandidateFiles $candidateFiles -Impact $script:ImpactClassification
+        }
+    } elseif ($Mode -eq 'Finalize') {
+        $changedFiles = @(Restore-InitialState -InputObject $inputObject -Warnings $warnings -Cleanup)
+    } elseif ($script:ImpactClassification -notin @('NoFileImpact', 'ReadOnly')) {
+        $changedFiles = @(Restore-InitialState -InputObject $inputObject -Warnings $warnings)
+    } else {
+        $script:SkippedReason = [string]$script:WorkflowDecision.reason
     }
 } catch {
     $warnings.Add("Line-ending $($Mode.ToLowerInvariant()) failed: $($_.Exception.Message)")
 }
 
 if ($warnings.Count -eq 0) {
-    Write-HookDiagnostic -InputObject $inputObject -Result 'success' -ChangedFiles $changedFiles -Details ''
+    Write-HookDiagnostic -InputObject $inputObject -Result $(if ([string]::IsNullOrWhiteSpace($script:SkippedReason)) { 'success' } else { 'skipped' }) -ChangedFiles $changedFiles -Details $script:SkippedReason
     [Console]::Out.WriteLine('{}')
 } else {
     Write-HookDiagnostic -InputObject $inputObject -Result 'error' -ChangedFiles $changedFiles -Details ($warnings -join '; ')

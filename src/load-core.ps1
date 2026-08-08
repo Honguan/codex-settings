@@ -1,4 +1,5 @@
 . (Join-Path $PSScriptRoot 'core\models.ps1')
+. (Join-Path $PSScriptRoot 'core\workflow-policy.ps1')
 . (Join-Path $PSScriptRoot 'core\errors.ps1')
 . (Join-Path $PSScriptRoot 'core\file-system.ps1')
 . (Join-Path $PSScriptRoot 'core\state-repository.ps1')

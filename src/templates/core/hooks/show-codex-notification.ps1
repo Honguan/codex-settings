@@ -46,6 +46,7 @@ $script:TranscriptTokenEventCache = @{}
 $script:CcSessionsCommandName = $null
 $script:CcSessionsCommandKind = $null
 $script:CcSessionsCommandPath = $null
+$script:CcSessionsQueryCount = 0
 
 function Add-HookTiming([string]$Name, [long]$Milliseconds) {
     if ($script:HookTimings.Contains($Name)) { $script:HookTimings[$Name] = [long]$script:HookTimings[$Name] + $Milliseconds }
@@ -102,6 +103,8 @@ function Write-HookDiagnostic($InputObject, [string]$Result, [string]$Details) {
         $sessionId = if ($null -eq $InputObject -or [string]::IsNullOrWhiteSpace([string]$InputObject.session_id)) { 'unknown' } else { [string]$InputObject.session_id }
         $safeSessionId = [regex]::Replace($sessionId, '[^A-Za-z0-9._-]', '_')
         $counts = if ($null -eq $script:HookInvocationCounts) { [pscustomobject](New-CodexHookInvocationCounts) } else { $script:HookInvocationCounts }
+        $elapsedMs = [long]$script:HookStopwatch.ElapsedMilliseconds
+        $slowThresholdMs = if ($Type -eq 'Completed') { 1000 } else { 500 }
         $entry = [ordered]@{
             timestamp = [DateTimeOffset]::Now.ToString('o')
             event = if ($null -eq $InputObject) { '' } else { [string]$InputObject.hook_event_name }
@@ -130,7 +133,9 @@ function Write-HookDiagnostic($InputObject, [string]$Result, [string]$Details) {
             parentProcessId = Get-CodexHookParentProcessId
             startTime = $script:HookStartTime.ToString('o')
             endTime = [DateTimeOffset]::Now.ToString('o')
-            elapsedMs = $script:HookStopwatch.ElapsedMilliseconds
+            elapsedMs = $elapsedMs
+            slowThresholdMs = $slowThresholdMs
+            slowPath = $elapsedMs -ge $slowThresholdMs
             exitCode = $script:HookExitCode
             GlobalStopHookCount = [int]$counts.GlobalStopHookCount
             ProjectStopHookCount = [int]$counts.ProjectStopHookCount
@@ -146,6 +151,7 @@ function Write-HookDiagnostic($InputObject, [string]$Result, [string]$Details) {
             ccsessionsResolveMs = [long]$script:HookTimings.ccsessionsResolveMs
             ccsessionsRunMs = [long]$script:HookTimings.ccsessionsRunMs
             ccsessionsRetrySleepMs = [long]$script:HookTimings.ccsessionsRetrySleepMs
+            ccsessionsQueryCount = [long]$script:CcSessionsQueryCount
             transcriptReadMs = [long]$script:HookTimings.transcriptReadMs
             details = $Details
         }
@@ -607,7 +613,17 @@ function Resolve-CcSessionsCommand {
     } finally { Add-HookTiming -Name 'ccsessionsResolveMs' -Milliseconds $stopwatch.ElapsedMilliseconds }
 }
 
+function Test-CcSessionsRetryableError {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)]$ErrorRecord)
+
+    $message = [string]$ErrorRecord.Exception.Message
+    if ([string]::IsNullOrWhiteSpace($message)) { $message = [string]$ErrorRecord }
+    return $message -match '(?i)(?:usage\s+not\s+ready|not\s+ready|stale|no\s+matching\s+session|different\s+session|session\s+mismatch)'
+}
+
 function Invoke-CcSessionsJson([string]$SessionId, $Baseline) {
+    $script:CcSessionsQueryCount++
     $lastError = $null
     $retryDelays = @(150, 250, 400, 650, 900, 1200)
     $command = Resolve-CcSessionsCommand
@@ -623,7 +639,10 @@ function Invoke-CcSessionsJson([string]$SessionId, $Baseline) {
             $text = ($output | Out-String).Trim()
             $start = $text.IndexOf('{')
             $end = $text.LastIndexOf('}')
-            if ($start -lt 0 -or $end -le $start) { throw 'ccsessions returned invalid JSON' }
+            if ($start -lt 0 -or $end -le $start) {
+                if ($text -match '(?i)(?:usage\s+not\s+ready|not\s+ready|stale|no\s+matching\s+session|different\s+session)') { throw 'ccsessions usage not ready' }
+                throw 'ccsessions returned invalid JSON'
+            }
             $result = $text.Substring($start, $end - $start + 1) | ConvertFrom-Json -ErrorAction Stop
             if ($result -is [array]) { $result = @($result | Where-Object { [string]$_.sessionId -eq $SessionId })[0] }
             if ($null -eq $result -or -not [bool]$result.success) { throw $(if ($result.error) { [string]$result.error } else { 'ccsessions returned no matching session' }) }
@@ -642,7 +661,7 @@ function Invoke-CcSessionsJson([string]$SessionId, $Baseline) {
         } catch {
             $lastError = $_
             try { $lastError.Exception.Data['ccsessionsRetryCount'] = $attempt } catch {}
-            if ($_.Exception.Message -match 'ccsessions not found' -or $attempt -ge $retryDelays.Count) { throw }
+            if (-not (Test-CcSessionsRetryableError -ErrorRecord $_) -or $attempt -ge $retryDelays.Count) { throw }
             $sleepStopwatch = [Diagnostics.Stopwatch]::StartNew()
             Start-Sleep -Milliseconds $retryDelays[$attempt]
             Add-HookTiming -Name 'ccsessionsRetrySleepMs' -Milliseconds $sleepStopwatch.ElapsedMilliseconds
@@ -1253,8 +1272,11 @@ try {
     $root = Get-NotificationRoot
     $settings = Get-NotificationSettings -Root $root
     $settingName = $Type.Substring(0, 1).ToLowerInvariant() + $Type.Substring(1)
+    $mainSession = Test-CodexMainSession -InputObject $inputObject
     if (-not $Test -and (-not [bool]$settings.enabled -or -not [bool]$settings.$settingName)) {
         Write-HookDiagnostic -InputObject $inputObject -Result 'disabled' -Details ''
+    } elseif (-not $Test -and [bool]$settings.mainSessionOnly -and -not $mainSession) {
+        Write-HookDiagnostic -InputObject $inputObject -Result 'skipped' -Details 'notification=non-main-session'
     } else {
         $notificationClaim = Acquire-NotificationClaim -Root $root -InputObject $inputObject -NotificationType $Type
         if (-not [bool]$notificationClaim.Acquired) {
@@ -1270,7 +1292,7 @@ try {
             $skipNotification = $false
             if ($Type -eq 'Completed') {
                 $tokenSettings = Get-TokenUsageSettings -Root (Get-TokenUsageRoot)
-                if ([bool]$tokenSettings.enabled -and [bool]$tokenSettings.showAfterEachTurn) {
+                if ([bool]$tokenSettings.enabled -and [bool]$tokenSettings.showAfterEachTurn -and (-not [bool]$tokenSettings.mainSessionOnly -or $mainSession)) {
                     try {
                         $usage = Get-TokenUsageDisplay -InputObject $inputObject -Settings $tokenSettings
                         if ([bool]$usage.Duplicate) {
@@ -1343,10 +1365,12 @@ try {
                                 $deliverySucceeded = [bool]$script:FallbackShown
                             } catch {
                                 if ([bool]$settings.sound) { [Console]::Error.Write([char]7) }
-                            }
                         }
                     }
+                } elseif ([bool]$tokenSettings.enabled -and [bool]$tokenSettings.showAfterEachTurn -and [bool]$tokenSettings.mainSessionOnly -and -not $mainSession) {
+                    $details = 'tokenUsage=skipped-non-main-session'
                 }
+            }
                 if ($deliverySucceeded) {
                     Set-NotificationClaimState -Claim $notificationClaim -State shown -Result $(if ($testMode) { 'test' } elseif ($script:NativeToastShown) { 'native-toast' } else { 'balloon-fallback' })
                 } else {

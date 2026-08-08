@@ -18,6 +18,9 @@ function Get-InstallationDiscovery {
         })
     }
 
+    $usageTemplatePath = Join-Path $Context.ScriptRoot 'templates\profile\usage-commands.ps1'
+    $profileCurrent = Test-CcusageProfileCurrent -TemplatePath $usageTemplatePath
+
     return [pscustomobject][ordered]@{
         schemaVersion = 1
         capturedAt = (Get-Date).ToUniversalTime().ToString('o')
@@ -27,6 +30,10 @@ function Get-InstallationDiscovery {
         installStyle = [string]$Context.InstallStyle
         targetSnapshots = $targetSnapshots.ToArray()
         ccusage = $CcusageBefore
+        usageTools = [ordered]@{
+            profileCurrent = $profileCurrent
+            profilePaths = @($PROFILE.CurrentUserAllHosts, $PROFILE.CurrentUserCurrentHost) | Select-Object -Unique
+        }
         context7UserPresent = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable('CONTEXT7_API_KEY', 'User'))
     }
 }

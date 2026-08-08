@@ -43,6 +43,75 @@ function New-CodexHookInvocationContext {
     }
 }
 
+function Get-CodexPatchTargetPaths {
+    [CmdletBinding()]
+    param([AllowNull()]$InputObject)
+
+    if ($null -eq $InputObject) { return @() }
+    $toolInput = $InputObject.tool_input
+    $command = if ($null -eq $toolInput) { '' } else { [string]$toolInput.command }
+    $patch = if ($null -ne $toolInput -and $null -ne $toolInput.patch) { [string]$toolInput.patch } else { '' }
+    $text = ($command + "`n" + $patch).Replace('\n', "`n")
+    return @([regex]::Matches($text, '(?m)^\*\*\* (?:Update|Add|Delete) File:\s*(?<path>[^\r\n]+)$') | ForEach-Object { $_.Groups['path'].Value.Trim().Replace('\\', '\') } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
+}
+
+function Test-CodexVerifiedReadOnlyCommand {
+    [CmdletBinding()]
+    param([AllowNull()]$InputObject)
+
+    if ($null -eq $InputObject) { return $false }
+    $command = ([string]$InputObject.tool_input.command).Trim()
+    if ([string]::IsNullOrWhiteSpace($command) -or $command -match '[\r\n;|&<>`]' -or $command -match '\$[({]' -or $command -match '(?i)(?:--pre\b|Invoke-Expression|Start-Process|powershell(?:\.exe)?|pwsh(?:\.exe)?|cmd(?:\.exe)?|bash|sh)') { return $false }
+    return $command -match '^(?:(?:Get-Content|Get-ChildItem|Get-Item|Test-Path|Resolve-Path|Select-String|rg|ripgrep|php\s+-l|cvs\s+(?:status|diff)|git\s+(?:status|diff|log|show|ls-files))(?:\s|$))'
+}
+
+function Get-CodexToolImpactClassification {
+    [CmdletBinding()]
+    param([AllowNull()]$InputObject)
+
+    $toolName = if ($null -eq $InputObject) { '' } else { [string]$InputObject.tool_name }
+    if ($toolName -in @('request_user_input', 'view_image', 'read_mcp_resource', 'list_mcp_resources', 'list_mcp_resource_templates')) {
+            return [pscustomobject][ordered]@{ schemaVersion = 1; classification = 'NoFileImpact'; workClass = 'None'; validationLevel = 'None'; knownWriteTargets = @(); reason = 'tool-does-not-access-local-files' }
+    }
+    $targets = @(Get-CodexPatchTargetPaths -InputObject $InputObject)
+    $command = if ($null -eq $InputObject) { '' } else { [string]$InputObject.tool_input.command }
+    if ($toolName -eq 'apply_patch' -or $command -match '(?s)\*\*\* Begin Patch') {
+        if ($targets.Count -gt 0) {
+            return [pscustomobject][ordered]@{ schemaVersion = 1; classification = 'KnownWriteTargets'; workClass = 'Critical'; validationLevel = 'ChangedOnly'; knownWriteTargets = $targets; reason = 'patch-targets-are-explicit' }
+        }
+        return [pscustomobject][ordered]@{ schemaVersion = 1; classification = 'UnknownWriteScope'; workClass = 'Critical'; validationLevel = 'Full'; knownWriteTargets = @(); reason = 'write-tool-without-explicit-targets' }
+    }
+    if ($toolName -in @('request_user_input', 'view_image', 'read_mcp_resource', 'list_mcp_resources', 'list_mcp_resource_templates')) {
+        return [pscustomobject][ordered]@{ schemaVersion = 1; classification = 'NoFileImpact'; workClass = 'None'; validationLevel = 'None'; knownWriteTargets = @(); reason = 'tool-does-not-access-local-files' }
+    }
+    if ($toolName -in @('exec', 'shell_command', 'run_shell_command') -and (Test-CodexVerifiedReadOnlyCommand -InputObject $InputObject)) {
+        return [pscustomobject][ordered]@{ schemaVersion = 1; classification = 'ReadOnly'; workClass = 'Conditional'; validationLevel = 'Fast'; knownWriteTargets = @(); reason = 'command-matches-verified-read-only-form' }
+    }
+    return [pscustomobject][ordered]@{ schemaVersion = 1; classification = 'UnknownWriteScope'; workClass = 'Critical'; validationLevel = 'Full'; knownWriteTargets = @(); reason = 'write-scope-cannot-be-proven' }
+}
+
+function Test-CodexMainSession {
+    [CmdletBinding()]
+    param([AllowNull()]$InputObject)
+
+    if ($null -eq $InputObject) { return $true }
+    foreach ($name in @('is_main_session', 'main_session', 'is_main')) {
+        $property = $InputObject.PSObject.Properties[$name]
+        if ($null -eq $property) { continue }
+        if ($property.Value -is [string]) {
+            $text = ([string]$property.Value).Trim().ToLowerInvariant()
+            if ($text -in @('true', '1', 'yes')) { return $true }
+            if ($text -in @('false', '0', 'no')) { return $false }
+        }
+        return [bool]$property.Value
+    }
+    foreach ($name in @('parent_session_id', 'parent_session', 'forked_from_session_id')) {
+        $property = $InputObject.PSObject.Properties[$name]
+        if ($null -ne $property -and -not [string]::IsNullOrWhiteSpace([string]$property.Value)) { return $false }
+    }
+    return $true
+}
+
 function Read-CodexHookInvocation {
     [CmdletBinding()]
     param()

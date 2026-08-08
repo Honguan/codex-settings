@@ -198,6 +198,9 @@ function New-InstallFileResult {
         [bool]$Updated = $false,
         [string]$Sha256Before = '',
         [string]$Sha256After = '',
+        [string]$TemplateSha256 = '',
+        [long]$FileLength = 0,
+        [long]$LastWriteTimeUtcTicks = 0,
         [AllowEmptyString()][string]$BackupPath = '',
         [AllowNull()]$ValidationResult = $null,
         [string]$Status = 'Unchanged',
@@ -219,6 +222,9 @@ function New-InstallFileResult {
         sha256Before = if ([string]::IsNullOrWhiteSpace($Sha256Before)) { $null } else { $Sha256Before }
         sha256After = if ([string]::IsNullOrWhiteSpace($Sha256After)) { $null } else { $Sha256After }
         sha256 = if ([string]::IsNullOrWhiteSpace($Sha256After)) { $null } else { $Sha256After }
+        templateSha256 = if ([string]::IsNullOrWhiteSpace($TemplateSha256)) { $null } else { $TemplateSha256 }
+        fileLength = $FileLength
+        lastWriteTimeUtcTicks = $LastWriteTimeUtcTicks
         backupPath = if ([string]::IsNullOrWhiteSpace($BackupPath)) { $null } else { $BackupPath }
         validationResult = $ValidationResult
         status = $Status

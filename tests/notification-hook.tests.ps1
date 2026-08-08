@@ -253,7 +253,7 @@ Get-Content -LiteralPath $env:CODEX_SETTINGS_CCSESSIONS_SNAPSHOT -Raw
     $failureNotification = Get-LastNotification
     if ($failureNotification.message -ne 'Token 用量暫時無法取得') { throw 'Token 統計失敗時未顯示完成通知的降級內容。' }
     $failureDiagnostic = Get-Content -LiteralPath (Join-Path $diagnosticRoot 'session-failure.log') -Raw | ConvertFrom-Json
-    if ($failureDiagnostic.result -ne 'success' -or $failureDiagnostic.details -notmatch 'tokenUsageError=.*ccsessions returned invalid JSON') { throw 'Token 統計原始錯誤未寫入診斷紀錄。' }
+    if ($failureDiagnostic.result -ne 'success' -or $failureDiagnostic.details -notmatch 'tokenUsageError=.*ccsessions (?:returned invalid JSON|usage not ready)') { throw 'Token 統計原始錯誤未寫入診斷紀錄。' }
 
     $settingsPath = Join-Path $tokenRoot 'settings.json'
     $tokenSettings = Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json

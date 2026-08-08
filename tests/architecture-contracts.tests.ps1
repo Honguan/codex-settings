@@ -63,7 +63,7 @@ try {
     $notificationSource = Get-Content -LiteralPath (Join-Path $script:ScriptRoot 'templates\core\hooks\show-codex-notification.ps1') -Raw
     $lineEndingSource = Get-Content -LiteralPath (Join-Path $script:ScriptRoot 'templates\environments\cvs\hooks\preserve-line-endings.ps1') -Raw
     $usageSource = Get-Content -LiteralPath (Join-Path $script:ScriptRoot 'templates\profile\usage-commands.ps1') -Raw
-    foreach ($expected in @('Read-CodexHookInvocation', 'Write-CodexHookState', 'Get-CodexHookInvocationCounts')) {
+    foreach ($expected in @('Read-CodexHookInvocation', 'Write-CodexHookState', 'Get-CodexHookInvocationCounts', 'Get-CodexToolImpactClassification', 'Test-CodexMainSession')) {
         if ($runtimeCore -notmatch [regex]::Escape($expected)) { throw "Runtime core 缺少函式：$expected" }
     }
     if ($notificationSource -notmatch 'runtime-core\.ps1' -or $lineEndingSource -notmatch 'runtime-core\.ps1') { throw 'Hook entrypoint 未載入共用 runtime core。' }

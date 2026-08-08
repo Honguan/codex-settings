@@ -1,8 +1,8 @@
-function Invoke-TargetInstallation($Target, $Transaction, [switch]$Force) {
+function Invoke-TargetInstallation($Target, $Transaction, [switch]$Force, $PreviousManifest = $null) {
     if (-not (Test-Path -LiteralPath $Target.TemplateRoot -PathType Container)) { throw "找不到範本：$($Target.TemplateRoot)" }
     New-Item -ItemType Directory -Path $Target.Root -Force | Out-Null
     $transactionEntriesBeforeCleanup = $Transaction.Entries.Count
-    $previous = Get-Manifest $Target.Root
+    $previous = if ($null -ne $PreviousManifest) { $PreviousManifest } else { Get-Manifest $Target.Root }
     $managedNotificationFingerprints = @(Get-ManifestManagedHookFingerprints -Manifest $previous -Kind Notification)
     $managedTokenFingerprints = @(Get-ManifestManagedHookFingerprints -Manifest $previous -Kind Token)
     $managedHookFingerprints = @($managedNotificationFingerprints + $managedTokenFingerprints)
@@ -23,11 +23,20 @@ function Invoke-TargetInstallation($Target, $Transaction, [switch]$Force) {
         [void]$templatePaths.Add($relative)
         $destination = Join-Path $Target.Root $relative
         $previousEntry = Get-ManifestEntry $previous $relative
-        $state = Get-TextFileState $destination
         $strategy = Get-Strategy $Target.Mode $relative
-        $beforeHash = if ($state.Exists) { (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash } else { $null }
-        $owned = $state.Exists -and $null -ne $previousEntry -and -not [string]::IsNullOrWhiteSpace([string]$previousEntry.Sha256) -and [string]$previousEntry.Sha256 -eq [string]$beforeHash
         $template = [string]$templateEntry.Content
+        $templateSha256 = Get-StringSha256 -Content $template
+        $metadata = Get-FileMetadata -Path $destination
+        $metadataKnown = $metadata.Exists -and $null -ne $previousEntry -and $previousEntry.PSObject.Properties.Name -contains 'fileLength' -and $previousEntry.PSObject.Properties.Name -contains 'lastWriteTimeUtcTicks'
+        $metadataMatches = $metadataKnown -and [long]$previousEntry.fileLength -eq $metadata.Length -and [long]$previousEntry.lastWriteTimeUtcTicks -eq $metadata.LastWriteTimeUtcTicks
+        $fastReplaceUnchanged = -not $Force -and $strategy.Name -eq 'replace' -and $metadataMatches -and [string]$previousEntry.templateSha256 -eq $templateSha256
+        if ($fastReplaceUnchanged) {
+            [void]$entries.Add((New-InstallFileResult -Path $relative -RelativePath $relative -Strategy $strategy.Name -ExistedBefore $true -Changed $false -Created $false -Updated $false -Sha256Before ([string]$previousEntry.Sha256) -Sha256After ([string]$previousEntry.Sha256) -TemplateSha256 $templateSha256 -FileLength $metadata.Length -LastWriteTimeUtcTicks $metadata.LastWriteTimeUtcTicks -Status 'Unchanged' -OriginalEncoding 'utf-8' -OriginalCodePage 65001))
+            continue
+        }
+        $state = Get-TextFileState $destination
+        $beforeHash = if (-not $state.Exists) { $null } elseif ($metadataMatches -and -not [string]::IsNullOrWhiteSpace([string]$previousEntry.Sha256)) { [string]$previousEntry.Sha256 } else { (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash }
+        $owned = $state.Exists -and $null -ne $previousEntry -and -not [string]::IsNullOrWhiteSpace([string]$previousEntry.Sha256) -and (($metadataMatches -and [string]$previousEntry.Sha256 -eq $beforeHash) -or [string]$previousEntry.Sha256 -eq [string]$beforeHash)
         if ($template.Length -gt 0 -and $template[0] -eq [char]0xFEFF -and $state.Encoding.GetPreamble().Length -gt 0) { $template = $template.Substring(1) }
         $template = [regex]::Replace($template, "`r`n|`r|`n", $state.NewLine)
         $isOptionalFeatureConfig = $Target.Mode -eq 'Global' -and $relative -eq 'config.toml' -and [bool]$Target.EnableDefaultModeRequestUserInput
@@ -72,9 +81,10 @@ function Invoke-TargetInstallation($Target, $Transaction, [switch]$Force) {
             Write-TextFileState -Path $destination -Content $desiredContent -Encoding $state.Encoding
         }
         $afterHash = if ($changed) { (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash } else { $beforeHash }
+        $afterMetadata = Get-FileMetadata -Path $destination
 
         $status = if (-not $state.Exists) { 'Installed' } elseif ($changed) { 'Updated' } else { 'Unchanged' }
-        [void]$entries.Add((New-InstallFileResult -Path $relative -RelativePath $relative -Strategy $strategy.Name -StartMarker $strategy.Start -EndMarker $strategy.End -ExistedBefore ([bool]$state.Exists) -Changed $changed -Created (-not $state.Exists) -Updated ([bool]($state.Exists -and $changed)) -Sha256Before $beforeHash -Sha256After $afterHash -Status $status -OriginalEncoding ([string]$state.EncodingName) -OriginalCodePage ([int]$state.CodePage)))
+        [void]$entries.Add((New-InstallFileResult -Path $relative -RelativePath $relative -Strategy $strategy.Name -StartMarker $strategy.Start -EndMarker $strategy.End -ExistedBefore ([bool]$state.Exists) -Changed $changed -Created (-not $state.Exists) -Updated ([bool]($state.Exists -and $changed)) -Sha256Before $beforeHash -Sha256After $afterHash -TemplateSha256 $templateSha256 -FileLength $afterMetadata.Length -LastWriteTimeUtcTicks $afterMetadata.LastWriteTimeUtcTicks -Status $status -OriginalEncoding ([string]$state.EncodingName) -OriginalCodePage ([int]$state.CodePage)))
     }
 
     if ($null -ne $previous -and $null -ne $previous.Files) {
