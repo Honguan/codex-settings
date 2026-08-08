@@ -38,7 +38,7 @@ if (($global:CcSessionsNpxArguments -join ' ') -notmatch '--timezone Asia/Taipei
 
 $jsonText = (& ccsessions -Json '019fd1f8-4928-7432-9697-8070ae4a87a2' | Out-String).Trim()
 $json = $jsonText | ConvertFrom-Json -ErrorAction Stop
-if (-not [bool]$json.success -or $json.sessionId -ne '019fd1f8-4928-7432-9697-8070ae4a87a2' -or $json.cachedInputTokens -ne 4 -or $json.cacheWriteTokens -ne 5 -or $json.totalTokens -ne 10 -or @($json.models).Count -ne 2) {
+if (-not [bool]$json.success -or $json.sessionId -ne '019fd1f8-4928-7432-9697-8070ae4a87a2' -or $json.reasoningTokens -ne 3 -or $json.cacheTokens -ne 4 -or $json.totalTokens -ne 10 -or $json.time -ne '01-01 08:30 AM' -or $json.PSObject.Properties.Name -contains 'cachedInputTokens' -or $json.PSObject.Properties.Name -contains 'cacheWriteTokens' -or @($json.models).Count -ne 2) {
     throw "ccsessions JSON output is invalid: $jsonText"
 }
 
