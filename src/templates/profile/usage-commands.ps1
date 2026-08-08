@@ -1,6 +1,188 @@
 # Source: https://github.com/ccusage/ccusage
 # Managed by codex-settings. Prefer the installer-managed global ccusage binary; use npx latest only as fallback.
 
+$script:CodexUsageBackendCache = $null
+$script:CodexUsageLastCommandText = $null
+
+function global:Get-CodexUsageElapsedMilliseconds($Stopwatch) {
+    if ($null -eq $Stopwatch) { return 0 }
+    return [long]$Stopwatch.ElapsedMilliseconds
+}
+
+function global:Resolve-CodexUsageBackend {
+    [CmdletBinding()]
+    param([switch]$PreferNpx)
+
+    $pathStamp = [string]$env:PATH
+    if (-not $PreferNpx -and $null -ne $script:CodexUsageBackendCache -and $script:CodexUsageBackendCache.PathStamp -eq $pathStamp) {
+        $cached = $script:CodexUsageBackendCache
+        if ($cached.CommandType -ne 'Application' -or [string]::IsNullOrWhiteSpace([string]$cached.ExecutablePath) -or (Test-Path -LiteralPath $cached.ExecutablePath -PathType Leaf)) {
+            return $cached
+        }
+        $script:CodexUsageBackendCache = $null
+    }
+
+    if (-not $PreferNpx) {
+        $ccusage = @(Get-Command ccusage -ErrorAction SilentlyContinue | Select-Object -First 1)[0]
+        if ($null -ne $ccusage) {
+            $backend = [pscustomobject]@{
+                Kind = 'ccusage'
+                CommandName = [string]$ccusage.Name
+                CommandType = [string]$ccusage.CommandType
+                ExecutablePath = if ($ccusage.CommandType -eq 'Application') { [string]$ccusage.Source } else { $null }
+                PathStamp = $pathStamp
+                CommandText = 'ccusage'
+            }
+            $script:CodexUsageBackendCache = $backend
+            return $backend
+        }
+    }
+
+    $npx = @(Get-Command npx -ErrorAction SilentlyContinue | Select-Object -First 1)[0]
+    if ($null -eq $npx) {
+        throw 'Neither npx nor ccusage is available. Install Node.js and run the codex-settings global installer.'
+    }
+
+    return [pscustomobject]@{
+        Kind = 'npx'
+        CommandName = [string]$npx.Name
+        CommandType = [string]$npx.CommandType
+        ExecutablePath = if ($npx.CommandType -eq 'Application') { [string]$npx.Source } else { $null }
+        PathStamp = $pathStamp
+        CommandText = 'npx --yes ccusage@latest'
+    }
+}
+
+function global:ConvertFrom-CodexUsageOutput {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Output,
+        [Parameter(Mandatory = $true)][string]$CommandText
+    )
+
+    $profileEnabled = $env:CODEX_SETTINGS_USAGE_PROFILE -eq '1'
+    $stdoutStopwatch = if ($profileEnabled) { [Diagnostics.Stopwatch]::StartNew() } else { $null }
+    $text = ($Output | Out-String).Trim()
+    $text = $text -replace ([char]27 + '\[[0-?]*[ -/]*[@-~]'), ''
+    $stdoutParseMs = Get-CodexUsageElapsedMilliseconds $stdoutStopwatch
+    $start = $text.IndexOf('{')
+    $end = $text.LastIndexOf('}')
+    if ($start -lt 0 -or $end -le $start) {
+        $preview = if ($text.Length -gt 800) { $text.Substring(0, 800) + '...' } else { $text }
+        throw "ccusage returned no JSON object.`nCommand: $CommandText`nOutput preview:`n$preview"
+    }
+
+    $jsonText = $text.Substring($start, $end - $start + 1)
+    $jsonStopwatch = if ($profileEnabled) { [Diagnostics.Stopwatch]::StartNew() } else { $null }
+    try {
+        $report = $jsonText | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        throw "ccusage JSON parsing failed: $($_.Exception.Message)`nCommand: $CommandText"
+    }
+    $jsonParseMs = Get-CodexUsageElapsedMilliseconds $jsonStopwatch
+
+    return [pscustomobject]@{
+        Report = $report
+        Raw = $text
+        StdoutParseMs = $stdoutParseMs
+        JsonParseMs = $jsonParseMs
+    }
+}
+
+function global:Invoke-CodexUsageJson {
+    [CmdletBinding()]
+    param(
+        [ValidateSet('session', 'daily')][string]$ReportKind = 'session',
+        [ValidateRange(1, 3650)][int]$Days = 7
+    )
+
+    $profileEnabled = $env:CODEX_SETTINGS_USAGE_PROFILE -eq '1'
+    $totalStopwatch = if ($profileEnabled) { [Diagnostics.Stopwatch]::StartNew() } else { $null }
+    $backendStopwatch = if ($profileEnabled) { [Diagnostics.Stopwatch]::StartNew() } else { $null }
+    $backend = Resolve-CodexUsageBackend
+    $backendResolveMs = Get-CodexUsageElapsedMilliseconds $backendStopwatch
+    $attemptErrors = New-Object 'System.Collections.Generic.List[string]'
+    $attemptedFallback = $false
+
+    while ($null -ne $backend) {
+        $arguments = if ($ReportKind -eq 'session') {
+            @('codex', 'session', '--timezone', 'Asia/Taipei', '--json')
+        } else {
+            @('codex', 'daily', '--last', [string]$Days, '--timezone', 'Asia/Taipei', '--json')
+        }
+        $commandText = if ($backend.Kind -eq 'ccusage') {
+            $backend.CommandText + ' ' + ($arguments -join ' ')
+        } else {
+            $backend.CommandText + ' ' + ($arguments -join ' ')
+        }
+        $script:CodexUsageLastCommandText = $commandText
+
+        $processStopwatch = if ($profileEnabled) { [Diagnostics.Stopwatch]::StartNew() } else { $null }
+        if ($backend.Kind -eq 'ccusage') {
+            $output = & $backend.CommandName @arguments 2>&1
+        } else {
+            $output = & $backend.CommandName '--yes' 'ccusage@latest' @arguments 2>&1
+        }
+        $processMs = Get-CodexUsageElapsedMilliseconds $processStopwatch
+        $exitCode = [int]$LASTEXITCODE
+        if ($exitCode -ne 0) {
+            $raw = ($output | Out-String).Trim()
+            $details = if ([string]::IsNullOrWhiteSpace($raw)) { '(no command output)' } else { $raw }
+            [void]$attemptErrors.Add("$commandText exited with code $exitCode. Output: $details")
+        } else {
+            try {
+                $parsed = ConvertFrom-CodexUsageOutput -Output @($output) -CommandText $commandText
+                $metrics = [ordered]@{
+                    backendResolveMs = [long]$backendResolveMs
+                    processLaunchMs = [long]$processMs
+                    ccusageMs = [long]$processMs
+                    stdoutParseMs = [long]$parsed.StdoutParseMs
+                    jsonParseMs = [long]$parsed.JsonParseMs
+                    normalizeMs = 0
+                    filterMs = 0
+                    sortMs = 0
+                    renderMs = 0
+                    fallbackUsed = [bool]$attemptedFallback
+                    totalMs = Get-CodexUsageElapsedMilliseconds $totalStopwatch
+                }
+                return [pscustomobject]@{
+                    Report = $parsed.Report
+                    CommandText = $commandText
+                    Raw = $parsed.Raw
+                    Metrics = [pscustomobject]$metrics
+                }
+            } catch {
+                [void]$attemptErrors.Add($_.Exception.Message)
+            }
+        }
+
+        if ($backend.Kind -ne 'ccusage' -or $attemptedFallback) { break }
+        $script:CodexUsageBackendCache = $null
+        try {
+            $backend = Resolve-CodexUsageBackend -PreferNpx
+            $attemptedFallback = $true
+        } catch {
+            $backend = $null
+            [void]$attemptErrors.Add($_.Exception.Message)
+        }
+    }
+
+    throw "ccusage query failed.`n$($attemptErrors -join "`n")"
+}
+
+function global:Write-CodexUsageProfile {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)]$Metrics)
+
+    if ($env:CODEX_SETTINGS_USAGE_PROFILE -ne '1') { return }
+    $line = $Metrics | ConvertTo-Json -Compress -Depth 6
+    if (-not [string]::IsNullOrWhiteSpace($env:CODEX_SETTINGS_USAGE_PROFILE_LOG)) {
+        Add-Content -LiteralPath $env:CODEX_SETTINGS_USAGE_PROFILE_LOG -Value $line -Encoding UTF8
+    } else {
+        Write-Verbose "usage-profile $line"
+    }
+}
+
 # >>> CS CODEX SESSION VIEWER >>>
 Remove-Item -LiteralPath Alias:\ccsessions -Force -ErrorAction SilentlyContinue
 function global:ccsessions {
@@ -12,40 +194,6 @@ function global:ccsessions {
     )
 
     $commandContext = [pscustomobject]@{ Text = $null; Raw = $null }
-
-    function Invoke-CcusageJson {
-        if (Get-Command ccusage -ErrorAction SilentlyContinue) {
-            $commandContext.Text = 'ccusage codex session --timezone Asia/Taipei --json'
-            $output = & ccusage codex session --timezone 'Asia/Taipei' --json 2>&1
-        } elseif (Get-Command npx -ErrorAction SilentlyContinue) {
-            $commandContext.Text = 'npx --yes ccusage@latest codex session --timezone Asia/Taipei --json'
-            $output = & npx --yes 'ccusage@latest' codex session --timezone 'Asia/Taipei' --json 2>&1
-        } else {
-            throw 'Neither npx nor ccusage is available. Install Node.js and run the codex-settings global installer.'
-        }
-
-        $exitCode = $LASTEXITCODE
-        $commandContext.Raw = ($output | Out-String).Trim()
-        if ($exitCode -ne 0) {
-            $details = if ([string]::IsNullOrWhiteSpace($commandContext.Raw)) { '(no command output)' } else { $commandContext.Raw }
-            throw "ccusage exited with code $exitCode.`nCommand: $commandContext.Text`nOutput:`n$details"
-        }
-
-        $text = $commandContext.Raw -replace ([char]27 + '\[[0-?]*[ -/]*[@-~]'), ''
-        $start = $text.IndexOf('{')
-        $end = $text.LastIndexOf('}')
-        if ($start -lt 0 -or $end -le $start) {
-            $preview = if ($text.Length -gt 800) { $text.Substring(0, 800) + '...' } else { $text }
-            throw "ccusage returned no JSON object.`nCommand: $commandContext.Text`nOutput preview:`n$preview"
-        }
-
-        $jsonText = $text.Substring($start, $end - $start + 1)
-        try {
-            return $jsonText | ConvertFrom-Json -ErrorAction Stop
-        } catch {
-            throw "ccusage JSON parsing failed: $($_.Exception.Message)`nCommand: $commandContext.Text"
-        }
-    }
 
     function Get-Sessions($Report) {
         if ($null -ne $Report.sessions) { return @($Report.sessions) }
@@ -82,6 +230,16 @@ function global:ccsessions {
         return [string]$Row.sessionId
     }
 
+    function Test-SessionMatch($Row, [string[]]$Queries) {
+        $id = Get-SessionId $Row
+        foreach ($query in $Queries) {
+            if ([string]::IsNullOrWhiteSpace($id)) { continue }
+            if ($id -eq $query -or $id.EndsWith($query, [StringComparison]::OrdinalIgnoreCase)) { return $true }
+            if ($query -match '^(.+)\.\.\.(.+)$' -and $id.StartsWith($matches[1], [StringComparison]::OrdinalIgnoreCase) -and $id.EndsWith($matches[2], [StringComparison]::OrdinalIgnoreCase)) { return $true }
+        }
+        return $false
+    }
+
     function Format-SessionId([string]$Id) {
         if ([string]::IsNullOrWhiteSpace($Id)) { return '' }
         if ($Id.Length -gt 17) { return $Id.Substring(0, 8) + '...' + $Id.Substring($Id.Length - 6) }
@@ -94,53 +252,6 @@ function global:ccsessions {
         $names = @($Models.PSObject.Properties | ForEach-Object Name)
         if ($names.Count -gt 0) { return $names -join [Environment]::NewLine }
         return @($Models) -join [Environment]::NewLine
-    }
-
-    function Get-SessionPath($Row) {
-        $candidates = New-Object 'System.Collections.Generic.List[string]'
-        if ($Row.sessionId) { [void]$candidates.Add([string]$Row.sessionId) }
-        if ($Row.directory -and $Row.sessionFile) {
-            [void]$candidates.Add((Join-Path ([string]$Row.directory) ([string]$Row.sessionFile)))
-        }
-        $activity = Get-Activity $Row
-        if ($activity -ne [DateTimeOffset]::MinValue -and $Row.sessionFile) {
-            $dir = Join-Path "$env:USERPROFILE\.codex\sessions" ([TimeZoneInfo]::ConvertTimeBySystemTimeZoneId($activity, 'Taipei Standard Time')).ToString('yyyy\MM\dd')
-            [void]$candidates.Add((Join-Path $dir ([string]$Row.sessionFile)))
-        }
-        foreach ($path in $candidates) {
-            if (Test-Path -LiteralPath $path -PathType Leaf) { return (Resolve-Path -LiteralPath $path).Path }
-        }
-        return $null
-    }
-
-    function Get-Title($Row) {
-        foreach ($field in @('title', 'name', 'prompt')) {
-            $value = [string]$Row.$field
-            if (-not [string]::IsNullOrWhiteSpace($value)) {
-                $value = ($value -replace '\s+', ' ').Trim()
-                return $value.Substring(0, [Math]::Min(80, $value.Length))
-            }
-        }
-
-        $path = Get-SessionPath $Row
-        if ($path) {
-            foreach ($line in Get-Content -LiteralPath $path -Encoding UTF8 -ErrorAction SilentlyContinue) {
-                try { $item = $line | ConvertFrom-Json -ErrorAction Stop } catch { continue }
-                $texts = @(
-                    [string]$item.payload.message,
-                    [string]$item.payload.text,
-                    [string]$item.message,
-                    [string]$item.text
-                )
-                foreach ($text in $texts) {
-                    if (-not [string]::IsNullOrWhiteSpace($text)) {
-                        $text = ($text -replace '\s+', ' ').Trim()
-                        return $text.Substring(0, [Math]::Min(80, $text.Length))
-                    }
-                }
-            }
-        }
-        return '(Untitled session)'
     }
 
     function Format-Number($Number) {
@@ -292,9 +403,30 @@ function global:ccsessions {
         Write-Host (New-TableBorder '╰' '┴' '╯' $widths)
     }
 
+    $usageProfileEnabled = $env:CODEX_SETTINGS_USAGE_PROFILE -eq '1'
+    $usageProfileStopwatch = if ($usageProfileEnabled) { [Diagnostics.Stopwatch]::StartNew() } else { $null }
+    $usageProfile = [ordered]@{
+        backendResolveMs = 0
+        processLaunchMs = 0
+        ccusageMs = 0
+        stdoutParseMs = 0
+        jsonParseMs = 0
+        normalizeMs = 0
+        filterMs = 0
+        sortMs = 0
+        renderMs = 0
+        fallbackUsed = $false
+        totalMs = 0
+    }
+
     try {
-        $report = Invoke-CcusageJson
-        $sessions = @(Get-Sessions $report | Where-Object { $null -ne $_ } | Sort-Object @{ Expression = { Get-Activity $_ }; Descending = $true })
+        $usageResult = Invoke-CodexUsageJson -ReportKind 'session'
+        $commandContext.Text = $usageResult.CommandText
+        foreach ($metric in $usageResult.Metrics.PSObject.Properties) { $usageProfile[$metric.Name] = $metric.Value }
+
+        $normalizeStopwatch = if ($usageProfileEnabled) { [Diagnostics.Stopwatch]::StartNew() } else { $null }
+        $sessions = @(Get-Sessions $usageResult.Report | Where-Object { $null -ne $_ })
+        $usageProfile.normalizeMs += Get-CodexUsageElapsedMilliseconds $normalizeStopwatch
         if ($sessions.Count -eq 0) {
             $sessionRoot = Join-Path $env:USERPROFILE '.codex\sessions'
             throw "No Codex sessions were returned. Expected local data under: $sessionRoot"
@@ -311,31 +443,44 @@ function global:ccsessions {
 
         if ($listMode) {
             if ($count -lt 1 -or $count -gt 100) { throw 'The session count must be between 1 and 100.' }
+            $sortStopwatch = if ($usageProfileEnabled) { [Diagnostics.Stopwatch]::StartNew() } else { $null }
+            $sessions = @($sessions | Sort-Object @{ Expression = { Get-Activity $_ }; Descending = $true })
+            $usageProfile.sortMs += Get-CodexUsageElapsedMilliseconds $sortStopwatch
             $recent = @($sessions | Select-Object -First $count)
             if ($Json) {
-                Write-Output (ConvertTo-Json -InputObject @($recent | ForEach-Object { ConvertTo-UsageRow $_ }) -Depth 6 -Compress)
+                $normalizeStopwatch = if ($usageProfileEnabled) { [Diagnostics.Stopwatch]::StartNew() } else { $null }
+                $jsonRows = @($recent | ForEach-Object { ConvertTo-UsageRow $_ })
+                $usageProfile.normalizeMs += Get-CodexUsageElapsedMilliseconds $normalizeStopwatch
+                Write-Output (ConvertTo-Json -InputObject $jsonRows -Depth 6 -Compress)
                 return
             }
+            $renderStopwatch = if ($usageProfileEnabled) { [Diagnostics.Stopwatch]::StartNew() } else { $null }
             Show-Details $recent
+            $usageProfile.renderMs += Get-CodexUsageElapsedMilliseconds $renderStopwatch
             return
         }
 
-        $matched = @($sessions | Where-Object {
-            $id = Get-SessionId $_
-            foreach ($query in $arguments) {
-                if ([string]::IsNullOrWhiteSpace($id)) { continue }
-                if ($id -eq $query -or $id.EndsWith($query, [StringComparison]::OrdinalIgnoreCase)) { return $true }
-                if ($query -match '^(.+)\.\.\.(.+)$' -and $id.StartsWith($matches[1], [StringComparison]::OrdinalIgnoreCase) -and $id.EndsWith($matches[2], [StringComparison]::OrdinalIgnoreCase)) { return $true }
-            }
-            return $false
-        })
+        $shouldSort = -not ($Json -and $arguments.Count -eq 1)
+        if ($shouldSort) {
+            $sortStopwatch = if ($usageProfileEnabled) { [Diagnostics.Stopwatch]::StartNew() } else { $null }
+            $sessions = @($sessions | Sort-Object @{ Expression = { Get-Activity $_ }; Descending = $true })
+            $usageProfile.sortMs += Get-CodexUsageElapsedMilliseconds $sortStopwatch
+        }
+
+        $filterStopwatch = if ($usageProfileEnabled) { [Diagnostics.Stopwatch]::StartNew() } else { $null }
+        $matched = @($sessions | Where-Object { Test-SessionMatch $_ $arguments })
+        $usageProfile.filterMs += Get-CodexUsageElapsedMilliseconds $filterStopwatch
         if ($matched.Count -eq 0) { throw "No matching Codex sessions were found for: $($arguments -join ', ')" }
         if ($Json) {
+            $normalizeStopwatch = if ($usageProfileEnabled) { [Diagnostics.Stopwatch]::StartNew() } else { $null }
             $usageRows = @($matched | ForEach-Object { ConvertTo-UsageRow $_ })
+            $usageProfile.normalizeMs += Get-CodexUsageElapsedMilliseconds $normalizeStopwatch
             Write-Output $(if ($usageRows.Count -eq 1) { $usageRows[0] | ConvertTo-Json -Depth 6 -Compress } else { ConvertTo-Json -InputObject $usageRows -Depth 6 -Compress })
             return
         }
+        $renderStopwatch = if ($usageProfileEnabled) { [Diagnostics.Stopwatch]::StartNew() } else { $null }
         Show-Details $matched
+        $usageProfile.renderMs += Get-CodexUsageElapsedMilliseconds $renderStopwatch
     } catch {
         if ($Json) {
             Write-Output ([pscustomobject]@{ success = $false; error = $_.Exception.Message } | ConvertTo-Json -Compress)
@@ -343,8 +488,12 @@ function global:ccsessions {
         }
         Write-Host 'ccsessions 執行失敗。' -ForegroundColor Red
         Write-Host "原因：$($_.Exception.Message)" -ForegroundColor Red
+        if ([string]::IsNullOrWhiteSpace($commandContext.Text)) { $commandContext.Text = $script:CodexUsageLastCommandText }
         if (-not [string]::IsNullOrWhiteSpace($commandContext.Text)) { Write-Host "指令：$($commandContext.Text)" }
         Write-Host "設定檔：$($PROFILE.CurrentUserAllHosts)"
+    } finally {
+        $usageProfile.totalMs = Get-CodexUsageElapsedMilliseconds $usageProfileStopwatch
+        Write-CodexUsageProfile -Metrics ([pscustomobject]$usageProfile)
     }
 }
 # <<< CS CODEX SESSION VIEWER <<<
@@ -478,34 +627,43 @@ function global:cdaily {
         Write-Host (New-DailyTableBorder '╰' '┴' '╯' $widths)
     }
 
-    try {
-        $commandText = $null
-        if (Get-Command ccusage -ErrorAction SilentlyContinue) {
-            $commandText = "ccusage codex daily --last $Days --timezone Asia/Taipei"
-            $output = & ccusage codex daily --last $Days --timezone 'Asia/Taipei' --json 2>&1
-        } elseif (Get-Command npx -ErrorAction SilentlyContinue) {
-            $commandText = "npx --yes ccusage@latest codex daily --last $Days --timezone Asia/Taipei"
-            $output = & npx --yes 'ccusage@latest' codex daily --last $Days --timezone 'Asia/Taipei' --json 2>&1
-        } else {
-            throw 'Neither npx nor ccusage is available. Install Node.js and run the codex-settings global installer.'
-        }
+    $usageProfileEnabled = $env:CODEX_SETTINGS_USAGE_PROFILE -eq '1'
+    $usageProfileStopwatch = if ($usageProfileEnabled) { [Diagnostics.Stopwatch]::StartNew() } else { $null }
+    $usageProfile = [ordered]@{
+        backendResolveMs = 0
+        processLaunchMs = 0
+        ccusageMs = 0
+        stdoutParseMs = 0
+        jsonParseMs = 0
+        normalizeMs = 0
+        filterMs = 0
+        sortMs = 0
+        renderMs = 0
+        fallbackUsed = $false
+        totalMs = 0
+    }
 
-        $exitCode = $LASTEXITCODE
-        if ($exitCode -ne 0) {
-            throw "ccusage exited with code $exitCode.`nCommand: $commandText"
-        }
-        $text = ($output | Out-String).Trim() -replace ([char]27 + '\\[[0-?]*[ -/]*[@-~]'), ''
-        $start = $text.IndexOf('{')
-        $end = $text.LastIndexOf('}')
-        if ($start -lt 0 -or $end -le $start) { throw "ccusage returned no JSON object.`nCommand: $commandText" }
-        $report = $text.Substring($start, $end - $start + 1) | ConvertFrom-Json -ErrorAction Stop
+    try {
+        $usageResult = Invoke-CodexUsageJson -ReportKind 'daily' -Days $Days
+        foreach ($metric in $usageResult.Metrics.PSObject.Properties) { $usageProfile[$metric.Name] = $metric.Value }
+        $commandText = $usageResult.CommandText
+        $normalizeStopwatch = if ($usageProfileEnabled) { [Diagnostics.Stopwatch]::StartNew() } else { $null }
+        $report = $usageResult.Report
         $dailyRows = if ($null -ne $report.daily) { @($report.daily) } elseif ($null -ne $report.data.daily) { @($report.data.daily) } else { @() }
+        $usageProfile.normalizeMs += Get-CodexUsageElapsedMilliseconds $normalizeStopwatch
         if ($dailyRows.Count -eq 0) { throw 'No daily Codex usage rows were returned.' }
+        $renderStopwatch = if ($usageProfileEnabled) { [Diagnostics.Stopwatch]::StartNew() } else { $null }
         Show-DailyDetails -DailyRows $dailyRows -Totals $report.totals
+        $usageProfile.renderMs += Get-CodexUsageElapsedMilliseconds $renderStopwatch
     } catch {
+        if ([string]::IsNullOrWhiteSpace($commandText)) { $commandText = $script:CodexUsageLastCommandText }
         Write-Host 'cdaily 執行失敗。' -ForegroundColor Red
         Write-Host "原因：$($_.Exception.Message)" -ForegroundColor Red
+        if (-not [string]::IsNullOrWhiteSpace($commandText)) { Write-Host "指令：$commandText" }
         Write-Host "設定檔：$($PROFILE.CurrentUserAllHosts)"
+    } finally {
+        $usageProfile.totalMs = Get-CodexUsageElapsedMilliseconds $usageProfileStopwatch
+        Write-CodexUsageProfile -Metrics ([pscustomobject]$usageProfile)
     }
 }
 # <<< CDAILY CODEX DAILY REPORT <<<
