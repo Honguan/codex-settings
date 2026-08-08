@@ -21,7 +21,7 @@ These rules supplement the global rules.
 ## Pull Request and Main Verification
 
 - Open every Issue branch PR with `main` as the base and the `issue/<issue-number>-<short-description>` branch as the head.
-- The PR title or at least one commit must contain the Issue number.
+- The PR title must contain the Issue number; this keeps PR metadata validation local and avoids fetching the commit list.
 - Before merge, the PR body must contain `Refs #<issue-number>` and must not contain `Fixes`, `Closes`, or `Resolves` for that Issue.
 - Merge only after the Issue acceptance criteria, relevant tests, CI, clean working tree, and complete PR diff have been verified.
 - After merge, update local `main` with `git pull --ff-only origin main`, verify the merge commit, files, CI, and acceptance criteria, and record `Branch`, `PR`, `Merge commit`, `Main verification`, and `Tests` in the Issue.

@@ -1,0 +1,32 @@
+name: Changed area regression
+
+on:
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - '.github/workflows/**'
+      - 'README.md'
+      - 'src/templates/environments/git/AGENTS.md'
+      - 'tests/issue-workflow.tests.ps1'
+
+concurrency:
+  group: changed-area-regression-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  workflow-contract:
+    name: Validate workflow contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+      - name: Run changed-area workflow regression
+        shell: pwsh
+        run: pwsh -NoLogo -NoProfile -File tests/issue-workflow.tests.ps1

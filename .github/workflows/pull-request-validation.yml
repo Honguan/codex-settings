@@ -6,6 +6,10 @@ on:
       - main
     types: [opened, synchronize, reopened, ready_for_review, edited]
 
+concurrency:
+  group: pr-validation-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   issues: read
@@ -14,14 +18,14 @@ permissions:
 jobs:
   policy:
     name: Validate Issue workflow
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
     steps:
       - name: Validate branch and PR metadata
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_HEAD_REF: ${{ github.head_ref }}
           PR_BASE_REF: ${{ github.base_ref }}
           PR_TITLE: ${{ github.event.pull_request.title }}
@@ -38,7 +42,6 @@ jobs:
           }
 
           $issueNumber = [int]$branchMatch.Groups['issueNumber'].Value
-          $prNumber = [int]$env:PR_NUMBER
           $issue = gh api "repos/$($env:REPOSITORY)/issues/$issueNumber" | ConvertFrom-Json
           if ($issue.state -ne 'open') {
               throw "Referenced Issue #$issueNumber is not open."
@@ -55,12 +58,10 @@ jobs:
               throw "PR body must not close Issue #$issueNumber before main verification."
           }
 
-          $commits = @(gh api "repos/$($env:REPOSITORY)/pulls/$prNumber/commits?per_page=100" | ConvertFrom-Json)
           $issueReference = '(?i)#\s*' + $issueNumber + '\b'
           $titleReferencesIssue = $env:PR_TITLE -match $issueReference
-          $commitReferencesIssue = @($commits | Where-Object { [string]$_.commit.message -match $issueReference }).Count -gt 0
-          if (-not $titleReferencesIssue -and -not $commitReferencesIssue) {
-              throw "PR title or at least one commit must contain Issue #$issueNumber."
+          if (-not $titleReferencesIssue) {
+              throw "PR title must contain Issue #$issueNumber."
           }
 
-          Write-Host "Issue workflow metadata passed for #$issueNumber on $($env:PR_HEAD_REF)."
+          Write-Host "Issue workflow metadata passed for #$issueNumber on $($env:PR_HEAD_REF); API calls=1 (Issue state only)."

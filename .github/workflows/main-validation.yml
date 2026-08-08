@@ -5,14 +5,20 @@ on:
     branches:
       - main
 
+concurrency:
+  group: main-validation-${{ github.sha }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
+  issues: write
   pull-requests: read
 
 jobs:
   validate:
     name: Verify merged PR
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
     steps:
       - name: Verify main push came from a merged PR
         shell: pwsh
@@ -20,13 +26,54 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           COMMIT_SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $pullRequests = @(gh api "repos/$($env:REPOSITORY)/commits/$($env:COMMIT_SHA)/pulls" | ConvertFrom-Json)
+          $pullRequests = @(gh api "repos/$($env:REPOSITORY)/commits/$($env:COMMIT_SHA)/pulls?per_page=10" | ConvertFrom-Json)
           $mergedPullRequest = $pullRequests | Where-Object {
               $_.base.ref -eq 'main' -and $null -ne $_.merged_at
           } | Select-Object -First 1
           if ($null -eq $mergedPullRequest) {
               throw "The main commit $($env:COMMIT_SHA) is not associated with a merged PR targeting main."
           }
-          Write-Host "Main commit came from merged PR #$($mergedPullRequest.number)."
+
+          $bodyMatch = [regex]::Match([string]$mergedPullRequest.body, '(?im)^\s*Refs\s+#(?<issueNumber>\d+)\b')
+          $branchMatch = [regex]::Match([string]$mergedPullRequest.head.ref, '^issue/(?<issueNumber>\d+)-')
+          $issueNumber = if ($bodyMatch.Success) { [int]$bodyMatch.Groups['issueNumber'].Value } elseif ($branchMatch.Success) { [int]$branchMatch.Groups['issueNumber'].Value } else { 0 }
+          if ($issueNumber -le 0) {
+              throw "Merged PR #$($mergedPullRequest.number) does not identify an Issue for the main verification receipt."
+          }
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "ISSUE_NUMBER=$issueNumber"
+
+          $receipt = @"
+          <!-- codex-settings-main-verification:v1 -->
+          Issue: #$issueNumber
+          PR: #$($mergedPullRequest.number)
+          MergeCommit: $($env:COMMIT_SHA)
+          MainVerification: passed
+          RunId: $($env:RUN_ID)
+          VerifiedAt: $((Get-Date).ToUniversalTime().ToString('o'))
+          "@
+          gh api --method POST "repos/$($env:REPOSITORY)/issues/$issueNumber/comments" --raw-field "body=$receipt" | Out-Null
+          Write-Host "Main commit came from merged PR #$($mergedPullRequest.number); receipt written for Issue #$issueNumber; API calls=2 (PR lookup + receipt)."
+
+      - name: Reopen Issue when main verification fails
+        if: failure()
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $issueNumber = [int]$env:ISSUE_NUMBER
+          if ($issueNumber -le 0) {
+              Write-Host 'No Issue number was discovered; no Issue recovery is required.'
+              exit 0
+          }
+          $comment = @"
+          Main verification failed for Issue #$issueNumber on commit $env:COMMIT_SHA. The Issue was reopened and requires follow-up verification.
+          "@
+          gh api --method PATCH "repos/$($env:REPOSITORY)/issues/$issueNumber" -f state=open | Out-Null
+          gh api --method POST "repos/$($env:REPOSITORY)/issues/$issueNumber/comments" --raw-field "body=$comment" | Out-Null
+          throw "Main verification failed; Issue #$issueNumber was reopened."
