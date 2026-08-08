@@ -65,6 +65,12 @@ function global:ccsessions {
         catch { return [DateTimeOffset]::MinValue }
     }
 
+    function Format-SessionTime($Row) {
+        $activity = Get-Activity $Row
+        if ($activity -eq [DateTimeOffset]::MinValue) { return '' }
+        return ([TimeZoneInfo]::ConvertTimeBySystemTimeZoneId($activity, 'Taipei Standard Time')).ToString('MM-dd hh:mm tt', [Globalization.CultureInfo]::InvariantCulture)
+    }
+
     function Get-SessionId($Row) {
         $pattern = '(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
         foreach ($source in @([string]$Row.sessionFile, [string]$Row.sessionId)) {
@@ -233,11 +239,12 @@ function global:ccsessions {
             sessionId = Get-SessionId $Row
             models = $models
             inputTokens = [long]$Row.inputTokens
-            cachedInputTokens = [long]$Row.cacheReadTokens
-            cacheWriteTokens = [long]$Row.cacheCreationTokens
             outputTokens = [long]$Row.outputTokens
+            reasoningTokens = [long]$Row.reasoningOutputTokens
+            cacheTokens = [long]$Row.cacheReadTokens
             totalTokens = [long]$Row.totalTokens
             costUsd = [decimal]$Row.costUSD
+            time = Format-SessionTime $Row
         }
     }
 
@@ -252,7 +259,7 @@ function global:ccsessions {
                 Cache          = Format-TokenCount $_.cacheReadTokens
                 Total          = Format-TokenCount $_.totalTokens
                 Cost           = Format-Cost $_.costUSD
-                Time           = if ((Get-Activity $_) -eq [DateTimeOffset]::MinValue) { '' } else { ([TimeZoneInfo]::ConvertTimeBySystemTimeZoneId((Get-Activity $_), 'Taipei Standard Time')).ToString('MM-dd hh:mm tt', [Globalization.CultureInfo]::InvariantCulture) }
+                Time           = Format-SessionTime $_
             }
         })
         $totals = Get-SessionTotals $Rows

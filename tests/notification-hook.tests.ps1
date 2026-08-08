@@ -13,9 +13,9 @@ $rolloutPath = Join-Path $testRoot 'rollout.jsonl'
 $mockPath = Join-Path $testRoot 'mock-ccsessions.ps1'
 $retryMarkerPath = Join-Path $testRoot 'retry.marker'
 
-function Set-Snapshot([string]$SessionId, [long]$InputTokens, [long]$CachedInputTokens, [long]$CacheWriteTokens, [long]$OutputTokens, [long]$TotalTokens, [decimal]$CostUsd, [string[]]$Models = @('gpt-5.6-sol'), [switch]$WithoutCost, [switch]$WithoutCacheWrite) {
-    $value = [ordered]@{ success = $true; sessionId = $SessionId; models = $Models; inputTokens = $InputTokens; cachedInputTokens = $CachedInputTokens; outputTokens = $OutputTokens; totalTokens = $TotalTokens }
-    if (-not $WithoutCacheWrite) { $value.cacheWriteTokens = $CacheWriteTokens }
+function Set-Snapshot([string]$SessionId, [long]$InputTokens, [long]$CachedInputTokens, [long]$CacheWriteTokens, [long]$OutputTokens, [long]$TotalTokens, [decimal]$CostUsd, [string[]]$Models = @('gpt-5.6-sol'), [switch]$WithoutCost, [switch]$WithoutCacheWrite, [long]$ReasoningTokens = 0, [string]$Time = '08-07 03:43 PM') {
+    $value = [ordered]@{ success = $true; sessionId = $SessionId; models = $Models; inputTokens = $InputTokens; outputTokens = $OutputTokens; reasoningTokens = $ReasoningTokens; totalTokens = $TotalTokens; time = $Time }
+    if (-not $WithoutCacheWrite) { $value.cacheTokens = $CachedInputTokens }
     if (-not $WithoutCost) { $value.costUsd = $CostUsd }
     [IO.File]::WriteAllText($snapshotPath, ($value | ConvertTo-Json -Compress), [Text.UTF8Encoding]::new($false))
 }
@@ -90,8 +90,11 @@ Get-Content -LiteralPath $env:CODEX_SETTINGS_CCSESSIONS_SNAPSHOT -Raw
         last_token_usage = [ordered]@{ input_tokens = 4321; cached_input_tokens = 1234; cache_write_input_tokens = 345; output_tokens = 567; reasoning_output_tokens = 89; total_tokens = 6567 }
     })
     $realtimeNotification = Get-LastNotification
-    foreach ($expected in @('Input           +4.32K', 'Output          +567', 'Cache read      +1.23K', 'Cache write     +345', 'Total           +6.57K', 'Cache hit rate  20.92%', 'Cost            +$9.99', 'Estimated usage 7.68%', 'Model           gpt-5.6-sol')) {
-        if (-not $realtimeNotification.message.Contains($expected)) { throw "即時 Token 用量未正確整合到完成通知：$expected" }
+    foreach ($expected in @('Session ID     690001', 'Model      gpt-5.6-sol', 'Input          999K', 'Output     666K', 'Think          0', 'Cache      888K', 'Total          3.33M', 'Cost       $9.99', 'Time           08-07 03:43 PM')) {
+        if (-not $realtimeNotification.message.Contains($expected)) { throw "ccsessions 累積 Token 用量未正確整合到完成通知：$expected" }
+    }
+    foreach ($obsolete in @('Cache read', 'Cache write', 'Cache hit rate', 'Estimated usage', 'Session         ')) {
+        if ($realtimeNotification.message.Contains($obsolete)) { throw "完成通知仍包含淘汰欄位：$obsolete" }
     }
     if (@($realtimeNotification.message -split '\r?\n').Count -ne 5 -or $realtimeNotification.title -ne 'Codex 任務完成') { throw '完成通知不是固定五行格式。' }
     $realtimeClaim = @(Get-ChildItem -LiteralPath (Join-Path $notificationRoot 'claims') -Filter '*.json' | ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw | ConvertFrom-Json } | Where-Object { $_.sessionId -eq $sessionRealtime -and $_.turnId -eq 'turn-realtime' -and $_.type -eq 'Completed' })[0]
@@ -99,14 +102,25 @@ Get-Content -LiteralPath $env:CODEX_SETTINGS_CCSESSIONS_SNAPSHOT -Raw
     $realtimeState = @(Get-ChildItem -LiteralPath $tokenRoot -Filter '*.json' | Where-Object { (Get-Content -LiteralPath $_.FullName -Raw | ConvertFrom-Json).sessionId -eq $sessionRealtime })[0]
     if ($null -eq $realtimeState) { throw '即時 Token 狀態檔未建立。' }
     $realtimeStateValue = Get-Content -LiteralPath $realtimeState.FullName -Raw | ConvertFrom-Json
-    if ($null -eq $realtimeStateValue.ccsessionsBaseline -or $realtimeStateValue.ccsessionsBaseline.inputTokens -ne 999000 -or [string]::IsNullOrWhiteSpace([string]$realtimeStateValue.lastDisplayedRealtimeHash)) { throw '即時顯示狀態與 ccsessions 累積基準未分離保存。' }
+    if ($realtimeStateValue.schemaVersion -ne 2 -or $null -eq $realtimeStateValue.ccsessionsBaseline -or $realtimeStateValue.ccsessionsBaseline.inputTokens -ne 999000 -or $realtimeStateValue.ccsessionsBaseline.reasoningTokens -ne 0 -or $realtimeStateValue.ccsessionsBaseline.cacheTokens -ne 888000 -or $realtimeStateValue.ccsessionsBaseline.time -ne '08-07 03:43 PM') { throw 'ccsessions 累積基準未依新快照格式保存。' }
     $realtimeDiagnostic = Get-Content -LiteralPath (Join-Path $diagnosticRoot ($sessionRealtime + '.log')) -Raw | ConvertFrom-Json
     foreach ($field in @('timestamp', 'hookSource', 'hookCommand', 'processId', 'parentProcessId', 'startTime', 'endTime', 'elapsedMs', 'exitCode', 'handlerId', 'claimState', 'nativeToastAttempted', 'nativeToastShown', 'fallbackAttempted', 'fallbackShown', 'cleanupScheduled', 'stopKind', 'invocationSource', 'GlobalStopHookCount', 'EffectiveStopHookCount', 'NotificationInvocationCount', 'CrlfInvocationCount')) {
         if ($realtimeDiagnostic.PSObject.Properties.Name -notcontains $field) { throw "通知診斷缺少欄位：$field" }
     }
-    if ($realtimeDiagnostic.handler -ne 'windows-notification' -or $realtimeDiagnostic.result -ne 'success' -or $realtimeDiagnostic.details -notmatch 'source=realtime\+ccsessions' -or $realtimeDiagnostic.details -notmatch 'realtimeAvailable=true;ccsessionsAvailable=true;ccsessionsRetryCount=0;tokenSource=realtime;modelSource=ccsessions;costSource=ccsessions;showAsTurnDelta=true;missingFields=\[\]' -or $realtimeDiagnostic.hookSource -ne 'global' -or $realtimeDiagnostic.NotificationInvocationCount -ne 1 -or $realtimeDiagnostic.CrlfInvocationCount -ne 0) {
-        throw '整合後的完成通知沒有寫入可診斷的執行紀錄。'
+    if ($realtimeDiagnostic.handler -ne 'windows-notification' -or $realtimeDiagnostic.result -ne 'success' -or $realtimeDiagnostic.details -notmatch 'source=ccsessions-total' -or $realtimeDiagnostic.details -notmatch 'realtimeAvailable=true;ccsessionsAvailable=true;baselineFound=false;ccsessionsRetryCount=0;tokenSource=ccsessions-total;modelSource=ccsessions;costSource=ccsessions;showAsTurnDelta=false;model=gpt-5\.6-sol;input=999K;output=666K;think=0;cache=888K;total=3\.33M;cost=\$9\.99;time=08-07 03:43 PM;missingFields=\[\]' -or $realtimeDiagnostic.hookSource -ne 'global' -or $realtimeDiagnostic.NotificationInvocationCount -ne 1 -or $realtimeDiagnostic.CrlfInvocationCount -ne 0) {
+        throw 'ccsessions 累積資料或完成通知診斷紀錄錯誤。'
     }
+
+    Set-Snapshot -SessionId $sessionRealtime -InputTokens 999000 -CachedInputTokens 888000 -CacheWriteTokens 777000 -OutputTokens 666000 -TotalTokens 3330000 -CostUsd 9.99
+    [void](Invoke-NotificationHook -SessionId $sessionRealtime -TurnId 'turn-realtime-fallback' -AdditionalInput @{
+        last_token_usage = [ordered]@{ input_tokens = 4321; cached_input_tokens = 1234; cache_write_input_tokens = 345; output_tokens = 567; reasoning_output_tokens = 89; total_tokens = 6567 }
+    })
+    $fallbackNotification = Get-LastNotification
+    foreach ($expected in @('Input          +4.32K', 'Output     +567', 'Think          +89', 'Cache      +1.23K', 'Total          +6.57K', 'Cost       $9.99', 'Time           08-07 03:43 PM')) {
+        if (-not $fallbackNotification.message.Contains($expected)) { throw "realtime fallback 未正確顯示對應欄位：$expected" }
+    }
+    $fallbackDiagnostic = Get-Content -LiteralPath (Join-Path $diagnosticRoot ($sessionRealtime + '.log')) | Select-Object -Last 1 | ConvertFrom-Json
+    if ($fallbackDiagnostic.details -notmatch 'source=realtime-fallback;.*baselineFound=true;.*ccsessionsRetryCount=6;.*tokenSource=realtime-fallback;.*costSource=ccsessions-metadata') { throw 'ccsessions 尚未落盤時未重試並正確記錄 realtime fallback。' }
 
     $tokenStateCountBeforeQuestion = @(Get-ChildItem -LiteralPath $tokenRoot -Filter '*.json' | Where-Object Name -ne 'settings.json').Count
     [void](Invoke-NotificationHook -SessionId '019fd65b-39b0-7d60-99fc-deb094690010' -TurnId 'turn-question' -LastMessage '請確認是否繼續？')
@@ -142,8 +156,8 @@ Get-Content -LiteralPath $env:CODEX_SETTINGS_CCSESSIONS_SNAPSHOT -Raw
     [IO.File]::WriteAllText($rolloutPath, ($rolloutEvent | ConvertTo-Json -Depth 8 -Compress), [Text.UTF8Encoding]::new($false))
     [void](Invoke-NotificationHook -SessionId $sessionTranscript -TurnId 'turn-transcript' -AdditionalInput @{ transcript_path = $rolloutPath })
     $fromTranscript = Get-LastNotification
-    foreach ($expected in @('Input           +2.47K', 'Output          +579', 'Cache read      +1.36K', 'Total           +4.65K')) {
-        if (-not $fromTranscript.message.Contains($expected)) { throw "rollout token_count 未優先使用：$expected" }
+    foreach ($expected in @('Input          999K', 'Output     666K', 'Think          0', 'Cache      888K', 'Total          3.33M', 'Cost       $9.99')) {
+        if (-not $fromTranscript.message.Contains($expected)) { throw "ccsessions 累積快照未優先於 rollout token_count：$expected" }
     }
 
     $sessionMalformed = '019fd65b-39b0-7d60-99fc-deb094690004'
@@ -158,7 +172,7 @@ Get-Content -LiteralPath $env:CODEX_SETTINGS_CCSESSIONS_SNAPSHOT -Raw
     } | ConvertTo-Json -Compress
     $malformedInput = $malformedInput.Replace('\"activity_config.php\"', '"activity_config.php"')
     [void](Invoke-NotificationHook -SessionId $sessionMalformed -TurnId 'turn-malformed-message' -RawInput $malformedInput)
-    if ((Get-LastNotification).message -match 'Token 用量暫時無法取得' -or -not (Get-LastNotification).message.Contains('Input           +2.47K')) {
+    if ((Get-LastNotification).message -match 'Token 用量暫時無法取得' -or -not (Get-LastNotification).message.Contains('Input          +2.47K') -or -not (Get-LastNotification).message.Contains('Cache      +1.36K')) {
         throw '含未跳脫引號的 Stop payload 未使用 rollout Token 用量。'
     }
 
@@ -174,7 +188,7 @@ Get-Content -LiteralPath $env:CODEX_SETTINGS_CCSESSIONS_SNAPSHOT -Raw
     } | ConvertTo-Json -Compress
     $truncatedInput = $truncatedInput.Substring(0, $truncatedInput.IndexOf('unfinished') + 'unfinished'.Length)
     [void](Invoke-NotificationHook -SessionId $sessionTruncated -TurnId 'turn-truncated-message' -RawInput $truncatedInput)
-    if ((Get-LastNotification).message -match 'Token 用量暫時無法取得' -or -not (Get-LastNotification).message.Contains('Input           +2.47K')) {
+    if ((Get-LastNotification).message -match 'Token 用量暫時無法取得' -or -not (Get-LastNotification).message.Contains('Input          +2.47K') -or -not (Get-LastNotification).message.Contains('Cache      +1.36K')) {
         throw '截斷的 Stop payload 未使用 rollout Token 用量。'
     }
 
@@ -183,32 +197,32 @@ Get-Content -LiteralPath $env:CODEX_SETTINGS_CCSESSIONS_SNAPSHOT -Raw
     $env:CODEX_SETTINGS_CCSESSIONS_RETRY_MARKER = $retryMarkerPath
     [void](Invoke-NotificationHook -SessionId $sessionRetry -TurnId 'turn-retry')
     Remove-Item Env:\CODEX_SETTINGS_CCSESSIONS_RETRY_MARKER
-    if (-not (Test-Path -LiteralPath $retryMarkerPath) -or -not (Get-LastNotification).message.Contains('Input           8.77K')) { throw 'ccsessions 資料延遲時未重試一次。' }
+    if (-not (Test-Path -LiteralPath $retryMarkerPath) -or -not (Get-LastNotification).message.Contains('Input          8.77K')) { throw 'ccsessions 資料延遲時未重試一次。' }
     $retryDiagnostic = Get-Content -LiteralPath (Join-Path $diagnosticRoot ($sessionRetry + '.log')) -Raw | ConvertFrom-Json
-    if ($retryDiagnostic.details -notmatch 'ccsessionsRetryCount=1' -or $retryDiagnostic.details -notmatch 'tokenSource=ccsessions;modelSource=ccsessions;costSource=ccsessions;showAsTurnDelta=false;missingFields=\[\]') { throw 'ccsessions 重試次數或來源診斷錯誤。' }
+    if ($retryDiagnostic.details -notmatch 'source=ccsessions-total;.*ccsessionsRetryCount=1;tokenSource=ccsessions-total;modelSource=ccsessions;costSource=ccsessions;showAsTurnDelta=false;.*missingFields=\[\]') { throw 'ccsessions 重試次數或來源診斷錯誤。' }
 
     $sessionMissing = '019fd65b-39b0-7d60-99fc-deb094690006'
     Set-Snapshot -SessionId $sessionMissing -InputTokens 20 -CachedInputTokens 4 -CacheWriteTokens 0 -OutputTokens 5 -TotalTokens 29 -CostUsd 0.02 -WithoutCacheWrite
     [void](Invoke-NotificationHook -SessionId $sessionMissing -TurnId 'turn-missing-cache-write' -AdditionalInput @{
         last_token_usage = [ordered]@{ input_tokens = 20; cached_input_tokens = 4; output_tokens = 5; total_tokens = 29 }
     })
-    if ((Get-LastNotification).message -notmatch 'Cache write     N/A' -or (Get-LastNotification).message -notmatch 'Cache hit rate  N/A') { throw '缺少 Cache write 欄位時不應顯示 0。' }
+    if ((Get-LastNotification).message -notmatch 'Cache      N/A') { throw '缺少 Cache 欄位時不應顯示 0。' }
 
     $sessionA = '019fd65b-39b0-7d60-99fc-deb09469413b'
-    Set-Snapshot -SessionId $sessionA -InputTokens 120000 -CachedInputTokens 80000 -CacheWriteTokens 20000 -OutputTokens 12000 -TotalTokens 212000 -CostUsd 0.18
+    Set-Snapshot -SessionId $sessionA -InputTokens 120000 -CachedInputTokens 80000 -CacheWriteTokens 20000 -OutputTokens 12000 -TotalTokens 212000 -CostUsd 0.18 -ReasoningTokens 3000
     [void](Invoke-NotificationHook -SessionId $sessionA -TurnId 'turn-1')
     $first = Get-LastNotification
-    foreach ($expected in @('Session         69413b', 'Model           gpt-5.6-sol', 'Input           120K', 'Cache read      80K', 'Cache hit rate  36.36%', 'Cost            $0.18', 'Estimated usage 0.14%')) {
+    foreach ($expected in @('Session ID     69413b', 'Model      gpt-5.6-sol', 'Input          120K', 'Think          3K', 'Cache      80K', 'Total          212K', 'Cost       $0.18', 'Time           08-07 03:43 PM')) {
         if (-not $first.message.Contains($expected)) { throw "新 Session 第一輪缺少：$expected" }
     }
     $eventCountBeforeTokenDuplicate = @((Get-Content -LiteralPath $logPath)).Count
     [void](Invoke-NotificationHook -SessionId $sessionA -TurnId 'turn-1-duplicate')
     if (@((Get-Content -LiteralPath $logPath)).Count -ne $eventCountBeforeTokenDuplicate) { throw '相同用量 snapshot 被重複顯示。' }
 
-    Set-Snapshot -SessionId $sessionA -InputTokens 145000 -CachedInputTokens 96000 -CacheWriteTokens 22000 -OutputTokens 15500 -TotalTokens 256500 -CostUsd 0.22 -Models @('gpt-5.6-sol', 'gpt-5.6-terra')
+    Set-Snapshot -SessionId $sessionA -InputTokens 145000 -CachedInputTokens 96000 -CacheWriteTokens 22000 -OutputTokens 15500 -TotalTokens 256500 -CostUsd 0.22 -Models @('gpt-5.6-sol', 'gpt-5.6-terra') -ReasoningTokens 4500
     [void](Invoke-NotificationHook -SessionId $sessionA -TurnId 'turn-2')
     $second = Get-LastNotification
-    foreach ($expected in @('+25K', '+16K', '+3.5K', '+2K', '+44.5K', 'Cache hit rate  37.21%', '+$0.04', 'Estimated usage 0.03%', 'Model           gpt-5.6-sol')) {
+    foreach ($expected in @('+25K', '+3.5K', '+1.5K', '+16K', '+44.5K', '+$0.04', 'Model      gpt-5.6-sol')) {
         if (-not $second.message.Contains($expected)) { throw "第二輪差值缺少：$expected" }
     }
     if ($second.message.Contains('gpt-5.6-terra')) { throw '完成通知應只顯示第一個模型。' }
@@ -219,11 +233,11 @@ Get-Content -LiteralPath $env:CODEX_SETTINGS_CCSESSIONS_SNAPSHOT -Raw
     $sessionNoCost = '019fd65b-39b0-7d60-99fc-deb094690998'
     Set-Snapshot -SessionId $sessionNoCost -InputTokens 20 -CachedInputTokens 4 -CacheWriteTokens 2 -OutputTokens 5 -TotalTokens 31 -CostUsd 0 -WithoutCost
     [void](Invoke-NotificationHook -SessionId $sessionNoCost -TurnId 'turn-no-cost')
-    if ((Get-LastNotification).message -notmatch 'Cost            N/A' -or (Get-LastNotification).message -notmatch 'Estimated usage N/A') { throw '缺少成本欄位時不應顯示虛構的零成本。' }
+    if ((Get-LastNotification).message -notmatch 'Cost       N/A') { throw '缺少成本欄位時不應顯示虛構的零成本。' }
     $sessionZero = '019fd65b-39b0-7d60-99fc-deb094690997'
     Set-Snapshot -SessionId $sessionZero -InputTokens 0 -CachedInputTokens 0 -CacheWriteTokens 0 -OutputTokens 0 -TotalTokens 0 -CostUsd 0
     [void](Invoke-NotificationHook -SessionId $sessionZero -TurnId 'turn-zero')
-    if ((Get-LastNotification).message -notmatch 'Cache write     0' -or (Get-LastNotification).message -notmatch 'Cost            \$0') { throw '真正的零值不應被視為缺欄位。' }
+    if ((Get-LastNotification).message -notmatch 'Cache      0' -or (Get-LastNotification).message -notmatch 'Cost       \$0') { throw '真正的零值不應被視為缺欄位。' }
     $sessionStates = @(Get-ChildItem -LiteralPath $tokenRoot -Filter '*.json' | Where-Object Name -ne 'settings.json')
     if ($sessionStates.Count -ne 10) { throw "多 Session 狀態檔數量錯誤：$($sessionStates.Count)" }
 
