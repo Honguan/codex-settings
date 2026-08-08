@@ -2,8 +2,10 @@
 param(
     [switch]$SkipPackageInstall,
     [switch]$SkipRuntimeValidation,
+    [switch]$ForceRuntimeValidation,
     [switch]$PassThru,
-    [object]$PackageState
+    [object]$PackageState,
+    [object]$Transaction
 )
 
 $ErrorActionPreference = 'Stop'
@@ -67,6 +69,7 @@ try {
                 $profileTarget.BackupPath = "$($profileTarget.Path).ccusage-backup-$(Get-Date -Format 'yyyyMMdd-HHmmss-fff')"
                 Copy-FileAtomic -Source $profileTarget.Path -Destination $profileTarget.BackupPath
             }
+            if ($null -ne $Transaction) { Save-TransactionFile -Transaction $Transaction -Path $profileTarget.Path }
             Write-TextFileState -Path $profileTarget.Path -Content $newContent -Encoding $profileTarget.State.Encoding
             $profileTarget.Changed = $true
         }
@@ -82,7 +85,7 @@ try {
         throw "無法從範本載入 cdaily 函式：$templatePath"
     }
 
-    if ($packageInstalledNow -and -not $SkipRuntimeValidation) {
+    if (($packageInstalledNow -or $ForceRuntimeValidation) -and -not $SkipRuntimeValidation) {
         $versionOutput = & npx --yes 'ccusage@latest' --version 2>&1
         $versionExitCode = $LASTEXITCODE
         if ($versionExitCode -ne 0) {

@@ -19,12 +19,15 @@ $header = @'
 setlocal
 set "CODEX_SETTINGS_SETUP=%~f0"
 set "CODEX_SETTINGS_TEMP=%TEMP%\CodexSettings-Setup-%RANDOM%-%RANDOM%"
+set "CODEX_SETTINGS_REQUEST_NO_PAUSE="
+for %%A in (%*) do if /I "%%~A"=="-NoPause" set "CODEX_SETTINGS_REQUEST_NO_PAUSE=1"
 
 where pwsh.exe >nul 2>nul
 if errorlevel 1 (
     echo [ERROR] PowerShell 7 or later is required.
     echo Download: https://aka.ms/powershell-release?tag=stable
-    exit /b 1
+    set "CODEX_SETTINGS_EXIT=1"
+    goto finish
 )
 
 pwsh.exe -NoProfile -ExecutionPolicy Bypass -Command "$text=[IO.File]::ReadAllText($env:CODEX_SETTINGS_SETUP);$marker=':'+('__CODEX_SETTINGS_PAYLOAD__');$index=$text.LastIndexOf($marker);if($index-lt 0){throw 'Installer payload marker was not found.'};$payload=$text.Substring($index+$marker.Length).Trim();New-Item -ItemType Directory -Path $env:CODEX_SETTINGS_TEMP -Force|Out-Null;$zip=Join-Path $env:CODEX_SETTINGS_TEMP 'payload.zip';[IO.File]::WriteAllBytes($zip,[Convert]::FromBase64String($payload));Expand-Archive -LiteralPath $zip -DestinationPath $env:CODEX_SETTINGS_TEMP -Force"
@@ -38,7 +41,13 @@ set "CODEX_SETTINGS_EXIT=%ERRORLEVEL%"
 
 :cleanup
 pwsh.exe -NoProfile -ExecutionPolicy Bypass -Command "if(Test-Path -LiteralPath $env:CODEX_SETTINGS_TEMP){Remove-Item -LiteralPath $env:CODEX_SETTINGS_TEMP -Recurse -Force}" >nul 2>nul
+
+:finish
 echo.
+if /I not "%CODEX_SETTINGS_NO_PAUSE%"=="1" if not defined CODEX_SETTINGS_REQUEST_NO_PAUSE (
+    echo Press any key to close...
+    pause >nul
+)
 exit /b %CODEX_SETTINGS_EXIT%
 
 :__CODEX_SETTINGS_PAYLOAD__
