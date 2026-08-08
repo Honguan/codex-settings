@@ -2,6 +2,7 @@
 . (Join-Path $PSScriptRoot 'installation\prompts.ps1')
 . (Join-Path $PSScriptRoot 'installation\prerequisites.ps1')
 . (Join-Path $PSScriptRoot 'installation\installation-plan.ps1')
+. (Join-Path $PSScriptRoot 'installation\installation-progress.ps1')
 . (Join-Path $PSScriptRoot 'installation\hook-validation.ps1')
 . (Join-Path $PSScriptRoot 'installation\hook-trust.ps1')
 . (Join-Path $PSScriptRoot 'installation\target-installer.ps1')

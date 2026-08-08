@@ -13,6 +13,7 @@ Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 - 安裝或更新 `ccusage`，並新增或更新 `ccsessions`（Session 用量）與 `cdaily`（每日用量）指令。
 - 選用 `request-execution-optimizer` 與 `mattpocock/skills`。
 - 安全合併既有設定，並提供交易備份、中斷回復、備份、還原及移除。
+- 安裝時顯示動態階段、百分比、耗時與永久結果列，並將詳細 timing 寫入 `~/.codex/logs/installer/`。
 - 首次執行新版安裝器時，自動清除舊登記專案內由本工具管理的設定。
 
 ## 需求
@@ -30,7 +31,7 @@ Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 .\CodexSettings-Setup-v1.8.6.cmd
 ```
 
-安裝器會在 `%TEMP%` 解開內嵌程式、執行後立即清理；全域安裝成功後會直接關閉，不再返回選單或等待按鍵。安裝或更新 Hook 後必須完全關閉並重新啟動 VS Code、Codex 與 PowerShell，既有 Session 不會載入新 Hook。從原始碼執行時則使用根目錄的 `Install.cmd`。
+安裝器會在 `%TEMP%` 解開內嵌程式、執行後立即清理；全域安裝成功或失敗後會保留結果畫面，按任意鍵才關閉。自動化可使用 `-NoPause` 或設定 `CODEX_SETTINGS_NO_PAUSE=1`。安裝或更新 Hook 後必須完全關閉並重新啟動 VS Code、Codex 與 PowerShell，既有 Session 不會載入新 Hook。從原始碼執行時則使用根目錄的 `Install.cmd`。
 
 主選單只有四項：
 
@@ -84,7 +85,15 @@ Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 
 # 完整覆蓋受管理目標
 .\Install.cmd -Mode Global -InstallStyle Replace
+
+# 強制執行既有 ccusage 的 runtime validation 與通知測試
+.\Install.cmd -Mode Global -ForceValidation -ForceNotificationTest
+
+# CI / 自動化不等待按鍵
+.\Install.cmd -Mode Global -NoPause
 ```
+
+第二次安裝若目標內容、Hook 與通知腳本都未變更，會走 `Unchanged`／`Skipped` 快速路徑；必要的交易備份、Hook 安全驗證與 rollback 不會被移除。
 
 ## 設定位置
 

@@ -7,6 +7,9 @@ param(
     [switch]$InstallRequestExecutionOptimizer,
     [switch]$InstallMattPocockSkills,
     [switch]$EnableDefaultModeRequestUserInput,
+    [switch]$ForceValidation,
+    [switch]$ForceNotificationTest,
+    [switch]$NoPause,
     [Nullable[bool]]$InstallWindowsNotifications,
     [ValidateSet('Git', 'CVS')]
     [string]$DevelopmentEnvironment,

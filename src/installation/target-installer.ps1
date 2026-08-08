@@ -1,6 +1,7 @@
 function Invoke-TargetInstallation($Target, $Transaction, [switch]$Force) {
     if (-not (Test-Path -LiteralPath $Target.Template -PathType Container)) { throw "找不到範本：$($Target.Template)" }
     New-Item -ItemType Directory -Path $Target.Root -Force | Out-Null
+    $transactionEntriesBeforeCleanup = $Transaction.Entries.Count
     $previous = Get-Manifest $Target.Root
     $managedNotificationFingerprints = @(Get-ManifestManagedHookFingerprints -Manifest $previous -Kind Notification)
     $managedTokenFingerprints = @(Get-ManifestManagedHookFingerprints -Manifest $previous -Kind Token)
@@ -13,6 +14,7 @@ function Invoke-TargetInstallation($Target, $Transaction, [switch]$Force) {
         $projectRoot = Find-CvsProjectRoot -StartPath $targetCwd
         if (-not [string]::IsNullOrWhiteSpace($projectRoot)) { Remove-ManagedProjectHooks -StartPath $projectRoot -Transaction $Transaction -KeepCvsLineEndingHooks:($Target.DevelopmentEnvironment -eq 'CVS') -ManagedHookFingerprints $managedHookFingerprints | Out-Null }
     }
+    $hookCleanupChanged = $Transaction.Entries.Count -gt $transactionEntriesBeforeCleanup
     $entries = New-Object 'System.Collections.Generic.List[object]'
     $templatePaths = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
 
@@ -21,49 +23,55 @@ function Invoke-TargetInstallation($Target, $Transaction, [switch]$Force) {
         [void]$templatePaths.Add($relative)
         $destination = Join-Path $Target.Root $relative
         $previousEntry = Get-ManifestEntry $previous $relative
-        $owned = Test-Owned $previousEntry $destination
         $state = Get-TextFileState $destination
         $strategy = Get-Strategy $Target.Mode $relative
         $beforeHash = if ($state.Exists) { (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash } else { $null }
-        Save-TransactionFile -Transaction $Transaction -Path $destination
+        $owned = $state.Exists -and $null -ne $previousEntry -and -not [string]::IsNullOrWhiteSpace([string]$previousEntry.Sha256) -and [string]$previousEntry.Sha256 -eq [string]$beforeHash
         $template = [string]$templateEntry.Content
         if ($template.Length -gt 0 -and $template[0] -eq [char]0xFEFF -and $state.Encoding.GetPreamble().Length -gt 0) { $template = $template.Substring(1) }
         $template = [regex]::Replace($template, "`r`n|`r|`n", $state.NewLine)
         $isOptionalFeatureConfig = $Target.Mode -eq 'Global' -and $relative -eq 'config.toml' -and [bool]$Target.EnableDefaultModeRequestUserInput
         if ($isOptionalFeatureConfig) { $template = Add-DefaultModeRequestUserInputFeature -Content $template -NewLine $state.NewLine }
 
+        $desiredContent = $null
         if ($Force -and $state.Exists) {
-            Write-TextFileState -Path $destination -Content $template -Encoding $state.Encoding
+            $desiredContent = $template
         } elseif ($strategy.Name -eq 'replace') {
             if ($state.Exists -and -not $owned -and $state.Content -ne $template) {
                 throw "拒絕覆寫未受管理的檔案：$destination"
             }
-            Write-TextFileState -Path $destination -Content $template -Encoding $state.Encoding
+            $desiredContent = $template
         } else {
             $existing = if ($owned -and $null -ne $previous -and [int]$previous.Version -lt 2) { '' } else { $state.Content }
-            switch ($strategy.Name) {
+            $desiredContent = switch ($strategy.Name) {
                 'managed-block' {
                     if ($relative.Replace('\', '/').EndsWith('AGENTS.md')) {
-                        $merged = Merge-ManagedMarkdownBlock $existing $template $strategy.Start $strategy.End $state.NewLine
+                        Merge-ManagedMarkdownBlock $existing $template $strategy.Start $strategy.End $state.NewLine
                     } elseif ($relative.Replace('\', '/') -eq 'rules/default.rules') {
                         $rulesBase = Remove-LegacyDefaultRulesContent -ExistingContent $existing -NewLine $state.NewLine
-                        $merged = Merge-ManagedBlock $rulesBase $template $strategy.Start $strategy.End $state.NewLine
+                        Merge-ManagedBlock $rulesBase $template $strategy.Start $strategy.End $state.NewLine
                     } else {
-                        $merged = Merge-ManagedBlock $existing $template $strategy.Start $strategy.End $state.NewLine
+                        Merge-ManagedBlock $existing $template $strategy.Start $strategy.End $state.NewLine
                     }
                 }
                 'managed-toml' {
                     $configBase = Remove-ManagedBlock -Content $existing -StartMarker '# >>> CODEX-SETTINGS: >>>' -EndMarker '# <<< CODEX-SETTINGS: <<<'
-                    $merged = Merge-TomlTemplate $configBase $template $strategy.Start $strategy.End $state.NewLine
+                    Merge-TomlTemplate $configBase $template $strategy.Start $strategy.End $state.NewLine
                 }
                 'managed-hooks' {
                     $withoutLineEndingHooks = Remove-ManagedLineEndingHooksJson -Content $existing
-                    $merged = Merge-HooksJson -ExistingContent $withoutLineEndingHooks -TemplateContent $template -RemoveManagedGlobalHooks -ManagedHookFingerprints $managedHookFingerprints
+                    Merge-HooksJson -ExistingContent $withoutLineEndingHooks -TemplateContent $template -RemoveManagedGlobalHooks -ManagedHookFingerprints $managedHookFingerprints
                 }
             }
-            if ($isOptionalFeatureConfig) { $merged = Add-DefaultModeRequestUserInputFeature -Content $merged -NewLine $state.NewLine }
-            Write-TextFileState $destination $merged $state.Encoding
+            if ($isOptionalFeatureConfig) { $desiredContent = Add-DefaultModeRequestUserInputFeature -Content $desiredContent -NewLine $state.NewLine }
         }
+
+        $changed = -not $state.Exists -or $state.Content -ne $desiredContent
+        if ($changed) {
+            Save-TransactionFile -Transaction $Transaction -Path $destination
+            Write-TextFileState -Path $destination -Content $desiredContent -Encoding $state.Encoding
+        }
+        $afterHash = if ($changed) { (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash } else { $beforeHash }
 
         [void]$entries.Add([pscustomobject]@{
             Path = $relative
@@ -73,8 +81,9 @@ function Invoke-TargetInstallation($Target, $Transaction, [switch]$Force) {
             ExistedBefore = [bool]$state.Exists
             OriginalEncoding = [string]$state.EncodingName
             OriginalCodePage = [int]$state.CodePage
-            Sha256 = (Get-FileHash $destination -Algorithm SHA256).Hash
-            Changed = $beforeHash -ne (Get-FileHash $destination -Algorithm SHA256).Hash
+            Sha256 = $afterHash
+            Changed = $changed
+            Status = if (-not $state.Exists) { 'Installed' } elseif ($changed) { 'Updated' } else { 'Unchanged' }
         })
     }
 
@@ -102,5 +111,6 @@ function Invoke-TargetInstallation($Target, $Transaction, [switch]$Force) {
 
     if ($Target.Mode -eq 'Global') { Assert-GlobalLineEndingHook -DevelopmentEnvironment $Target.DevelopmentEnvironment -Root $Target.Root -InstallWindowsNotifications ([bool]$Target.InstallWindowsNotifications) -ProjectRoot $projectRoot -ManagedNotificationFingerprints $managedNotificationFingerprints -ManagedTokenFingerprints $managedTokenFingerprints | Out-Null }
 
-    return [pscustomobject]@{ Mode = $Target.Mode; DevelopmentEnvironment = $Target.DevelopmentEnvironment; Root = $Target.Root; Previous = $previous; Files = $entries.ToArray() }
+    $hookPathsChanged = @($entries | Where-Object { $_.Changed -and ([string]$_.Path -eq 'hooks.json' -or [string]$_.Path -like 'hooks\*') }).Count -gt 0
+    return [pscustomobject]@{ Mode = $Target.Mode; DevelopmentEnvironment = $Target.DevelopmentEnvironment; Root = $Target.Root; Previous = $previous; Files = $entries.ToArray(); HookChanged = $hookPathsChanged -or $hookCleanupChanged }
 }

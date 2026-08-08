@@ -19,12 +19,18 @@ if ($runnerSource -notmatch $globalPattern -or $installerSource -notmatch 'Invok
     throw '互動式全域安裝成功後未直接結束安裝器。'
 }
 
-$pausePattern = '(?im)^\s*(?:if\s+"%~1"==""\s+)?pause\s*$'
-if ($installCommand -match $pausePattern) {
-    throw 'Install.cmd 仍包含按鍵等待。'
+$pausePattern = '(?im)^\s*pause\s*>nul\s*$'
+if ($installCommand -notmatch $pausePattern) {
+    throw 'Install.cmd 未保留完成結果等待。'
 }
-if ($buildSource -match $pausePattern) {
-    throw '單檔安裝器仍包含按鍵等待。'
+if ($buildSource -notmatch $pausePattern) {
+    throw '單檔安裝器未保留完成結果等待。'
+}
+if ($installCommand -notmatch '(?i)-NoPause' -or $buildSource -notmatch '(?i)-NoPause') {
+    throw '安裝器未提供 -NoPause 選項。'
+}
+if ($installCommand -notmatch 'CODEX_SETTINGS_NO_PAUSE' -or $buildSource -notmatch 'CODEX_SETTINGS_NO_PAUSE') {
+    throw '安裝器未提供 CODEX_SETTINGS_NO_PAUSE=1 停用等待。'
 }
 if ($installCommand -notmatch 'src\\install\.ps1' -or $installCommand -match 'src\\installer\.ps1') {
     throw 'Install.cmd 未使用重新命名後的安裝入口。'

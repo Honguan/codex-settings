@@ -51,7 +51,9 @@ function Invoke-InteractiveMode {
 
 function Invoke-InstallationRollback($Transaction, $CcusageBefore, $ContextState, [string]$Reason) {
     $rollbackErrors = New-Object 'System.Collections.Generic.List[string]'
-    try { Undo-FileTransaction $Transaction | Out-Null } catch { [void]$rollbackErrors.Add("File rollback failed: $($_.Exception.Message)") }
+    if ($null -ne $Transaction) {
+        try { Undo-FileTransaction $Transaction | Out-Null } catch { [void]$rollbackErrors.Add("File rollback failed: $($_.Exception.Message)") }
+    }
     if ($null -ne $CcusageBefore) {
         try { Restore-CcusageState $CcusageBefore | Out-Null } catch { [void]$rollbackErrors.Add("ccusage rollback failed: $($_.Exception.Message)") }
     }
@@ -61,14 +63,16 @@ function Invoke-InstallationRollback($Transaction, $CcusageBefore, $ContextState
             [Environment]::SetEnvironmentVariable('CONTEXT7_API_KEY', $ContextState.ProcessBefore, 'Process')
         } catch { [void]$rollbackErrors.Add("Context7 rollback failed: $($_.Exception.Message)") }
     }
-    try {
+    if ($null -ne $Transaction) {
+        try {
         Save-TransactionMetadata -Transaction $Transaction -Metadata @{
             Status = 'RolledBack'
             RolledBackAt = (Get-Date).ToString('o')
             FailureReason = $Reason
             RollbackErrors = $rollbackErrors.ToArray()
         }
-    } catch { [void]$rollbackErrors.Add("Journal update failed: $($_.Exception.Message)") }
+        } catch { [void]$rollbackErrors.Add("Journal update failed: $($_.Exception.Message)") }
+    }
     return $rollbackErrors.ToArray()
 }
 
@@ -81,7 +85,10 @@ function Write-InstallationSummary {
         $CcusageBefore,
         $HookTrust,
         [string]$TransactionRoot,
-        [bool]$InstallWindowsNotifications
+        [bool]$InstallWindowsNotifications,
+        $Progress,
+        [string]$NotificationStatus = '',
+        [int]$SkippedCount = 0
     )
 
     Write-Host ''
@@ -104,10 +111,21 @@ function Write-InstallationSummary {
     Write-Host '  ccsessions [數量或 Session ID]：查看 Session 的模型、Token、費用與台北時間。'
     Write-Host '  ccsessions -Json <Session ID>：輸出完成通知使用的機器可讀資料。'
     Write-Host '  cdaily [天數]：查看每日 Token 與費用統計。'
-    Write-Host "Hook 信任：已驗證 $($HookTrust.TrustedCount) 個、更新 $($HookTrust.UpdatedCount) 個。"
+    $hookStatus = if ([bool]$HookTrust.Skipped) { '未變更，略過重新 trust' } else { "已驗證 $($HookTrust.TrustedCount) 個、更新 $($HookTrust.UpdatedCount) 個" }
+    Write-Host "Hook 信任：$hookStatus。"
     Write-Host "交易備份：$TransactionRoot"
-    Write-Host $(if ($InstallWindowsNotifications) { 'Windows 通知與完成 Token 用量：已整合安裝，並送出測試通知。' } else { 'Windows 通知與完成 Token 用量：未安裝。' })
+    if ($InstallWindowsNotifications) {
+        Write-Host "Windows 通知與完成 Token 用量：已整合安裝；$NotificationStatus。"
+    } else {
+        Write-Host 'Windows 通知與完成 Token 用量：未安裝。'
+    }
     Write-Host '請完全關閉並重新啟動 VS Code、Codex 與 PowerShell；既有 Session 不會載入新安裝的 Hook。'
+
+    if ($null -ne $Progress) {
+        $fileSummary = Get-InstallResultSummary -Results $Results
+        $fileSummary.Skipped = [int]$fileSummary.Skipped + $SkippedCount
+        Write-InstallResult -Progress $Progress -Status SUCCESS -Summary $fileSummary
+    }
 }
 
 function Invoke-GlobalInstallation {
@@ -117,30 +135,51 @@ function Invoke-GlobalInstallation {
         [switch]$SkipCcusageInstall,
         [switch]$InstallRequestExecutionOptimizer,
         [switch]$InstallMattPocockSkills,
-        [switch]$EnableDefaultModeRequestUserInput
+        [switch]$EnableDefaultModeRequestUserInput,
+        [switch]$ForceValidation,
+        [switch]$ForceNotificationTest
     )
 
     if (-not $InstallMattPocockSkills -and (Test-MattPocockSkillsInstalled)) {
         $InstallMattPocockSkills = $true
     }
     $targets = @(New-InstallationPlan -DevelopmentEnvironment $Context.DevelopmentEnvironment -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput -InstallWindowsNotifications $Context.InstallWindowsNotifications)
-    Test-Prerequisites 'Global' $Context.GlobalRoot
-    foreach ($target in $targets) { Test-DirectoryWritable -Path $target.Root }
-
-    New-Item -ItemType Directory -Path $Context.BackupRoot -Force | Out-Null
+    $steps = New-InstallationProgressSteps -TargetCount $targets.Count -IncludeContext7:(-not $SkipContext7Key) -IncludeSkills:$InstallMattPocockSkills -IncludeNotifications:$Context.InstallWindowsNotifications
+    $progress = Start-InstallProgress -Steps $steps -Root $Context.GlobalRoot -Metadata @{
+        Mode = 'Global'
+        Environment = $Context.DevelopmentEnvironment
+        InstallStyle = $Context.InstallStyle
+    }
     $operationLock = $null
     $transaction = $null
     $ccusageBefore = $null
     $contextState = $null
+    $results = New-Object 'System.Collections.Generic.List[object]'
+    $transactionRoot = $null
+    $notificationStatus = ''
+    $skippedCount = 0
 
     try {
+        Set-InstallProgress -Progress $progress -StepId 'Plan' -Detail '整理目標與外部套件狀態'
+        $ccusageBefore = Get-CcusageState
+        Write-InstallationPlan -Progress $progress -Context $Context -Targets $targets -CcusageBefore $ccusageBefore -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -InstallMattPocockSkills:$InstallMattPocockSkills -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput -SkipContext7Key:$SkipContext7Key
+        Complete-InstallStep -Progress $progress -Result ("已建立 $($targets.Count) 個目標")
+
+        Set-InstallProgress -Progress $progress -StepId 'Prerequisites' -Detail '驗證 PowerShell、Node.js、Codex 與目標目錄'
+        Test-Prerequisites 'Global' $Context.GlobalRoot
+        foreach ($target in $targets) { Test-DirectoryWritable -Path $target.Root }
+        Complete-InstallStep -Progress $progress -Result '通過'
+
+        Set-InstallProgress -Progress $progress -StepId 'Lock' -Detail '取得單一安裝操作鎖並回復中斷交易'
         $operationLock = Enter-CodexSettingsLock
         $recovered = @(Repair-PendingTransactions -BackupRoot $Context.BackupRoot)
         if ($recovered.Count -gt 0) { Write-Host "已自動回復上次中斷的安裝交易：$($recovered.Count) 筆。" }
+        Complete-InstallStep -Progress $progress -Result $(if ($recovered.Count -gt 0) { "已回復 $($recovered.Count) 筆交易" } else { '無待回復交易' })
 
+        Set-InstallProgress -Progress $progress -StepId 'Backup' -Detail '建立交易目錄與外部狀態快照'
+        New-Item -ItemType Directory -Path $Context.BackupRoot -Force | Out-Null
         $transactionRoot = Join-Path $Context.BackupRoot ((Get-Date -Format 'yyyyMMdd-HHmmss-fff') + '-global-transaction')
         $transaction = New-FileTransaction -Root $transactionRoot -Mode 'Install-Global'
-        $ccusageBefore = Get-CcusageState
         $context7KeyWasPresent = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable('CONTEXT7_API_KEY', 'User'))
         $context7MayCreate = (-not $SkipContext7Key) -and (-not $context7KeyWasPresent)
 
@@ -152,36 +191,56 @@ function Invoke-GlobalInstallation {
             Context7InstallerMayCreate = $context7MayCreate
             Context7KeyCreatedNow = $false
         }
+        Complete-InstallStep -Progress $progress -Result '已建立交易備份'
 
-        $results = New-Object 'System.Collections.Generic.List[object]'
         try {
+            Set-InstallProgress -Progress $progress -StepId 'Targets' -Detail ("處理 $($targets.Count) 個全域安裝目標")
             foreach ($target in $targets) {
                 [void]$results.Add((Invoke-TargetInstallation -Target $target -Transaction $transaction -Force:$Context.Force))
             }
+            Complete-InstallStep -Progress $progress -Result ("完成 $($results.Count) 個目標")
 
+            Set-InstallProgress -Progress $progress -StepId 'Hooks' -Detail '驗證受管理 Hook 狀態；未變更時略過昂貴的 trust 呼叫'
             $global = @($results | Where-Object Mode -eq 'Global' | Select-Object -First 1)[0]
-            $hookTrust = Set-CodexSettingsHookTrust -Root $Context.GlobalRoot -Cwd $Context.GlobalRoot
+            $hookChanged = [bool]$global.HookChanged -or $null -eq $global.Previous
+            if ($hookChanged) {
+                $hookTrust = Set-CodexSettingsHookTrust -Root $Context.GlobalRoot -Cwd $Context.GlobalRoot
+            } else {
+                $hookTrust = [pscustomobject]@{ TrustedCount = 0; UpdatedCount = 0; Verified = $true; Skipped = $true }
+                Write-InstallLog -Progress $progress -Message 'HOOK TRUST skipped; no managed Hook changes detected'
+            }
             $configEntry = @($global.Files | Where-Object Path -eq 'config.toml' | Select-Object -First 1)[0]
             if ($null -ne $configEntry) {
                 $configHash = (Get-FileHash -LiteralPath (Join-Path $Context.GlobalRoot 'config.toml') -Algorithm SHA256).Hash
-                if ([string]$configEntry.Sha256 -ne $configHash) { $configEntry.Changed = $true }
+                if ([string]$configEntry.Sha256 -ne $configHash) { $configEntry.Changed = $true; $configEntry.Status = 'Updated' }
                 $configEntry.Sha256 = $configHash
+            }
+            Complete-InstallStep -Progress $progress -Result $(if ($hookTrust.Skipped) { 'Hook 未變更，略過重新 trust' } else { "已驗證 $($hookTrust.TrustedCount) 個" })
+
+            if (-not $SkipContext7Key) {
+                Set-InstallProgress -Progress $progress -StepId 'Context7' -Detail '沿用或設定 Context7 API Key'
             }
             $contextState = Set-Context7EnvironmentState -Skip:$SkipContext7Key -PreviousManifest $global.Previous
             Save-TransactionMetadata -Transaction $transaction -Metadata @{
                 Context7KeyCreatedNow = [bool]$contextState.CreatedNow
             }
+            if (-not $SkipContext7Key) { Complete-InstallStep -Progress $progress -Result $(if ($contextState.CreatedNow) { '已建立' } elseif ($contextState.CreatedByInstaller) { '已沿用' } else { '未設定' }) }
 
-            $profilePaths = @($PROFILE.CurrentUserAllHosts, $PROFILE.CurrentUserCurrentHost) | Select-Object -Unique
-            foreach ($profilePath in $profilePaths) { Save-TransactionFile -Transaction $transaction -Path $profilePath }
-            $ccusage = & (Join-Path $Context.ScriptRoot 'integrations\install-usage-tools.ps1') -SkipPackageInstall:$SkipCcusageInstall -PackageState $ccusageBefore -PassThru
+            Set-InstallProgress -Progress $progress -StepId 'Ccusage' -Detail '只偵測一次套件狀態，更新必要的 Profile 區塊'
+            $ccusage = & (Join-Path $Context.ScriptRoot 'integrations\install-usage-tools.ps1') -SkipPackageInstall:$SkipCcusageInstall -ForceRuntimeValidation:$ForceValidation -PackageState $ccusageBefore -Transaction $transaction -PassThru
+            Write-InstallLog -Progress $progress -Message ("COMMAND usage-tools packageBeforeInstalled={0}; forceValidation={1}" -f $ccusageBefore.Installed, $ForceValidation)
+            Complete-InstallStep -Progress $progress -Result $(if ($ccusage.CommandsUpdated) { 'Profile 已更新' } else { 'Profile 未變更' })
+
             if ($InstallMattPocockSkills) {
+                Set-InstallProgress -Progress $progress -StepId 'Skills' -Detail '只在選用或偵測到既有技能時執行 npx'
                 $mattPocockSkillNames = @(Get-MattPocockSkillNames)
                 Write-Host "正在安裝或更新 mattpocock/skills 預設技能（$($mattPocockSkillNames.Count) 個）。"
                 $skillsArguments = @(Get-MattPocockSkillsArguments)
                 & npx @skillsArguments
                 if ($LASTEXITCODE -ne 0) { throw "mattpocock/skills 安裝失敗，結束碼：$LASTEXITCODE" }
                 Write-Host "mattpocock/skills：已安裝或更新 $($mattPocockSkillNames.Count) 個預設全域技能。"
+                Write-InstallLog -Progress $progress -Message ("COMMAND npx skills installedOrUpdated={0}" -f $mattPocockSkillNames.Count)
+                Complete-InstallStep -Progress $progress -Result ("已處理 $($mattPocockSkillNames.Count) 個技能")
             }
 
             $original = $ccusageBefore
@@ -212,19 +271,49 @@ function Invoke-GlobalInstallation {
             foreach ($result in $results) {
                 Save-InstallationManifest -Result $result -Transaction $transaction -External $(if ($result.Mode -eq 'Global') { $external } else { $null })
             }
-            Complete-FileTransaction -Transaction $transaction
 
             if ($Context.InstallWindowsNotifications) {
-                & (Join-Path $Context.GlobalRoot 'hooks\show-codex-notification.ps1') -Type Completed -Test | Out-Null
+                Set-InstallProgress -Progress $progress -StepId 'Notifications' -Detail '最後執行非關鍵通知測試'
+                $notificationChanged = [bool]$global.HookChanged -or @($global.Files | Where-Object { $_.Changed -and ([string]$_.Path -eq 'hooks.json' -or [string]$_.Path -eq 'hooks\show-codex-notification.ps1') }).Count -gt 0
+                if ($ForceNotificationTest -or $notificationChanged) {
+                    & (Join-Path $Context.GlobalRoot 'hooks\show-codex-notification.ps1') -Type Completed -Test | Out-Null
+                    $notificationStatus = '已送出測試通知'
+                    Write-InstallLog -Progress $progress -Message 'COMMAND notification test completed'
+                    Complete-InstallStep -Progress $progress -Result $notificationStatus
+                } else {
+                    $notificationStatus = '腳本與 Hook 未變更，略過測試'
+                    $skippedCount++
+                    Complete-InstallStep -Progress $progress -Result $notificationStatus
+                }
             }
-            Write-InstallationSummary -InstallStyle $Context.InstallStyle -DevelopmentEnvironment $Context.DevelopmentEnvironment -Results $results.ToArray() -Ccusage $ccusage -CcusageBefore $ccusageBefore -HookTrust $hookTrust -TransactionRoot $transactionRoot -InstallWindowsNotifications $Context.InstallWindowsNotifications
+
+            Set-InstallProgress -Progress $progress -StepId 'Final' -Detail '寫入 Manifest 並完成交易驗證'
+            Complete-FileTransaction -Transaction $transaction
+            Complete-InstallStep -Progress $progress -Result 'Manifest 與交易驗證通過'
+            Write-InstallationSummary -InstallStyle $Context.InstallStyle -DevelopmentEnvironment $Context.DevelopmentEnvironment -Results $results.ToArray() -Ccusage $ccusage -CcusageBefore $ccusageBefore -HookTrust $hookTrust -TransactionRoot $transactionRoot -InstallWindowsNotifications $Context.InstallWindowsNotifications -Progress $progress -NotificationStatus $notificationStatus -SkippedCount $skippedCount
         } catch {
             $reason = $_.Exception.Message
+            Fail-InstallStep -Progress $progress -Reason $reason
             $rollbackErrors = @(Invoke-InstallationRollback -Transaction $transaction -CcusageBefore $ccusageBefore -ContextState $contextState -Reason $reason)
             $message = "Installation failed and rollback was attempted.`nReason: $reason"
             if ($rollbackErrors.Count -gt 0) { $message += "`nRollback errors:`n- " + ($rollbackErrors -join "`n- ") }
+            $rollbackStatus = if ($rollbackErrors.Count -eq 0) { 'SUCCESS' } else { 'FAILED' }
+            $failureSummary = Get-InstallResultSummary -Results $results.ToArray()
+            $failureSummary.Rollback = $rollbackStatus
+            Write-InstallResult -Progress $progress -Status FAILED -Summary $failureSummary
             throw $message
         }
+    } catch {
+        if ($progress.Status -ne 'Failed') {
+            $reason = $_.Exception.Message
+            Fail-InstallStep -Progress $progress -Reason $reason
+            $rollbackErrors = @(Invoke-InstallationRollback -Transaction $transaction -CcusageBefore $ccusageBefore -ContextState $contextState -Reason $reason)
+            $failureSummary = Get-InstallResultSummary -Results $results.ToArray()
+            $failureSummary.Rollback = if ($rollbackErrors.Count -eq 0) { 'SUCCESS' } else { 'FAILED' }
+            Write-InstallResult -Progress $progress -Status FAILED -Summary $failureSummary
+            throw
+        }
+        throw
     } finally {
         Exit-CodexSettingsLock -Lock $operationLock
     }
@@ -240,6 +329,9 @@ function Invoke-Installer {
         [switch]$InstallRequestExecutionOptimizer,
         [switch]$InstallMattPocockSkills,
         [switch]$EnableDefaultModeRequestUserInput,
+        [switch]$ForceValidation,
+        [switch]$ForceNotificationTest,
+        [switch]$NoPause,
         [Nullable[bool]]$InstallWindowsNotifications,
         [ValidateSet('Git', 'CVS')]
         [string]$DevelopmentEnvironment,
@@ -259,5 +351,5 @@ function Invoke-Installer {
         return
     }
 
-    Invoke-GlobalInstallation -Context $context -SkipContext7Key:$SkipContext7Key -SkipCcusageInstall:$SkipCcusageInstall -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -InstallMattPocockSkills:$InstallMattPocockSkills -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput
+    Invoke-GlobalInstallation -Context $context -SkipContext7Key:$SkipContext7Key -SkipCcusageInstall:$SkipCcusageInstall -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -InstallMattPocockSkills:$InstallMattPocockSkills -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput -ForceValidation:$ForceValidation -ForceNotificationTest:$ForceNotificationTest
 }
