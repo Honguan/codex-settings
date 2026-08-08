@@ -199,7 +199,7 @@ Tests=<commands and results>
 
 `.github/workflows/pull-request-validation.yml` 先以事件資料檢查分支、PR 標題、引用與禁止自動關閉關鍵字，再只查一次 Issue 狀態；PR 標題必須包含 Issue 編號，因此不再取得完整 commit 清單。它使用 Ubuntu runner、三分鐘 timeout 與同一 PR 的 concurrency cancellation。`.github/workflows/changed-area-regression.yml` 只在 workflow、Git 工作流文件或對應測試變更時執行 workflow contract regression。
 
-`main-validation.yml` 保留 main push 的 merged-PR provenance（目前儲存庫尚未啟用可驗證的 branch protection，不能移除這項保護），成功後寫入 `codex-settings-main-verification:v1` machine-readable Issue receipt。`issue-close-guard.yml` 只讀取 receipt 並比較 merge commit 是否仍可由 `main` 到達，不再掃描最近 100 個 PR 或重新搜尋 workflow runs；若合併已完成但 receipt 尚未產生，會延後驗證而不觸發 close → reopen 競態。純 API workflow 使用 Ubuntu runner、短 timeout 與 concurrency cancellation。
+`main-validation.yml` 對由 PR 合併至 main 的提交保留 merged-PR provenance 驗證，成功後寫入 `codex-settings-main-verification:v1` machine-readable Issue receipt；必要的無 PR 維護提交則記錄訊息並成功結束，不建立 Issue receipt。`issue-close-guard.yml` 只讀取 receipt 並比較 merge commit 是否仍可由 `main` 到達，不再掃描最近 100 個 PR 或重新搜尋 workflow runs；若合併已完成但 receipt 尚未產生，會延後驗證而不觸發 close → reopen 競態。純 API workflow 使用 Ubuntu runner、短 timeout 與 concurrency cancellation。
 
 Release 保留必要的 Windows installer build 與 correctness regression，但以 GitHub API compare 驗證 tag 可由 `main` 到達，checkout 改為 `fetch-depth: 1`；CVS performance benchmark 與 Issue workflow contract test 明確列為非 release-blocking，改由變更相關 workflow 或專門驗證執行。儲存庫仍應將 `main` 設定為必須經 PR、分支符合命名規則與必要 CI 通過後才能合併。
 

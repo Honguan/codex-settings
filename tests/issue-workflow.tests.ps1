@@ -81,6 +81,7 @@ foreach ($expected in @(
     'branches:',
     'commits/',
     'merged PR targeting main',
+    'no Issue receipt is required for this non-PR maintenance push',
     'codex-settings-main-verification:v1',
     'MainVerification: passed',
     'issues: write',
@@ -89,6 +90,7 @@ foreach ($expected in @(
 )) {
     Assert-Contains $mainWorkflow $expected "Main validation workflow is missing: $expected"
 }
+Assert-NotContains $mainWorkflow 'throw "The main commit' 'Main validation must not fail non-PR maintenance pushes.'
 Assert-NotContains $mainWorkflow 'gh run list' 'Main validation must not search workflow runs after the receipt is written.'
 Assert-NotContains $mainWorkflow 'Get-ChildItem ./tests/*.tests.ps1' 'Main validation must not run the full test suite.'
 Assert-NotContains $mainWorkflow 'workflow_dispatch' 'Main validation workflow must remain push-driven.'

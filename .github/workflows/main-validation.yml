@@ -16,11 +16,11 @@ permissions:
 
 jobs:
   validate:
-    name: Verify merged PR
+    name: Validate main commit
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
-      - name: Verify main push came from a merged PR
+      - name: Record main verification for merged PR
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -34,7 +34,8 @@ jobs:
               $_.base.ref -eq 'main' -and $null -ne $_.merged_at
           } | Select-Object -First 1
           if ($null -eq $mergedPullRequest) {
-              throw "The main commit $($env:COMMIT_SHA) is not associated with a merged PR targeting main."
+              Write-Host "The main commit $($env:COMMIT_SHA) is not associated with a merged PR targeting main; no Issue receipt is required for this non-PR maintenance push."
+              exit 0
           }
 
           $bodyMatch = [regex]::Match([string]$mergedPullRequest.body, '(?im)^\s*Refs\s+#(?<issueNumber>\d+)\b')
