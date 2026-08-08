@@ -1,4 +1,7 @@
+. (Join-Path $PSScriptRoot 'core\models.ps1')
+. (Join-Path $PSScriptRoot 'core\errors.ps1')
 . (Join-Path $PSScriptRoot 'core\file-system.ps1')
+. (Join-Path $PSScriptRoot 'core\state-repository.ps1')
 . (Join-Path $PSScriptRoot 'core\managed-content.ps1')
 . (Join-Path $PSScriptRoot 'core\hook-configuration.ps1')
 . (Join-Path $PSScriptRoot 'core\file-transactions.ps1')

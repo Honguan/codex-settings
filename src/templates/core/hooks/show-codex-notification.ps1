@@ -13,6 +13,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$runtimeCorePath = Join-Path $PSScriptRoot 'runtime-core.ps1'
+if (Test-Path -LiteralPath $runtimeCorePath -PathType Leaf) { . $runtimeCorePath }
 $script:HookStartTime = [DateTimeOffset]::Now
 $script:HookStopwatch = [Diagnostics.Stopwatch]::StartNew()
 $script:HookCommand = if ([string]::IsNullOrWhiteSpace([string]$MyInvocation.Line)) { $PSCommandPath } else { [string]$MyInvocation.Line }
@@ -50,32 +52,6 @@ function Add-HookTiming([string]$Name, [long]$Milliseconds) {
 }
 
 function Write-HookResult { [Console]::Out.Write('{}') }
-
-function ConvertFrom-HookInputJson([string]$Text) {
-    try { return $Text | ConvertFrom-Json -ErrorAction Stop }
-    catch {
-        $originalError = $_
-        $pattern = '(?s)("last_assistant_message"\s*:\s*)".*"(\s*}\s*)$'
-        $sanitized = [regex]::Replace($Text, $pattern, '$1null$2')
-        if ($sanitized -ne $Text) {
-            try { return $sanitized | ConvertFrom-Json -ErrorAction Stop } catch {}
-        }
-        $messageProperty = @([regex]::Matches($Text, ',\s*"last_assistant_message"\s*:'))[-1]
-        if ($null -ne $messageProperty) {
-            $prefix = $Text.Substring(0, $messageProperty.Index).TrimEnd()
-            try { return ($prefix + '}') | ConvertFrom-Json -ErrorAction Stop } catch {}
-        }
-        throw $originalError
-    }
-}
-
-function Get-HookInput {
-    try {
-        $raw = [Console]::In.ReadToEnd()
-        if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
-        return ConvertFrom-HookInputJson -Text $raw
-    } catch { return $null }
-}
 
 function Get-UsageValue($Usage, [string[]]$Names, $Default = 0) {
     if ($null -eq $Usage) { return $Default }
@@ -119,98 +95,13 @@ function Get-TokenUsageRoot {
     return Join-Path $HOME '.codex\state\token-usage'
 }
 
-function Get-HookSource {
-    try {
-        $current = [IO.Path]::GetFullPath($PSScriptRoot).TrimEnd('\', '/')
-        $globalRoot = [IO.Path]::GetFullPath((Join-Path $HOME '.codex\hooks')).TrimEnd('\', '/')
-        if ($current.Equals($globalRoot, [StringComparison]::OrdinalIgnoreCase)) { return 'global' }
-        if ([IO.Path]::GetFileName($current).Equals('hooks', [StringComparison]::OrdinalIgnoreCase) -and [IO.Path]::GetFileName((Split-Path -Parent $current)).Equals('.codex', [StringComparison]::OrdinalIgnoreCase)) { return 'project' }
-    } catch {}
-    return 'global'
-}
-
-function Get-HookParentProcessId {
-    if ($null -ne $script:HookParentProcessId) { return [int]$script:HookParentProcessId }
-    $parentProcessId = 0
-    try {
-        $parent = (Get-Process -Id $PID -ErrorAction Stop).Parent
-        if ($null -ne $parent) { $parentProcessId = [int]$parent.Id }
-    } catch {}
-    if ($parentProcessId -eq 0) {
-        try { $parentProcessId = [int](Get-CimInstance Win32_Process -Filter "ProcessId=$PID" -ErrorAction Stop).ParentProcessId }
-        catch { $parentProcessId = 0 }
-    }
-    $script:HookParentProcessId = $parentProcessId
-    return $parentProcessId
-}
-
-function New-HookInvocationCounts {
-    return [ordered]@{
-        GlobalStopHookCount = 0
-        ProjectStopHookCount = 0
-        EffectiveStopHookCount = 0
-        GlobalPostToolUseHookCount = 0
-        ProjectPostToolUseHookCount = 0
-        EffectivePostToolUseHookCount = 0
-        NotificationInvocationCount = 0
-        CrlfInvocationCount = 0
-    }
-}
-
-function Get-HookInvocationCounts($InputObject, [ValidateSet('notification', 'crlf')][string]$Kind) {
-    $counts = New-HookInvocationCounts
-    $stopwatch = [Diagnostics.Stopwatch]::StartNew()
-    try {
-        $root = if ([string]::IsNullOrWhiteSpace($env:CODEX_SETTINGS_HOOK_INVOCATION_STATE_ROOT)) { Join-Path $HOME '.codex\state\hook-invocations' } else { [IO.Path]::GetFullPath($env:CODEX_SETTINGS_HOOK_INVOCATION_STATE_ROOT) }
-        $sessionId = if ($null -eq $InputObject -or [string]::IsNullOrWhiteSpace([string]$InputObject.session_id)) { 'unknown-session' } else { [string]$InputObject.session_id }
-        $turnId = if ($null -eq $InputObject -or [string]::IsNullOrWhiteSpace([string]$InputObject.turn_id)) { 'unknown-turn' } else { [string]$InputObject.turn_id }
-        $eventName = if ($null -eq $InputObject -or [string]::IsNullOrWhiteSpace([string]$InputObject.hook_event_name)) { $Type } else { [string]$InputObject.hook_event_name }
-        $cwd = if ($null -eq $InputObject) { '' } else { [string]$InputObject.cwd }
-        $key = "$cwd|$sessionId|$turnId|$eventName"
-        $sha = [Security.Cryptography.SHA256]::Create()
-        try { $hash = ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($key)))).Replace('-', '').ToLowerInvariant() }
-        finally { $sha.Dispose() }
-        $path = Join-Path $root ($hash + '.json')
-        $counts = Invoke-WithNamedMutex -Name ('CodexSettings.HookInvocation.' + $hash) -Action {
-            New-Item -ItemType Directory -Path $root -Force | Out-Null
-            $value = New-HookInvocationCounts
-            if (Test-Path -LiteralPath $path -PathType Leaf) {
-                try {
-                    $stored = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json -ErrorAction Stop
-                    foreach ($property in @($value.Keys)) { if ($null -ne $stored.PSObject.Properties[$property]) { $value[$property] = [int]$stored.$property } }
-                } catch {}
-            }
-            if ($Kind -eq 'notification') { $value.NotificationInvocationCount = [int]$value.NotificationInvocationCount + 1 }
-            if ($Kind -eq 'crlf') { $value.CrlfInvocationCount = [int]$value.CrlfInvocationCount + 1 }
-            if ($eventName -eq 'Stop') {
-                if ($script:HookSource -eq 'project') { $value.ProjectStopHookCount = [int]$value.ProjectStopHookCount + 1 } else { $value.GlobalStopHookCount = [int]$value.GlobalStopHookCount + 1 }
-            }
-            if ($eventName -eq 'PostToolUse') {
-                if ($script:HookSource -eq 'project') { $value.ProjectPostToolUseHookCount = [int]$value.ProjectPostToolUseHookCount + 1 } else { $value.GlobalPostToolUseHookCount = [int]$value.GlobalPostToolUseHookCount + 1 }
-            }
-            $value.EffectiveStopHookCount = $value.GlobalStopHookCount + $value.ProjectStopHookCount
-            $value.EffectivePostToolUseHookCount = $value.GlobalPostToolUseHookCount + $value.ProjectPostToolUseHookCount
-            $temporaryPath = $path + '.tmp-' + [guid]::NewGuid().ToString('N')
-            try {
-                [IO.File]::WriteAllText($temporaryPath, ($value | ConvertTo-Json -Compress), [Text.UTF8Encoding]::new($false))
-                Move-Item -LiteralPath $temporaryPath -Destination $path -Force
-            } finally {
-                if (Test-Path -LiteralPath $temporaryPath -PathType Leaf) { Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue }
-            }
-            return [pscustomobject]$value
-        }
-    } catch {} finally { Add-HookTiming -Name 'invocationCounterMs' -Milliseconds $stopwatch.ElapsedMilliseconds }
-    if ($counts -is [hashtable] -or $counts -is [Collections.IDictionary]) { return [pscustomobject]$counts }
-    return $counts
-}
-
 function Write-HookDiagnostic($InputObject, [string]$Result, [string]$Details) {
     $stopwatch = [Diagnostics.Stopwatch]::StartNew()
     try {
         $root = if ([string]::IsNullOrWhiteSpace($env:CODEX_SETTINGS_HOOK_LOG_ROOT)) { Join-Path $HOME '.codex\logs\hooks' } else { $env:CODEX_SETTINGS_HOOK_LOG_ROOT }
         $sessionId = if ($null -eq $InputObject -or [string]::IsNullOrWhiteSpace([string]$InputObject.session_id)) { 'unknown' } else { [string]$InputObject.session_id }
         $safeSessionId = [regex]::Replace($sessionId, '[^A-Za-z0-9._-]', '_')
-        $counts = if ($null -eq $script:HookInvocationCounts) { [pscustomobject](New-HookInvocationCounts) } else { $script:HookInvocationCounts }
+        $counts = if ($null -eq $script:HookInvocationCounts) { [pscustomobject](New-CodexHookInvocationCounts) } else { $script:HookInvocationCounts }
         $entry = [ordered]@{
             timestamp = [DateTimeOffset]::Now.ToString('o')
             event = if ($null -eq $InputObject) { '' } else { [string]$InputObject.hook_event_name }
@@ -236,7 +127,7 @@ function Write-HookDiagnostic($InputObject, [string]$Result, [string]$Details) {
             invocationSource = '{0}:{1}' -f $script:HookSource, $script:NotificationHandlerId
             hookCommand = $script:HookCommand
             processId = $PID
-            parentProcessId = Get-HookParentProcessId
+            parentProcessId = Get-CodexHookParentProcessId
             startTime = $script:HookStartTime.ToString('o')
             endTime = [DateTimeOffset]::Now.ToString('o')
             elapsedMs = $script:HookStopwatch.ElapsedMilliseconds
@@ -336,7 +227,12 @@ function Write-NotificationJsonAtomic([string]$Path, $Value) {
     New-Item -ItemType Directory -Path $root -Force | Out-Null
     $temporaryPath = $Path + '.tmp-' + [guid]::NewGuid().ToString('N')
     try {
-        [IO.File]::WriteAllText($temporaryPath, ($Value | ConvertTo-Json -Depth 12 -Compress), [Text.UTF8Encoding]::new($false))
+        $payload = [ordered]@{}
+        if ($Value -is [Collections.IDictionary]) { foreach ($property in $Value.Keys) { $payload[$property] = $Value[$property] } }
+        else { foreach ($property in $Value.PSObject.Properties) { $payload[$property.Name] = $property.Value } }
+        $envelope = [ordered]@{ schemaVersion = 1; kind = 'notification-claim'; createdAt = [DateTimeOffset]::UtcNow.ToString('o'); updatedAt = [DateTimeOffset]::UtcNow.ToString('o'); payload = [pscustomobject]$payload }
+        foreach ($property in $payload.Keys) { $envelope[$property] = $payload[$property] }
+        [IO.File]::WriteAllText($temporaryPath, ($envelope | ConvertTo-Json -Depth 14 -Compress), [Text.UTF8Encoding]::new($false))
         [void](Move-Item -LiteralPath $temporaryPath -Destination $Path -Force)
     } finally {
         if (Test-Path -LiteralPath $temporaryPath -PathType Leaf) { Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue }
@@ -355,7 +251,7 @@ function Test-NotificationClaimActive($Claim) {
 function Acquire-NotificationClaim([string]$Root, $InputObject, [string]$NotificationType) {
     $identity = Get-NotificationClaimIdentity -InputObject $InputObject -NotificationType $NotificationType
     $path = Join-Path (Join-Path $Root 'claims') ($identity.Hash + '.json')
-    $claim = Invoke-WithNamedMutex -Name ('CodexSettings.NotificationClaim.' + $identity.Hash) -Action {
+    $claim = Invoke-CodexHookMutex -Name ('CodexSettings.NotificationClaim.' + $identity.Hash) -Action {
         New-Item -ItemType Directory -Path (Split-Path -Parent $path) -Force | Out-Null
         $existing = Read-NotificationClaim -Path $path
         if (Test-NotificationClaimActive -Claim $existing) {
@@ -384,7 +280,7 @@ function Set-NotificationClaimState($Claim, [ValidateSet('showing', 'shown', 'sk
     try {
         $path = [string]$Claim.Path
         $hash = [IO.Path]::GetFileNameWithoutExtension($path)
-        Invoke-WithNamedMutex -Name ('CodexSettings.NotificationClaim.' + $hash) -Action {
+        Invoke-CodexHookMutex -Name ('CodexSettings.NotificationClaim.' + $hash) -Action {
             $value = Read-NotificationClaim -Path $path
             if ($null -eq $value) { return }
             $value.state = $State
@@ -502,23 +398,8 @@ function Save-ActiveToast([string]$Tag, [string]$Group, [string]$AppId) {
     } catch { return $false }
 }
 
-function Invoke-WithNamedMutex([string]$Name, [scriptblock]$Action, [int]$TimeoutMilliseconds = 5000) {
-    $mutex = $null
-    $lockHeld = $false
-    try {
-        $mutex = [Threading.Mutex]::new($false, $Name)
-        try { $lockHeld = $mutex.WaitOne($TimeoutMilliseconds) }
-        catch [Threading.AbandonedMutexException] { $lockHeld = $true }
-        if (-not $lockHeld) { throw "Unable to acquire notification mutex: $Name" }
-        return & $Action
-    } finally {
-        if ($lockHeld -and $null -ne $mutex) { try { $mutex.ReleaseMutex() } catch {} }
-        if ($null -ne $mutex) { $mutex.Dispose() }
-    }
-}
-
 function Invoke-WithToastStateLock([scriptblock]$Action) {
-    return Invoke-WithNamedMutex -Name $script:ToastStateMutexName -Action $Action -TimeoutMilliseconds 2000
+    return Invoke-CodexHookMutex -Name $script:ToastStateMutexName -Action $Action -TimeoutMilliseconds 2000
 }
 
 function Get-ToastRemainingSeconds($Toast, [int]$MaximumSeconds) {
@@ -869,7 +750,11 @@ function ConvertTo-Snapshot($Usage, [string]$SessionId, [string]$Source = 'ccses
     $totalField = Get-UsageField -Usage $Usage -Names @('totalTokens', 'total_tokens')
     $costField = Get-UsageField -Usage $Usage -Names @('costUsd', 'cost_usd', 'costUSD')
     $timeField = Get-UsageTime -Usage $Usage
+    $presentFields = @()
+    foreach ($field in @($inputField, $outputField, $reasoningField, $cacheField, $totalField, $costField)) { if ([bool]$field.Present) { $presentFields += [string]$field.Name } }
+    if ([bool]$timeField.Present) { $presentFields += [string]$timeField.Name }
     return [pscustomobject][ordered]@{
+        schemaVersion = 1
         sessionId = $SessionId
         source = $Source
         models = $models
@@ -888,6 +773,8 @@ function ConvertTo-Snapshot($Usage, [string]$SessionId, [string]$Source = 'ccses
         hasTotalTokens = [bool]$totalField.Present
         hasCost = [bool]$costField.Present
         costUsd = if ($costField.Present) { [decimal]$costField.Value } else { [decimal]0 }
+        presentFields = @($presentFields)
+        capturedAt = [DateTimeOffset]::UtcNow.ToString('o')
     }
 }
 
@@ -1007,6 +894,8 @@ function Test-SnapshotChanged($Current, $Previous) {
 function New-SnapshotDelta($Current, $Previous, [string]$ModelFallback) {
     $models = if ([bool]$Current.hasModel -and @($Current.models).Count -gt 0) { @($Current.models) } elseif (-not [string]::IsNullOrWhiteSpace($ModelFallback)) { @($ModelFallback) } else { @() }
     $value = [ordered]@{
+        schemaVersion = 1
+        kind = 'usage-delta'
         sessionId = $Current.sessionId
         source = 'ccsessions-delta'
         models = $models
@@ -1028,6 +917,8 @@ function New-SnapshotDelta($Current, $Previous, [string]$ModelFallback) {
 
 function New-DisplaySnapshot($TokenSnapshot, $MetadataSnapshot, [string]$ModelFallback, [bool]$UseMetadataCost, [string]$Source) {
     $value = [ordered]@{
+        schemaVersion = 1
+        kind = 'usage-display'
         sessionId = $TokenSnapshot.sessionId
         source = $Source
     }
@@ -1107,8 +998,13 @@ function Save-State([string]$Path, $Snapshot, [string]$Hash, [string]$TurnId, [s
         lastKnownModel = $LastKnownModel
         updatedAt = [DateTimeOffset]::Now.ToString('o')
     }
+    $payload = [ordered]@{}
+    foreach ($property in $value.Keys) { $payload[$property] = $value[$property] }
+    $value.kind = 'token-usage'
+    $value.createdAt = [DateTimeOffset]::UtcNow.ToString('o')
+    $value.payload = [pscustomobject]$payload
     $temporaryPath = "$Path.$([guid]::NewGuid().ToString('N')).tmp"
-    [IO.File]::WriteAllText($temporaryPath, (($value | ConvertTo-Json -Depth 6) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText($temporaryPath, (($value | ConvertTo-Json -Depth 10) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
     Move-Item -LiteralPath $temporaryPath -Destination $Path -Force
 }
 
@@ -1311,7 +1207,7 @@ function Get-TokenUsageDisplay($InputObject, $Settings) {
     try { $sessionHash = ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($sessionId)))).Replace('-', '').ToLowerInvariant() }
     finally { $sha.Dispose() }
     $mutexName = 'CodexSettings.TokenUsage.' + $sessionHash
-    return Invoke-WithNamedMutex -Name $mutexName -Action { Get-TokenUsageDisplayCore -InputObject $InputObject -Settings $Settings }
+    return Invoke-CodexHookMutex -Name $mutexName -Action { Get-TokenUsageDisplayCore -InputObject $InputObject -Settings $Settings }
 }
 
 if ($NativeToast) {
@@ -1337,12 +1233,13 @@ try {
             last_assistant_message = ''
         }
     } else {
-        $inputObject = Get-HookInput
+        $inputObject = Read-CodexHookInvocation
         if ($null -eq $inputObject) { $inputObject = [pscustomobject]@{} }
     }
 
-    $script:HookSource = Get-HookSource
-    $script:HookInvocationCounts = Get-HookInvocationCounts -InputObject $inputObject -Kind notification
+    $script:HookSource = Get-CodexHookSource
+    $script:HookInvocationContext = New-CodexHookInvocationContext -InputObject $inputObject -HookSource $script:HookSource
+    $script:HookInvocationCounts = Get-CodexHookInvocationCounts -InputObject $inputObject -Kind notification -EventName $Type -HookSource $script:HookSource
 
     if ($Type -eq 'Completed' -and [string]$inputObject.last_assistant_message -match '(?s)(?:[?？]\s*$|請(?:選擇|確認|提供|回答))') {
         $Type = 'QuestionRequired'

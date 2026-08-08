@@ -27,6 +27,39 @@ function Get-HookHandlerEntries {
     return @($Entry)
 }
 
+function Get-CanonicalHookHandlerDescriptor {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$EventName, [Parameter(Mandatory = $true)]$Entry)
+
+    $handler = @(Get-HookHandlerEntries -Entry $Entry | Select-Object -First 1)[0]
+    if ($null -eq $handler) { return $null }
+    $command = [string]$handler.command
+    $commandWindows = [string]$handler.commandWindows
+    $handlerId = $null
+    $kind = $null
+    $managedId = $null
+    if (($command + ' ' + $commandWindows) -match '(?i)show-codex-notification\.ps1') {
+        $kind = 'notification'
+        $managedId = $script:ManagedNotificationId
+        $handlerId = switch ($EventName) {
+            'PreToolUse' { 'question-toast' }
+            'PermissionRequest' { 'permission-toast' }
+            'Stop' { 'completed-token-toast' }
+            default { 'notification-toast' }
+        }
+    } elseif (($command + ' ' + $commandWindows) -match '(?i)preserve-line-endings\.ps1') {
+        $kind = 'line-ending'
+        $managedId = $script:ManagedHookManifestId
+        $handlerId = 'line-ending-' + $EventName.ToLowerInvariant()
+    } elseif (($command + ' ' + $commandWindows) -match '(?i)(?:show-turn-token-usage|turn-token-usage)\.ps1') {
+        $kind = 'token'
+        $managedId = $script:ManagedHookManifestId
+        $handlerId = 'legacy-token-usage'
+    }
+    if ([string]::IsNullOrWhiteSpace($handlerId)) { return $null }
+    return New-HookHandlerDescriptor -ManagedId $managedId -ManagedVersion $(if ($managedId -eq $script:ManagedNotificationId) { [string]$script:ManagedNotificationVersion } else { [string]$script:ManagedHookManifestVersion }) -HandlerId $handlerId -Kind $kind -EventName $EventName -Matcher (Get-CodexSettingsPropertyValue -InputObject $Entry -Names @('matcher') -Default '*') -Command $command -CommandWindows $commandWindows -Timeout ([int](Get-CodexSettingsPropertyValue -InputObject $handler -Names @('timeout') -Default 0)) -Fingerprint (Get-HookEntryFingerprint -Entry $Entry) -Legacy ($kind -eq 'token')
+}
+
 function Get-HookEntryFingerprint {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)]$Entry)
@@ -51,14 +84,16 @@ function Test-ManagedLineEndingHookEntry {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)]$Entry)
 
-    return (Get-HookEntryText -Entry $Entry) -match $script:ManagedLineEndingHookSignaturePattern
+    $descriptor = Get-CanonicalHookHandlerDescriptor -EventName 'Unknown' -Entry $Entry
+    return ($null -ne $descriptor -and [string]$descriptor.kind -eq 'line-ending') -or (Get-HookEntryText -Entry $Entry) -match $script:ManagedLineEndingHookSignaturePattern
 }
 
 function Test-CurrentManagedNotificationHookEntry {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)]$Entry, [string[]]$ManagedHookFingerprints = @())
 
-    return (Test-HookFingerprint -Entry $Entry -Fingerprints $ManagedHookFingerprints) -or (Get-HookEntryText -Entry $Entry) -match $script:ManagedNotificationHookSignaturePattern
+    $descriptor = Get-CanonicalHookHandlerDescriptor -EventName 'Unknown' -Entry $Entry
+    return (Test-HookFingerprint -Entry $Entry -Fingerprints $ManagedHookFingerprints) -or ($null -ne $descriptor -and [string]$descriptor.kind -eq 'notification') -or (Get-HookEntryText -Entry $Entry) -match $script:ManagedNotificationHookSignaturePattern
 }
 
 function Test-LegacyManagedNotificationHookEntry {
@@ -89,7 +124,8 @@ function Test-ManagedTokenHookEntry {
     param([Parameter(Mandatory = $true)]$Entry, [string[]]$ManagedHookFingerprints = @())
 
     $text = Get-HookEntryText -Entry $Entry
-    return (Test-HookFingerprint -Entry $Entry -Fingerprints $ManagedHookFingerprints) -or $text -match $script:ManagedTokenHookSignaturePattern -or $text -match $script:LegacyTokenHookSignaturePattern
+    $descriptor = Get-CanonicalHookHandlerDescriptor -EventName 'Unknown' -Entry $Entry
+    return (Test-HookFingerprint -Entry $Entry -Fingerprints $ManagedHookFingerprints) -or ($null -ne $descriptor -and [string]$descriptor.kind -eq 'token') -or $text -match $script:ManagedTokenHookSignaturePattern -or $text -match $script:LegacyTokenHookSignaturePattern
 }
 
 function Test-ManagedGlobalHookEntry {
@@ -213,6 +249,8 @@ function Get-ManifestManagedHookFingerprints {
 }
 
 function Get-ManagedHookHandlerId([string]$EventName, $Entry) {
+    $descriptor = Get-CanonicalHookHandlerDescriptor -EventName $EventName -Entry $Entry
+    if ($null -ne $descriptor) { return [string]$descriptor.handlerId }
     if (Test-ManagedNotificationHookEntry -Entry $Entry) {
         switch ($EventName) {
             'PreToolUse' { return 'question-toast' }
@@ -245,7 +283,8 @@ function Get-ManagedHooksManifest {
                         if ([string]::IsNullOrWhiteSpace($handlerId)) { continue }
                         $managedId = if ($handlerId -eq 'completed-token-toast' -or $handlerId -match 'toast') { $script:ManagedNotificationId } else { $script:ManagedHookManifestId }
                         $managedVersion = if ($managedId -eq $script:ManagedNotificationId) { $script:ManagedNotificationVersion } else { $script:ManagedHookManifestVersion }
-                        $record = [ordered]@{ event = $property.Name; handlerId = $handlerId; managedId = $managedId; managedVersion = $managedVersion; fingerprint = Get-HookEntryFingerprint -Entry $entry }
+                        $descriptor = Get-CanonicalHookHandlerDescriptor -EventName $property.Name -Entry $entry
+                        $record = [ordered]@{ event = $property.Name; handlerId = $handlerId; managedId = $managedId; managedVersion = $managedVersion; fingerprint = Get-HookEntryFingerprint -Entry $entry; descriptor = $descriptor }
                         [void]$handlers.Add([pscustomobject]$record)
                         if ($handlerId -match 'toast') { [void]$notificationHandlers.Add([pscustomobject]$record) }
                         elseif ($handlerId -eq 'legacy-token-usage') { [void]$tokenHandlers.Add([pscustomobject]$record) }
