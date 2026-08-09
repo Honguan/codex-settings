@@ -38,7 +38,7 @@ function Get-PonytailMarketplaceSourceRelationship {
 
 function Get-PonytailInstallationState {
     [CmdletBinding()]
-    param()
+    param([string]$Root = $(if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path ([Environment]::GetFolderPath('UserProfile')) '.codex' }))
 
     $marketplaces = Invoke-PonytailCodexCommand -Arguments @('plugin', 'marketplace', 'list', '--json')
     if ($marketplaces.ExitCode -ne 0) { throw "無法讀取 Codex plugin marketplace 狀態：$($marketplaces.Output -join [Environment]::NewLine)" }
@@ -50,18 +50,49 @@ function Get-PonytailInstallationState {
     catch { throw "Codex plugin list 回傳無法解析的 JSON：$($_.Exception.Message)" }
 
     $marketplace = @($marketplaceList.marketplaces | Where-Object { [string]$_.name -eq $script:PonytailMarketplaceName } | Select-Object -First 1)[0]
+    $marketplaceCacheRoot = Join-Path $Root ".tmp\marketplaces\$script:PonytailMarketplaceName"
+    $marketplaceMetadataPath = Join-Path $marketplaceCacheRoot '.codex-marketplace-install.json'
+    $marketplaceMetadata = $null
+    if (Test-Path -LiteralPath $marketplaceMetadataPath -PathType Leaf) {
+        try { $marketplaceMetadata = Get-Content -Raw -LiteralPath $marketplaceMetadataPath | ConvertFrom-Json -ErrorAction Stop }
+        catch { $marketplaceMetadata = [pscustomobject]@{ source_type = ''; source = '' } }
+    }
     $allPlugins = @($pluginList.installed) + @($pluginList.available)
     $plugin = @($pluginList.installed | Where-Object { [string]$_.pluginId -eq $script:PonytailPluginId } | Select-Object -First 1)[0]
     $sourceEntry = @($allPlugins | Where-Object { [string]$_.marketplaceName -eq $script:PonytailMarketplaceName -or [string]$_.pluginId -eq $script:PonytailPluginId } | Select-Object -First 1)[0]
     $marketplacePluginIds = @($pluginList.installed | Where-Object { [string]$_.marketplaceName -eq $script:PonytailMarketplaceName -or [string]$_.pluginId -eq $script:PonytailPluginId } | ForEach-Object { [string]$_.pluginId })
-    $marketplaceSource = if ($null -ne $sourceEntry -and $null -ne $sourceEntry.marketplaceSource) { [string]$sourceEntry.marketplaceSource.source } else { '' }
-    $marketplacePresent = $null -ne $marketplace
+    $marketplaceSource = if ($null -ne $sourceEntry -and $null -ne $sourceEntry.marketplaceSource) {
+        [string]$sourceEntry.marketplaceSource.source
+    } elseif ($null -ne $marketplace -and $null -ne $marketplace.source) {
+        [string]$marketplace.source
+    } elseif ($null -ne $marketplaceMetadata) {
+        [string]$marketplaceMetadata.source
+    } else { '' }
+    $marketplaceSourceKind = if ($null -ne $sourceEntry -and $null -ne $sourceEntry.marketplaceSource) {
+        [string]$sourceEntry.marketplaceSource.sourceType
+    } elseif ($null -ne $marketplace -and $null -ne $marketplace.sourceType) {
+        [string]$marketplace.sourceType
+    } elseif ($null -ne $marketplaceMetadata) {
+        [string]$marketplaceMetadata.source_type
+    } else { '' }
+    $marketplaceListed = $null -ne $marketplace
+    $marketplaceCachePresent = Test-Path -LiteralPath $marketplaceCacheRoot -PathType Container
+    $marketplacePresent = $marketplaceListed -or $marketplaceCachePresent
     $sourceRelationship = Get-PonytailMarketplaceSourceRelationship -Present:$marketplacePresent -Source $marketplaceSource
+    $pluginSourcePath = if ($null -ne $plugin -and $null -ne $plugin.source -and $null -ne $plugin.source.path) { [string]$plugin.source.path } else { '' }
+    if ([string]::IsNullOrWhiteSpace($pluginSourcePath) -and $null -ne $plugin -and -not [string]::IsNullOrWhiteSpace([string]$plugin.version)) {
+        $pluginName = ([string]$plugin.pluginId -split '@', 2)[0]
+        $pluginMarketplaceName = if ([string]::IsNullOrWhiteSpace([string]$plugin.marketplaceName)) { $script:PonytailMarketplaceName } else { [string]$plugin.marketplaceName }
+        $pluginCachePath = Join-Path $Root "plugins\cache\$pluginMarketplaceName\$pluginName\$([string]$plugin.version)"
+        if (Test-Path -LiteralPath $pluginCachePath -PathType Container) { $pluginSourcePath = $pluginCachePath }
+    }
     return [pscustomobject]@{
         MarketplacePresent = $marketplacePresent
-        MarketplaceName = if ($marketplacePresent) { [string]$marketplace.name } else { $script:PonytailMarketplaceName }
+        MarketplaceListed = $marketplaceListed
+        MarketplaceCachePresent = $marketplaceCachePresent
+        MarketplaceName = if ($marketplaceListed) { [string]$marketplace.name } else { $script:PonytailMarketplaceName }
         MarketplaceSource = $marketplaceSource
-        MarketplaceSourceKind = if ($null -ne $sourceEntry -and $null -ne $sourceEntry.marketplaceSource) { [string]$sourceEntry.marketplaceSource.sourceType } else { '' }
+        MarketplaceSourceKind = $marketplaceSourceKind
         MarketplaceCanonicalSource = ConvertTo-PonytailCanonicalMarketplaceSource $marketplaceSource
         ExpectedMarketplaceSource = $script:PonytailMarketplaceSource
         ExpectedMarketplaceCanonicalSource = ConvertTo-PonytailCanonicalMarketplaceSource $script:PonytailMarketplaceSource
@@ -70,7 +101,7 @@ function Get-PonytailInstallationState {
         MarketplacePluginIds = $marketplacePluginIds
         PluginPresent = $null -ne $plugin
         PluginId = $script:PonytailPluginId
-        PluginSourcePath = if ($null -ne $plugin -and $null -ne $plugin.source) { [string]$plugin.source.path } else { '' }
+        PluginSourcePath = $pluginSourcePath
         Version = if ($null -ne $plugin) { [string]$plugin.version } else { '' }
     }
 }
@@ -78,7 +109,7 @@ function Get-PonytailInstallationState {
 function Select-OptionalPonytail([bool]$AlreadyInstalled) {
     Write-Host ''
     Write-Host '選用全域功能：Ponytail'
-    Write-Host '透過 Codex plugin 安裝 Ponytail，並驗證其 2 個 lifecycle hooks。'
+    Write-Host '透過 Codex plugin 安裝 Ponytail，並驗證其 lifecycle hooks。'
     if ($AlreadyInstalled) {
         Write-Host '已偵測到既有 Ponytail 安裝，本次會保留並更新。'
         return Read-YesNoChoice -Prompt '要繼續安裝/更新嗎？[Y/n]' -Default $true
@@ -120,12 +151,19 @@ function Get-PonytailHookState {
         foreach ($argument in @('-NoLogo', '-NoProfile', '-File', $env:CODEX_SETTINGS_APP_SERVER_TEST_COMMAND)) { $startInfo.ArgumentList.Add($argument) }
     } else {
         $codexPath = [string](Get-Command codex -ErrorAction Stop).Source
-        if ([IO.Path]::GetExtension($codexPath).ToLowerInvariant() -in @('.cmd', '.bat')) {
-            $startInfo.FileName = $env:ComSpec
-            foreach ($argument in @('/d', '/s', '/c', 'call', $codexPath, 'app-server', '--stdio')) { $startInfo.ArgumentList.Add($argument) }
-        } else {
-            $startInfo.FileName = $codexPath
-            foreach ($argument in @('app-server', '--stdio')) { $startInfo.ArgumentList.Add($argument) }
+        switch ([IO.Path]::GetExtension($codexPath).ToLowerInvariant()) {
+            { $_ -in @('.cmd', '.bat') } {
+                $startInfo.FileName = $env:ComSpec
+                foreach ($argument in @('/d', '/s', '/c', 'call', $codexPath, 'app-server', '--stdio')) { $startInfo.ArgumentList.Add($argument) }
+            }
+            '.ps1' {
+                $startInfo.FileName = (Get-Command pwsh -ErrorAction Stop).Source
+                foreach ($argument in @('-NoLogo', '-NoProfile', '-File', $codexPath, 'app-server', '--stdio')) { $startInfo.ArgumentList.Add($argument) }
+            }
+            default {
+                $startInfo.FileName = $codexPath
+                foreach ($argument in @('app-server', '--stdio')) { $startInfo.ArgumentList.Add($argument) }
+            }
         }
     }
     $startInfo.UseShellExecute = $false
@@ -146,7 +184,26 @@ function Get-PonytailHookState {
         $cwdResult = @($listed.data | Where-Object { [string]::Equals([IO.Path]::GetFullPath([string]$_.cwd), [IO.Path]::GetFullPath($Cwd), [StringComparison]::OrdinalIgnoreCase) } | Select-Object -First 1)[0]
         if ($null -eq $cwdResult) { throw 'Codex app-server 未回傳全域安裝目錄的 Hook 資訊。' }
         $hooks = @($cwdResult.hooks | Where-Object { Test-PonytailHookSource -Hook $_ -PluginSourcePath $State.PluginSourcePath })
-        return [pscustomobject]@{ DetectedCount = $hooks.Count; TrustedCount = @($hooks | Where-Object { [string]$_.trustStatus -eq 'trusted' }).Count; Hooks = @($hooks | ForEach-Object { [pscustomobject]@{ Key = [string]$_.key; SourcePath = [string]$_.sourcePath; TrustStatus = [string]$_.trustStatus } }); Error = '' }
+        $pendingHooks = @($hooks | Where-Object { [string]$_.trustStatus -ne 'trusted' })
+        if ($pendingHooks.Count -gt 0) {
+            $trustValues = [ordered]@{}
+            foreach ($hook in $pendingHooks) {
+                if ([string]::IsNullOrWhiteSpace([string]$hook.key) -or [string]::IsNullOrWhiteSpace([string]$hook.currentHash)) {
+                    throw 'Codex app-server 回傳無效的 Ponytail Hook identity。'
+                }
+                $trustValues[[string]$hook.key] = [ordered]@{ trusted_hash = [string]$hook.currentHash }
+            }
+            $process.StandardInput.WriteLine((@{ method = 'config/batchWrite'; id = 3; params = @{ edits = @(@{ keyPath = 'hooks.state'; value = $trustValues; mergeStrategy = 'upsert' }); reloadUserConfig = $true } } | ConvertTo-Json -Depth 20 -Compress))
+            $process.StandardInput.Flush()
+            [void](Read-CodexAppServerResponse -Process $process -RequestId 3)
+        }
+        $process.StandardInput.WriteLine((@{ method = 'hooks/list'; id = 4; params = @{ cwds = @([IO.Path]::GetFullPath($Cwd)) } } | ConvertTo-Json -Depth 8 -Compress))
+        $process.StandardInput.Flush()
+        $verified = Read-CodexAppServerResponse -Process $process -RequestId 4
+        $verifiedCwd = @($verified.data | Where-Object { [string]::Equals([IO.Path]::GetFullPath([string]$_.cwd), [IO.Path]::GetFullPath($Cwd), [StringComparison]::OrdinalIgnoreCase) } | Select-Object -First 1)[0]
+        if ($null -eq $verifiedCwd) { throw 'Codex app-server 未回傳 Ponytail Hook 重新驗證結果。' }
+        $verifiedHooks = @($verifiedCwd.hooks | Where-Object { Test-PonytailHookSource -Hook $_ -PluginSourcePath $State.PluginSourcePath })
+        return [pscustomobject]@{ DetectedCount = $verifiedHooks.Count; TrustedCount = @($verifiedHooks | Where-Object { [string]$_.trustStatus -eq 'trusted' }).Count; Hooks = @($verifiedHooks | ForEach-Object { [pscustomobject]@{ Key = [string]$_.key; SourcePath = [string]$_.sourcePath; TrustStatus = [string]$_.trustStatus } }); Error = '' }
     } catch {
         return [pscustomobject]@{ DetectedCount = 0; TrustedCount = 0; Hooks = @(); Error = $_.Exception.Message }
     } finally {
@@ -182,6 +239,7 @@ function Invoke-PonytailInstallation {
             MarketplaceStatus = 'PreservedConflict'
             MarketplaceAddedNow = $false
             MarketplaceSwitchedNow = $false
+            MarketplaceRecoveredNow = $false
             OriginalMarketplaceSource = [string]$before.MarketplaceSource
             MarketplaceSource = [string]$before.MarketplaceSource
             PluginStatus = if ($before.PluginPresent) { 'Current' } else { 'SkippedConflict' }
@@ -189,13 +247,14 @@ function Invoke-PonytailInstallation {
             HookCount = [int]$existingHooks.DetectedCount
             TrustedHookCount = [int]$existingHooks.TrustedCount
             HookIdentities = @($existingHooks.Hooks)
-            ValidationStatus = if ($existingHooks.DetectedCount -eq 2) { 'Validated' } else { 'ManualRequired' }
-            TrustStatus = if ($existingHooks.DetectedCount -eq 2 -and $existingHooks.TrustedCount -eq 2) { 'Trusted' } else { 'ManualRequired' }
-            ValidationError = $(if ($existingHooks.DetectedCount -eq 2) { '' } else { "Marketplace=$($before.MarketplaceName); Current=$($before.MarketplaceSource); Expected=$($before.ExpectedMarketplaceSource); Relationship=$($before.SourceRelationship); Action=preserve; Hooks=$($existingHooks.DetectedCount)/2; $($existingHooks.Error)" })
+            ValidationStatus = if ($existingHooks.DetectedCount -ge 2 -and $existingHooks.TrustedCount -eq $existingHooks.DetectedCount) { 'Validated' } else { 'ManualRequired' }
+            TrustStatus = if ($existingHooks.DetectedCount -ge 2 -and $existingHooks.TrustedCount -eq $existingHooks.DetectedCount) { 'Trusted' } else { 'ManualRequired' }
+            ValidationError = $(if ($existingHooks.DetectedCount -ge 2 -and $existingHooks.TrustedCount -eq $existingHooks.DetectedCount) { '' } else { "Marketplace=$($before.MarketplaceName); Current=$($before.MarketplaceSource); Expected=$($before.ExpectedMarketplaceSource); Relationship=$($before.SourceRelationship); Action=preserve; Hooks=$($existingHooks.DetectedCount); Trusted=$($existingHooks.TrustedCount); $($existingHooks.Error)" })
         }
     }
     $marketplaceAddedNow = $false
     $marketplaceSwitchedNow = $false
+    $marketplaceRecoveredNow = $false
     $marketplace = if ($before.SourceRelationship -in @('Conflict', 'Unknown') -and $MarketplaceAction -eq 'Switch') {
         $otherPlugins = @($before.MarketplacePluginIds | Where-Object { $_ -ne $script:PonytailPluginId })
         if ($otherPlugins.Count -gt 0) {
@@ -214,6 +273,17 @@ function Invoke-PonytailInstallation {
         }
         $marketplaceSwitchedNow = $true
         $added
+    } elseif ($before.SourceRelationship -in @('Exact', 'Equivalent') -and -not [bool]$before.MarketplaceListed -and [bool]$before.MarketplaceCachePresent) {
+        $remove = Invoke-PonytailCodexCommand -Arguments @('plugin', 'marketplace', 'remove', $script:PonytailMarketplaceName, '--json')
+        if ($remove.ExitCode -ne 0) {
+            throw "Ponytail 孤立 marketplace cache 清理失敗。 Marketplace=$($before.MarketplaceName); Current=$($before.MarketplaceSource); Expected=$($before.ExpectedMarketplaceSource); Relationship=$($before.SourceRelationship); Action=recover-remove; Output=$($remove.Output -join [Environment]::NewLine)"
+        }
+        $added = Invoke-PonytailCodexCommand -Arguments @('plugin', 'marketplace', 'add', [string]$before.MarketplaceSource, '--json')
+        if ($added.ExitCode -ne 0) {
+            throw "Ponytail 孤立 marketplace cache 復原失敗。 Marketplace=$($before.MarketplaceName); Current=$($before.MarketplaceSource); Expected=$($before.ExpectedMarketplaceSource); Relationship=$($before.SourceRelationship); Action=recover-add; Output=$($added.Output -join [Environment]::NewLine)"
+        }
+        $marketplaceRecoveredNow = $true
+        $added
     } elseif ($before.SourceRelationship -in @('Exact', 'Equivalent')) {
         Invoke-PonytailCodexCommand -Arguments @('plugin', 'marketplace', 'upgrade', $script:PonytailMarketplaceName, '--json')
     } elseif ($before.SourceRelationship -eq 'Missing') {
@@ -227,7 +297,7 @@ function Invoke-PonytailInstallation {
     try {
         $plugin = Invoke-PonytailCodexCommand -Arguments @('plugin', 'add', $script:PonytailPluginId, '--json')
         if ($plugin.ExitCode -ne 0) { throw "Ponytail plugin 安裝/更新失敗：$($plugin.Output -join [Environment]::NewLine)" }
-        $after = Get-PonytailInstallationState
+        $after = Get-PonytailInstallationState -Root $Root
         if (-not [bool]$after.PluginPresent) { throw 'Ponytail plugin 指令完成後仍未出現在 Codex plugin list。' }
     } catch {
         $installationError = $_.Exception.Message
@@ -257,24 +327,25 @@ function Invoke-PonytailInstallation {
         WasInstalledBefore = [bool]$before.PluginPresent
         InstalledNow = -not [bool]$before.PluginPresent
         UpdatedNow = $pluginStatus -eq 'Updated'
-        MarketplaceStatus = if ($marketplaceSwitchedNow) { 'Switched' } elseif ($before.MarketplacePresent) { 'Updated' } else { 'Installed' }
+        MarketplaceStatus = if ($marketplaceRecoveredNow) { 'Recovered' } elseif ($marketplaceSwitchedNow) { 'Switched' } elseif ($before.MarketplacePresent) { 'Updated' } else { 'Installed' }
         MarketplaceAddedNow = $marketplaceAddedNow
         MarketplaceSwitchedNow = $marketplaceSwitchedNow
+        MarketplaceRecoveredNow = $marketplaceRecoveredNow
         OriginalMarketplaceSource = [string]$before.MarketplaceSource
-        MarketplaceSource = $script:PonytailMarketplaceSource
+        MarketplaceSource = if ($marketplaceRecoveredNow) { [string]$before.MarketplaceSource } else { $script:PonytailMarketplaceSource }
         PluginStatus = $pluginStatus
         PluginVersion = $after.Version
         HookCount = [int]$hooks.DetectedCount
         TrustedHookCount = [int]$hooks.TrustedCount
         HookIdentities = @($hooks.Hooks)
-        ValidationStatus = if ($hooks.DetectedCount -eq 2) { 'Validated' } else { 'Failed' }
-        TrustStatus = if ($hooks.DetectedCount -eq 2 -and $hooks.TrustedCount -eq 2) { 'Trusted' } else { 'ManualRequired' }
-        ValidationError = [string]$hooks.Error
+        ValidationStatus = if ($hooks.DetectedCount -ge 2 -and $hooks.TrustedCount -eq $hooks.DetectedCount) { 'Validated' } else { 'Failed' }
+        TrustStatus = if ($hooks.DetectedCount -ge 2 -and $hooks.TrustedCount -eq $hooks.DetectedCount) { 'Trusted' } else { 'ManualRequired' }
+        ValidationError = $(if ($hooks.DetectedCount -ge 2 -and $hooks.TrustedCount -eq $hooks.DetectedCount) { '' } elseif ($hooks.Error) { [string]$hooks.Error } else { "Ponytail lifecycle hooks 驗證失敗：Detected=$($hooks.DetectedCount); Trusted=$($hooks.TrustedCount)" })
     }
 }
 
 function New-PonytailSkippedResult([bool]$AlreadyInstalled = $false) {
-    return [pscustomobject]@{ Managed = $false; WasInstalledBefore = $AlreadyInstalled; InstalledNow = $false; UpdatedNow = $false; MarketplaceStatus = 'SkippedByUser'; MarketplaceAddedNow = $false; MarketplaceSwitchedNow = $false; OriginalMarketplaceSource = ''; MarketplaceSource = ''; PluginStatus = 'SkippedByUser'; PluginVersion = ''; HookCount = 0; TrustedHookCount = 0; HookIdentities = @(); ValidationStatus = 'SkippedByUser'; TrustStatus = 'SkippedByUser'; ValidationError = '' }
+    return [pscustomobject]@{ Managed = $false; WasInstalledBefore = $AlreadyInstalled; InstalledNow = $false; UpdatedNow = $false; MarketplaceStatus = 'SkippedByUser'; MarketplaceAddedNow = $false; MarketplaceSwitchedNow = $false; MarketplaceRecoveredNow = $false; OriginalMarketplaceSource = ''; MarketplaceSource = ''; PluginStatus = 'SkippedByUser'; PluginVersion = ''; HookCount = 0; TrustedHookCount = 0; HookIdentities = @(); ValidationStatus = 'SkippedByUser'; TrustStatus = 'SkippedByUser'; ValidationError = '' }
 }
 
 function Undo-PonytailInstallation($Result) {
@@ -297,8 +368,8 @@ function Get-PonytailInstallationComponents($Result) {
     return @(
         [pscustomobject]@{ Name = 'Ponytail marketplace'; Status = [string]$Result.MarketplaceStatus; Result = 'DietrichGebert/ponytail' }
         [pscustomobject]@{ Name = 'Ponytail plugin'; Status = [string]$Result.PluginStatus; Result = $script:PonytailPluginId }
-        [pscustomobject]@{ Name = 'Ponytail hooks'; Status = [string]$Result.ValidationStatus; Result = ([string]$Result.HookCount + '/2 detected') }
-        [pscustomobject]@{ Name = 'Ponytail hook trust'; Status = [string]$Result.TrustStatus; Result = ([string]$Result.TrustedHookCount + '/2 trusted') }
+        [pscustomobject]@{ Name = 'Ponytail hooks'; Status = [string]$Result.ValidationStatus; Result = ([string]$Result.HookCount + ' detected') }
+        [pscustomobject]@{ Name = 'Ponytail hook trust'; Status = [string]$Result.TrustStatus; Result = ([string]$Result.TrustedHookCount + ' trusted') }
     )
 }
 

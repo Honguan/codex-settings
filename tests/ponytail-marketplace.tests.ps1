@@ -6,6 +6,7 @@ $script:ScriptRoot = Join-Path $repositoryRoot 'src'
 $script:commands = New-Object 'System.Collections.Generic.List[string]'
 $script:allowMarketplaceMutation = $false
 $script:failPluginAdd = $false
+$script:marketplaceListMode = 'Listed'
 function Invoke-PonytailCodexCommand {
     param([string[]]$Arguments)
 
@@ -13,18 +14,33 @@ function Invoke-PonytailCodexCommand {
     [void]$script:commands.Add($command)
     switch ($command) {
         'plugin marketplace list --json' {
+            if ($script:marketplaceListMode -eq 'Orphaned') {
+                return [pscustomobject]@{
+                    ExitCode = 0
+                    Output = @('{"marketplaces":[]}')
+                }
+            }
             return [pscustomobject]@{
                 ExitCode = 0
                 Output = @('{"marketplaces":[{"name":"ponytail","root":"C:\\cache\\ponytail"}]}')
             }
         }
         'plugin list --json' {
+            if ($script:marketplaceListMode -eq 'Orphaned') {
+                return [pscustomobject]@{ ExitCode = 0; Output = @('{"installed":[],"available":[]}') }
+            }
+            if ($script:marketplaceListMode -eq 'GitPlugin') {
+                return [pscustomobject]@{ ExitCode = 0; Output = @('{"installed":[{"pluginId":"ponytail@ponytail","marketplaceName":"ponytail","version":"4.9.0","source":{"source":"git","url":"https://github.com/DietrichGebert/ponytail.git","ref":"main"},"marketplaceSource":{"sourceType":"git","source":"https://github.com/DietrichGebert/ponytail.git"}}]}') }
+            }
             return [pscustomobject]@{
                 ExitCode = 0
                 Output = @('{"installed":[{"pluginId":"ponytail@ponytail","version":"1.2.3","source":{"path":"C:\\cache\\ponytail\\plugins\\ponytail"},"marketplaceSource":{"sourceType":"git","source":"https://github.com/DietrichGebert/ponytail.git"}}]}')
             }
         }
         'plugin marketplace upgrade ponytail --json' {
+            if ($script:marketplaceListMode -eq 'Orphaned') {
+                return [pscustomobject]@{ ExitCode = 1; Output = @('Error: marketplace `ponytail` is not configured as a Git marketplace') }
+            }
             return [pscustomobject]@{ ExitCode = 0; Output = @('{"status":"updated"}') }
         }
         'plugin add ponytail@ponytail --json' {
@@ -36,15 +52,37 @@ function Invoke-PonytailCodexCommand {
         }
         default {
             if ($command -like 'plugin marketplace add *') {
-                if ($script:allowMarketplaceMutation) { return [pscustomobject]@{ ExitCode = 0; Output = @('{"status":"added"}') } }
+                if ($script:allowMarketplaceMutation) {
+                    $script:marketplaceListMode = 'Listed'
+                    return [pscustomobject]@{ ExitCode = 0; Output = @('{"status":"added"}') }
+                }
                 return [pscustomobject]@{ ExitCode = 1; Output = @("Error: marketplace 'ponytail' is already added from a different source") }
             }
             if ($command -eq 'plugin marketplace remove ponytail --json') {
-                if ($script:allowMarketplaceMutation) { return [pscustomobject]@{ ExitCode = 0; Output = @('{"status":"removed"}') } }
+                if ($script:allowMarketplaceMutation) {
+                    $script:marketplaceListMode = 'Missing'
+                    return [pscustomobject]@{ ExitCode = 0; Output = @('{"status":"removed"}') }
+                }
             }
             throw "未預期的 Codex 指令：$command"
         }
     }
+}
+
+$hookRoot = Join-Path ([IO.Path]::GetTempPath()) ('codex-settings-ponytail-hooks-' + [guid]::NewGuid().ToString('N'))
+$previousAppServerCommand = $env:CODEX_SETTINGS_APP_SERVER_TEST_COMMAND
+$previousPonytailSource = $env:CODEX_SETTINGS_PONYTAIL_TEST_SOURCE
+try {
+    $pluginSource = Join-Path $hookRoot 'plugins\cache\ponytail\ponytail\4.9.0'
+    [void](New-Item -ItemType Directory -Path (Join-Path $pluginSource 'hooks') -Force)
+    $env:CODEX_SETTINGS_APP_SERVER_TEST_COMMAND = Join-Path $PSScriptRoot 'fixtures\ponytail-app-server.ps1'
+    $env:CODEX_SETTINGS_PONYTAIL_TEST_SOURCE = $pluginSource
+    $hookState = Get-PonytailHookState -State ([pscustomobject]@{ PluginPresent = $true; PluginSourcePath = $pluginSource }) -Root $hookRoot
+    if ($hookState.DetectedCount -ne 3 -or $hookState.TrustedCount -ne 3) { throw "Ponytail hooks 應全數信任並重新驗證：$($hookState.DetectedCount)/$($hookState.TrustedCount)" }
+} finally {
+    $env:CODEX_SETTINGS_APP_SERVER_TEST_COMMAND = $previousAppServerCommand
+    $env:CODEX_SETTINGS_PONYTAIL_TEST_SOURCE = $previousPonytailSource
+    if (Test-Path -LiteralPath $hookRoot) { Remove-Item -LiteralPath $hookRoot -Recurse -Force }
 }
 
 function Get-PonytailHookState {
@@ -61,6 +99,42 @@ $result = Invoke-PonytailInstallation -State $state -Root $repositoryRoot
 if ($script:commands -contains 'plugin marketplace add DietrichGebert/ponytail --json') { throw '已存在且來源等價時不得再次 add marketplace。' }
 if ($script:commands -notcontains 'plugin marketplace upgrade ponytail --json') { throw '已存在且來源等價時應沿用 alias 並 upgrade。' }
 if ($result.ValidationStatus -ne 'Validated') { throw '等價來源安裝後應完成 Hook 驗證。' }
+
+$orphanedRoot = Join-Path ([IO.Path]::GetTempPath()) ('codex-settings-ponytail-' + [guid]::NewGuid().ToString('N'))
+try {
+    $metadataRoot = Join-Path $orphanedRoot '.tmp\marketplaces\ponytail'
+    [void](New-Item -ItemType Directory -Path $metadataRoot -Force)
+    @{ source_type = 'git'; source = 'https://github.com/DietrichGebert/ponytail.git'; ref_name = $null; sparse_paths = @(); revision = 'abc123' } |
+        ConvertTo-Json | Set-Content -LiteralPath (Join-Path $metadataRoot '.codex-marketplace-install.json') -Encoding utf8
+    $script:marketplaceListMode = 'Orphaned'
+    $orphanedState = Get-PonytailInstallationState -Root $orphanedRoot
+    if (-not $orphanedState.MarketplaceCachePresent) { throw '孤立 marketplace cache 應在 discovery 階段被偵測。' }
+    if ($orphanedState.MarketplaceListed) { throw '孤立 marketplace cache 不應標示為 CLI list 中的可用 marketplace。' }
+    if ($orphanedState.SourceRelationship -ne 'Equivalent') { throw "孤立等價來源應標示 Equivalent：$($orphanedState.SourceRelationship)" }
+    $script:allowMarketplaceMutation = $true
+    $script:commands.Clear()
+    $recovered = Invoke-PonytailInstallation -State $orphanedState -Root $orphanedRoot
+    if (-not $recovered.MarketplaceRecoveredNow -or $recovered.MarketplaceStatus -ne 'Recovered') { throw '孤立等價 marketplace 應安全重建 CLI 設定。' }
+    if ($script:commands -notcontains 'plugin marketplace remove ponytail --json' -or $script:commands -notcontains 'plugin marketplace add https://github.com/DietrichGebert/ponytail.git --json') { throw '孤立 marketplace 復原必須先清理失效 cache，再以原始來源重建設定。' }
+} finally {
+    $script:allowMarketplaceMutation = $false
+    $script:marketplaceListMode = 'Listed'
+    if (Test-Path -LiteralPath $orphanedRoot) { Remove-Item -LiteralPath $orphanedRoot -Recurse -Force }
+}
+
+$gitPluginRoot = Join-Path ([IO.Path]::GetTempPath()) ('codex-settings-ponytail-git-' + [guid]::NewGuid().ToString('N'))
+try {
+    $expectedPluginPath = Join-Path $gitPluginRoot 'plugins\cache\ponytail\ponytail\4.9.0'
+    [void](New-Item -ItemType Directory -Path $expectedPluginPath -Force)
+    $script:marketplaceListMode = 'GitPlugin'
+    $gitPluginState = Get-PonytailInstallationState -Root $gitPluginRoot
+    if (-not [string]::Equals([IO.Path]::GetFullPath($gitPluginState.PluginSourcePath), [IO.Path]::GetFullPath($expectedPluginPath), [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Git plugin cache path 推導錯誤：$($gitPluginState.PluginSourcePath)"
+    }
+} finally {
+    $script:marketplaceListMode = 'Listed'
+    if (Test-Path -LiteralPath $gitPluginRoot) { Remove-Item -LiteralPath $gitPluginRoot -Recurse -Force }
+}
 
 $conflictState = $state.PSObject.Copy()
 $conflictState.MarketplaceSource = 'some-other/source'
