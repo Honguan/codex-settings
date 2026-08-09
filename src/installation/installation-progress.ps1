@@ -4,6 +4,7 @@ function New-InstallationProgressSteps {
         [int]$TargetCount = 1,
         [switch]$IncludeContext7,
         [switch]$IncludeSkills,
+        [switch]$IncludePonytail,
         [switch]$IncludeNotifications
     )
 
@@ -17,6 +18,7 @@ function New-InstallationProgressSteps {
     if ($IncludeContext7) { [void]$steps.Add([pscustomobject]@{ Id = 'Context7'; Name = 'Context7 設定'; Detail = ''; Index = 0; Status = 'Pending'; StartedAt = $null; Result = ''; ElapsedSeconds = 0 }) }
     [void]$steps.Add([pscustomobject]@{ Id = 'Ccusage'; Name = 'ccusage / ccsessions / cdaily'; Detail = ''; Index = 0; Status = 'Pending'; StartedAt = $null; Result = ''; ElapsedSeconds = 0 })
     if ($IncludeSkills) { [void]$steps.Add([pscustomobject]@{ Id = 'Skills'; Name = '選用 Skills'; Detail = ''; Index = 0; Status = 'Pending'; StartedAt = $null; Result = ''; ElapsedSeconds = 0 }) }
+    if ($IncludePonytail) { [void]$steps.Add([pscustomobject]@{ Id = 'Ponytail'; Name = 'Ponytail plugin 與 lifecycle hooks'; Detail = ''; Index = 0; Status = 'Pending'; StartedAt = $null; Result = ''; ElapsedSeconds = 0 }) }
     if ($IncludeNotifications) { [void]$steps.Add([pscustomobject]@{ Id = 'Notifications'; Name = 'Windows 通知'; Detail = ''; Index = 0; Status = 'Pending'; StartedAt = $null; Result = ''; ElapsedSeconds = 0 }) }
     [void]$steps.Add([pscustomobject]@{ Id = 'Final'; Name = 'Manifest / 最終驗證'; Detail = ''; Index = 0; Status = 'Pending'; StartedAt = $null; Result = ''; ElapsedSeconds = 0 })
 
