@@ -64,7 +64,7 @@ try {
         [pscustomobject]@{ Name = 'ccusage'; Status = 'Existing'; Result = '20.0.19' },
         [pscustomobject]@{ Name = 'ccsessions'; Status = 'Updated'; Result = 'Profile 已更新' },
         [pscustomobject]@{ Name = 'Context7'; Status = 'SkippedByUser'; Result = '使用者略過' },
-        [pscustomobject]@{ Name = 'Windows notifications'; Status = 'Unchanged'; Result = 'Hook 未變更' }
+        [pscustomobject]@{ Name = 'Windows 開發狀態與使用量通知'; Status = 'Unchanged'; Result = 'Hook 未變更' }
     )
     $contentOutput = (& { Write-InstallResult -Progress $interactiveProgress -Status SUCCESS -Summary @{ Installed = 1; Updated = 1; Unchanged = 1; Skipped = 1 } -Results $installationResults -Components $components } 6>&1 | Out-String)
     foreach ($expected in @('[=] config.toml', '[~] hooks.json', '[+] hooks\show-codex-notification.ps1', '[-] optional.txt', '[=] ccusage', '[~] ccsessions', '[-] Context7', '[=] Windows notifications')) {
@@ -84,7 +84,7 @@ try {
         Write-InstallationSummary -InstallStyle Merge -DevelopmentEnvironment Git -Results $installationResults -Ccusage $ccusage -CcusageBefore $ccusageBefore -HookTrust $hookTrust -TransactionRoot 'C:\backup' -InstallWindowsNotifications $true -Progress $runnerProgress -NotificationStatus '已送出測試通知' -SkippedCount 0 -SkipContext7Key $true -InstallMattPocockSkills $false -InstallRequestExecutionOptimizer $false -EnableDefaultModeRequestUserInput $true
     } 6>&1 | Out-String)
     if (@([regex]::Matches($runnerOutput, '(?m)^安裝完成')).Count -ne 1) { throw 'runner 不應先輸出舊摘要再輸出第二份最終摘要。' }
-    foreach ($expected in @('config.toml', 'hooks.json', 'Codex', 'MCP / Context7', 'ccusage', 'ccsessions', 'cdaily', 'request-execution-optimizer', 'mattpocock/skills', 'request_user_input feature', 'Windows notifications', 'Hook trust')) {
+    foreach ($expected in @('config.toml', 'hooks.json', 'Codex', 'MCP / Context7', 'ccusage', 'ccsessions', 'cdaily', 'request-execution-optimizer', 'mattpocock/skills', 'request_user_input feature', 'Windows 開發狀態與使用量通知', 'Hook trust')) {
         if (-not $runnerOutput.Contains($expected)) { throw "runner 最終摘要缺少處理結果：$expected" }
     }
 
