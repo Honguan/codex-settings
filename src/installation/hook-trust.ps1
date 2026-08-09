@@ -74,7 +74,10 @@ function Set-CodexSettingsHookTrust([string]$Root, [string]$Cwd = (Get-Location)
         $listResult = Read-CodexAppServerResponse -Process $process -RequestId 2
         $cwdResult = @($listResult.data | Where-Object { [IO.Path]::GetFullPath([string]$_.cwd) -eq [IO.Path]::GetFullPath($Cwd) } | Select-Object -First 1)[0]
         if ($null -eq $cwdResult) { throw 'Codex app-server did not return Hook information for the installation directory.' }
-        if (@($cwdResult.errors).Count -gt 0) { throw "Codex Hook discovery failed: $(@($cwdResult.errors) -join '; ')" }
+        $discoveryErrors = @($cwdResult.errors | Where-Object { $null -ne $_ } | ForEach-Object {
+            if ($null -ne $_.PSObject.Properties['message']) { [string]$_.message } else { [string]$_ }
+        } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        if ($discoveryErrors.Count -gt 0) { throw "Codex Hook discovery failed: $($discoveryErrors -join '; ')" }
 
         $managedHooks = @(@($cwdResult.hooks) | Where-Object {
             -not [string]::IsNullOrWhiteSpace([string]$_.sourcePath) -and

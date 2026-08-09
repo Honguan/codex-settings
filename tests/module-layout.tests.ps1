@@ -64,6 +64,7 @@ foreach ($commandName in @(
     'Set-InstallProgress',
     'Complete-InstallStep',
     'Fail-InstallStep',
+    'Write-InstallErrorRecord',
     'Write-InstallResult',
     'Invoke-TargetInstallation',
     'Get-InstallationDiscovery',

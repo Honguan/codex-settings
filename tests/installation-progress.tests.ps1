@@ -19,14 +19,37 @@ try {
     $progress = Start-InstallProgress -Steps $fullSteps -Root $testRoot -Metadata @{ Test = 'installation-progress' }
     Set-InstallProgress -Progress $progress -StepId 'Plan' -Detail '測試安裝計畫'
     Complete-InstallStep -Progress $progress -Result '通過'
+    Set-InstallProgress -Progress $progress -StepId 'Hooks' -Detail '測試錯誤診斷'
+    try {
+        throw 'Hook trust failed with CONTEXT7_API_KEY=do-not-log-this-secret'
+    } catch {
+        Write-InstallErrorRecord -Progress $progress -ErrorRecord $_ -CurrentSubOperation 'HookTrust'
+    }
+    Complete-InstallStep -Progress $progress -Result '診斷已記錄'
     $summary = [ordered]@{ Installed = 1; Updated = 2; Unchanged = 3; Skipped = 4; Rollback = 'N/A' }
     Write-InstallResult -Progress $progress -Status SUCCESS -Summary $summary
 
     if (-not (Test-Path -LiteralPath $progress.LogPath -PathType Leaf)) { throw '安裝 log 未建立。' }
     $log = Get-Content -LiteralPath $progress.LogPath -Raw
-    foreach ($marker in @('INSTALL START', 'STEP START Plan', 'STEP END Plan', 'INSTALL END status=SUCCESS')) {
+    foreach ($marker in @(
+        'INSTALL START',
+        'STEP START Plan',
+        'STEP END Plan',
+        'ERROR CurrentStepId=Hooks; CurrentSubOperation=HookTrust',
+        'ExceptionType=System.Management.Automation.RuntimeException',
+        'Message=Hook trust failed with CONTEXT7_API_KEY=<REDACTED>',
+        'FullyQualifiedErrorId=',
+        'CategoryInfo=',
+        'InvocationInfo.MyCommand=',
+        'InvocationInfo.ScriptName=',
+        'InvocationInfo.ScriptLineNumber=',
+        'InvocationInfo.PositionMessage=',
+        'ScriptStackTrace=',
+        'INSTALL END status=SUCCESS'
+    )) {
         if ($log -notmatch [regex]::Escape($marker)) { throw "安裝 log 缺少記錄：$marker" }
     }
+    if ($log -match 'do-not-log-this-secret') { throw '安裝 log 洩漏敏感值。' }
     if ((Get-Command Write-InstallResult -CommandType Function).Name -ne 'Write-InstallResult') { throw '缺少安裝結果函式。' }
 
     $targetRoot = Join-Path $testRoot 'target'

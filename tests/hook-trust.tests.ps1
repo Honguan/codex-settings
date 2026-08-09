@@ -29,11 +29,13 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
         'hooks/list' {
             $status = if ($trusted) { 'trusted' } else { 'untrusted' }
             $hooks = if ($env:CODEX_SETTINGS_TEST_NO_MANAGED_HOOKS -eq '1') { @() } else { @(
-                    @{ key = "$($env:CODEX_SETTINGS_TEST_HOOKS_PATH):session_start:0:0"; sourcePath = $env:CODEX_SETTINGS_TEST_HOOKS_PATH; command = 'custom-session-start.ps1'; currentHash = 'sha256:custom'; trustStatus = 'untrusted'; enabled = $true },
-                    @{ key = "$($env:CODEX_SETTINGS_TEST_HOOKS_PATH):stop:0:0"; sourcePath = $env:CODEX_SETTINGS_TEST_HOOKS_PATH; command = 'pwsh show-codex-notification.ps1 -Type Completed'; currentHash = 'sha256:notification'; trustStatus = $status; enabled = $true },
-                    @{ key = "$($env:CODEX_SETTINGS_TEST_HOOKS_PATH):post_tool_use:0:0"; sourcePath = $env:CODEX_SETTINGS_TEST_HOOKS_PATH; command = 'pwsh preserve-line-endings.ps1 -Mode Restore'; currentHash = 'sha256:line-ending'; trustStatus = $status; enabled = $true }
+                    @{ key = "$($env:CODEX_SETTINGS_TEST_HOOKS_PATH):session_start:0:0"; sourcePath = $env:CODEX_SETTINGS_TEST_HOOKS_PATH; command = 'custom-session-start.ps1'; commandWindows = $null; matcher = '*'; timeout = 30; currentHash = 'sha256:custom'; trustStatus = 'untrusted'; enabled = $true },
+                    @{ key = "$($env:CODEX_SETTINGS_TEST_HOOKS_PATH):stop:0:0"; sourcePath = $env:CODEX_SETTINGS_TEST_HOOKS_PATH; command = $null; commandWindows = 'pwsh.exe show-codex-notification.ps1 -Type Completed'; matcher = @{ kind = 'runtime'; pattern = '*' }; timeout = 30; currentHash = 'sha256:notification'; trustStatus = $status; enabled = $true },
+                    @{ key = "$($env:CODEX_SETTINGS_TEST_HOOKS_PATH):post_tool_use:0:0"; sourcePath = $env:CODEX_SETTINGS_TEST_HOOKS_PATH; command = 'pwsh preserve-line-endings.ps1 -Mode Restore'; commandWindows = $null; matcher = $null; timeout = 30; currentHash = 'sha256:line-ending'; trustStatus = $status; enabled = $true }
                 ) }
-            $result = @{ data = @(@{ cwd = $env:CODEX_SETTINGS_TEST_CWD; hooks = $hooks; warnings = @(); errors = @() }) }
+            if ($env:CODEX_SETTINGS_TEST_SINGLE_MANAGED_HOOK -eq '1') { $hooks = @($hooks[1]) }
+            $discoveryErrors = if ($env:CODEX_SETTINGS_TEST_DISCOVERY_ERROR -eq '1') { @('fixture discovery error') } else { @() }
+            $result = @{ data = @(@{ cwd = $env:CODEX_SETTINGS_TEST_CWD; hooks = $hooks; warnings = @(); errors = @($discoveryErrors) }) }
             [Console]::Out.WriteLine((@{ id = $request.id; result = $result } | ConvertTo-Json -Depth 10 -Compress))
         }
         'config/batchWrite' {
@@ -77,10 +79,26 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
         throw 'Installer did not start and verify Hooks through the resolved codex.cmd shim.'
     }
 
+    $env:CODEX_SETTINGS_TEST_SINGLE_MANAGED_HOOK = '1'
+    $singleResult = Set-CodexSettingsHookTrust -Root $globalRoot -Cwd $repositoryRoot
+    if ($singleResult.TrustedCount -ne 1 -or $singleResult.UpdatedCount -ne 1 -or -not [bool]$singleResult.Verified) {
+        throw 'Installer did not accept a single runtime Hook using commandWindows and an object matcher.'
+    }
+    Remove-Item Env:\CODEX_SETTINGS_TEST_SINGLE_MANAGED_HOOK
+
     $env:CODEX_SETTINGS_TEST_NO_MANAGED_HOOKS = '1'
     $emptyResult = Set-CodexSettingsHookTrust -Root $globalRoot -Cwd $repositoryRoot
     if ($emptyResult.TrustedCount -ne 0 -or $emptyResult.UpdatedCount -ne 0 -or -not [bool]$emptyResult.Verified) {
         throw 'Installer did not accept an installation without managed Hooks.'
+    }
+    Remove-Item Env:\CODEX_SETTINGS_TEST_NO_MANAGED_HOOKS
+
+    $env:CODEX_SETTINGS_TEST_DISCOVERY_ERROR = '1'
+    try {
+        Set-CodexSettingsHookTrust -Root $globalRoot -Cwd $repositoryRoot | Out-Null
+        throw 'Hook discovery errors were ignored.'
+    } catch {
+        if ($_.Exception.Message -notmatch 'Codex Hook discovery failed') { throw }
     }
 
     Write-Host 'Managed hook trust tests passed.'
@@ -92,5 +110,7 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
     Remove-Item Env:\CODEX_SETTINGS_TEST_CAPTURE_PATH -ErrorAction SilentlyContinue
     Remove-Item Env:\CODEX_SETTINGS_TEST_CWD -ErrorAction SilentlyContinue
     Remove-Item Env:\CODEX_SETTINGS_TEST_NO_MANAGED_HOOKS -ErrorAction SilentlyContinue
+    Remove-Item Env:\CODEX_SETTINGS_TEST_SINGLE_MANAGED_HOOK -ErrorAction SilentlyContinue
+    Remove-Item Env:\CODEX_SETTINGS_TEST_DISCOVERY_ERROR -ErrorAction SilentlyContinue
     if (Test-Path -LiteralPath $testRoot) { Remove-Item -LiteralPath $testRoot -Recurse -Force }
 }
