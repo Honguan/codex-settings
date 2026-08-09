@@ -34,7 +34,7 @@ function Invoke-InteractiveMode {
                 $selectedEnvironment = Select-DevelopmentEnvironment -Default $DevelopmentEnvironment
                 $installRequestExecutionOptimizer = Select-OptionalGlobalSkill
                 $installMattPocockSkills = Select-OptionalMattPocockSkills
-                $ponytailState = Get-PonytailInstallationState
+                $ponytailState = Get-PonytailInstallationState -Root $GlobalRoot
                 $installPonytail = Select-OptionalPonytail -AlreadyInstalled:([bool]$ponytailState.PluginPresent)
                 $ponytailMarketplaceAction = if ($installPonytail) { Select-PonytailMarketplaceAction -State $ponytailState } else { 'Auto' }
                 if ($ponytailMarketplaceAction -eq 'Skip') { $installPonytail = $false }
@@ -170,7 +170,7 @@ function Invoke-GlobalInstallation {
     if (-not $InstallMattPocockSkills -and (Test-MattPocockSkillsInstalled)) {
         $InstallMattPocockSkills = $true
     }
-    if ($InstallPonytail -and $null -eq $PonytailState) { $PonytailState = Get-PonytailInstallationState }
+    if ($InstallPonytail -and $null -eq $PonytailState) { $PonytailState = Get-PonytailInstallationState -Root $Context.GlobalRoot }
     $targets = @(New-InstallationPlan -DevelopmentEnvironment $Context.DevelopmentEnvironment -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput -InstallWindowsNotifications $Context.InstallWindowsNotifications -SourceRoot $Context.ScriptRoot -IncludeExistingSkills $Context.ExistingSkillsInstalled)
     $steps = New-InstallationProgressSteps -TargetCount $targets.Count -IncludeContext7:(-not $SkipContext7Key) -IncludeSkills:$InstallMattPocockSkills -IncludePonytail:$InstallPonytail -IncludeCodexOrchestration:$InstallCodexOrchestration -IncludeSerena:$InstallSerena -IncludeNotifications:$Context.InstallWindowsNotifications
     $progress = Start-InstallProgress -Steps $steps -Root $Context.GlobalRoot -Metadata @{
@@ -313,10 +313,11 @@ function Invoke-GlobalInstallation {
             }
 
             if ($InstallPonytail) {
-                Set-InstallProgress -Progress $progress -StepId 'Ponytail' -Detail '更新 marketplace、同步 plugin 並驗證 2 個 lifecycle hooks'
+                Set-InstallProgress -Progress $progress -StepId 'Ponytail' -Detail '更新 marketplace、同步 plugin 並驗證 lifecycle hooks'
                 $ponytail = Invoke-PonytailInstallation -State $PonytailState -Root $Context.GlobalRoot -MarketplaceAction $PonytailMarketplaceAction
-                Write-InstallLog -Progress $progress -Message ('PONYTAIL plugin=' + $ponytail.PluginStatus + '; hooks=' + $ponytail.HookCount + '/2; trust=' + $ponytail.TrustStatus)
-                Complete-InstallStep -Progress $progress -Result ($ponytail.PluginStatus + '; hooks ' + $ponytail.HookCount + '/2')
+                if ($ponytail.ValidationStatus -ne 'Validated') { throw $(if ($ponytail.ValidationError) { [string]$ponytail.ValidationError } else { 'Ponytail lifecycle hooks 驗證失敗。' }) }
+                Write-InstallLog -Progress $progress -Message ('PONYTAIL plugin=' + $ponytail.PluginStatus + '; hooks=' + $ponytail.HookCount + '; trust=' + $ponytail.TrustStatus)
+                Complete-InstallStep -Progress $progress -Result ($ponytail.PluginStatus + '; hooks ' + $ponytail.HookCount)
             }
 
             if ($InstallCodexOrchestration) {
@@ -358,7 +359,7 @@ function Invoke-GlobalInstallation {
                     CurrentVersion = [string]$ccusage.PackageAfter.Version
                     PackageInstalledNow = [bool]$ccusage.PackageInstalledNow
                 }
-                Ponytail = [ordered]@{ Managed = [bool]$ponytail.Managed; Marketplace = $script:PonytailMarketplaceSource; MarketplaceSource = [string]$ponytail.MarketplaceSource; MarketplaceStatus = [string]$ponytail.MarketplaceStatus; MarketplaceAddedNow = [bool]$ponytail.MarketplaceAddedNow; MarketplaceSwitchedNow = [bool]$ponytail.MarketplaceSwitchedNow; Plugin = $script:PonytailPluginId; WasInstalledBefore = [bool]$ponytail.WasInstalledBefore; InstalledNow = [bool]$ponytail.InstalledNow; UpdatedNow = [bool]$ponytail.UpdatedNow; HookCount = [int]$ponytail.HookCount; TrustedHookCount = [int]$ponytail.TrustedHookCount; HookIdentities = @($ponytail.HookIdentities); ValidationStatus = [string]$ponytail.ValidationStatus; TrustStatus = [string]$ponytail.TrustStatus }
+                Ponytail = [ordered]@{ Managed = [bool]$ponytail.Managed; Marketplace = $script:PonytailMarketplaceSource; MarketplaceSource = [string]$ponytail.MarketplaceSource; MarketplaceStatus = [string]$ponytail.MarketplaceStatus; MarketplaceAddedNow = [bool]$ponytail.MarketplaceAddedNow; MarketplaceSwitchedNow = [bool]$ponytail.MarketplaceSwitchedNow; MarketplaceRecoveredNow = [bool]$ponytail.MarketplaceRecoveredNow; Plugin = $script:PonytailPluginId; WasInstalledBefore = [bool]$ponytail.WasInstalledBefore; InstalledNow = [bool]$ponytail.InstalledNow; UpdatedNow = [bool]$ponytail.UpdatedNow; HookCount = [int]$ponytail.HookCount; TrustedHookCount = [int]$ponytail.TrustedHookCount; HookIdentities = @($ponytail.HookIdentities); ValidationStatus = [string]$ponytail.ValidationStatus; TrustStatus = [string]$ponytail.TrustStatus }
                 CodexOrchestration = [ordered]@{ pluginManaged = [bool]$codexOrchestration.Managed; pluginPresent = $codexOrchestration.PluginPresent; pluginUpdatedThisRun = [bool]$codexOrchestration.UpdatedNow; marketplace = $script:CodexOrchestrationMarketplaceSource; plugin = $script:CodexOrchestrationPluginId; workflowManaged = [bool]$codexOrchestration.WorkflowManaged; workflowConfigured = [bool]$codexOrchestration.WorkflowConfigured; workflowEffective = [bool]$codexOrchestration.WorkflowEffective; workflowStatus = [string]$codexOrchestration.WorkflowStatus; workflowConfigurationSummary = [string]$codexOrchestration.WorkflowConfigurationSummary; setupPrompt = [string]$codexOrchestration.SetupPrompt }
                 Serena = [ordered]@{ Managed = [bool]$serena.Managed; SelectedByUser = [bool]$serena.SelectedByUser; UvAvailable = [bool]$serena.UvAvailable; UvVersion = [string]$serena.UvVersion; VersionBefore = [string]$serena.VersionBefore; VersionAfter = [string]$serena.VersionAfter; InstalledNow = [bool]$serena.InstalledNow; UpdatedNow = [bool]$serena.UpdatedNow; InitializationStatus = [string]$serena.InitializationStatus; CodexMcpConfigured = ([string]$serena.CodexMcpStatus -eq 'Configured'); RuntimeVerified = $false }
                 Context7 = [ordered]@{
@@ -469,6 +470,6 @@ function Invoke-Installer {
         return
     }
 
-    if ($InstallPonytail -and $null -eq $PonytailState) { $PonytailState = Get-PonytailInstallationState }
+    if ($InstallPonytail -and $null -eq $PonytailState) { $PonytailState = Get-PonytailInstallationState -Root $context.GlobalRoot }
     Invoke-GlobalInstallation -Context $context -SkipContext7Key:$SkipContext7Key -SkipCcusageInstall:$SkipCcusageInstall -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -InstallMattPocockSkills:$InstallMattPocockSkills -InstallPonytail:$InstallPonytail -SkipPonytail:$SkipPonytail -PonytailState $PonytailState -PonytailMarketplaceAction $PonytailMarketplaceAction -InstallCodexOrchestration:$InstallCodexOrchestration -SkipCodexOrchestration:$SkipCodexOrchestration -ConfigureCodexOrchestration:$ConfigureCodexOrchestration -InstallSerena:$InstallSerena -SkipSerena:$SkipSerena -InstallSerenaUv:$InstallSerenaUv -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput -ForceValidation:$ForceValidation -ForceNotificationTest:$ForceNotificationTest -RendererMode $(if ($NoPause) { 'Line' } else { 'Auto' })
 }
