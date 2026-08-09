@@ -228,7 +228,7 @@ try {
         if (Select-OptionalWindowsNotifications -AlreadyInstalled:$false) { throw 'Blank first-install selection must not install Windows notifications.' }
         if ($script:capturedNotificationPrompt -ne '要安裝嗎？[y/N]') { throw 'First-install notification prompt is invalid.' }
         if (-not (Select-OptionalWindowsNotifications -AlreadyInstalled:$true)) { throw 'Blank update selection must preserve Windows notifications.' }
-        if ($script:capturedNotificationPrompt -ne '要繼續安裝嗎？[Y/n]') { throw 'Existing notification prompt is invalid.' }
+        if ($script:capturedNotificationPrompt -ne '要繼續安裝/更新嗎？[Y/n]') { throw 'Existing notification prompt is invalid.' }
     } finally {
         Remove-Item -LiteralPath Function:\Read-Host -ErrorAction SilentlyContinue
     }
