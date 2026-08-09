@@ -11,7 +11,7 @@ try {
     }
 
     $fullSteps = @(New-InstallationProgressSteps -TargetCount 2 -IncludeContext7 -IncludeSkills -IncludeCodexOrchestration -IncludeSerena -IncludeNotifications)
-    foreach ($requiredId in @('Prerequisites', 'Plan', 'Lock', 'Backup', 'Targets', 'Hooks', 'Context7', 'Ccusage', 'Skills', 'CodexOrchestration', 'Serena', 'Notifications', 'Final')) {
+    foreach ($requiredId in @('Prerequisites', 'Plan', 'Lock', 'Backup', 'Targets', 'Hooks', 'Context7', 'PersonalCheckpoint', 'Skills', 'CodexOrchestration', 'Serena', 'Notifications', 'Final')) {
         if ($fullSteps.Id -notcontains $requiredId) { throw "缺少安裝進度階段：$requiredId" }
     }
     if (@($fullSteps | Where-Object Id -eq 'Targets')[0].TargetCount -ne 2) { throw '安裝進度未記錄目標數量。' }
@@ -27,7 +27,8 @@ try {
     $dynamicProgress = Start-InstallProgress -Steps $dynamicSteps -Root $dynamicRoot -RendererMode Interactive
     Set-InstallProgress -Progress $dynamicProgress -StepId 'Plan' -Detail '第一個動態步驟'
     $firstDynamicCall = $script:progressCalls[0]
-    if ($dynamicSteps[0].Id -ne 'Plan' -or $firstDynamicCall.Percent -ne 0 -or $firstDynamicCall.Status -notmatch "1/$($dynamicSteps.Count)") { throw '動態步驟的第一階段未從一致的 0% 與 1/total 開始。' }
+    $personalCount = @($dynamicSteps | Where-Object Category -eq 'Personal').Count
+    if ($dynamicSteps[0].Id -ne 'Plan' -or $firstDynamicCall.Percent -ne 0 -or $firstDynamicCall.Status -notmatch "Personal 1/$personalCount") { throw '動態步驟的第一階段未從一致的 0% 與 Personal 1/total 開始。' }
     Complete-InstallStep -Progress $dynamicProgress -Result '完成'
     $completedDynamicCall = $script:progressCalls[$script:progressCalls.Count - 1]
     $expectedFirstCompletion = [int][Math]::Round(100 / $dynamicSteps.Count)
@@ -84,8 +85,11 @@ try {
         Write-InstallationSummary -InstallStyle Merge -DevelopmentEnvironment Git -Results $installationResults -Ccusage $ccusage -CcusageBefore $ccusageBefore -HookTrust $hookTrust -TransactionRoot 'C:\backup' -InstallWindowsNotifications $true -Progress $runnerProgress -NotificationStatus '已送出測試通知' -SkippedCount 0 -SkipContext7Key $true -InstallMattPocockSkills $false -InstallRequestExecutionOptimizer $false -EnableDefaultModeRequestUserInput $true
     } 6>&1 | Out-String)
     if (@([regex]::Matches($runnerOutput, '(?m)^安裝完成')).Count -ne 1) { throw 'runner 不應先輸出舊摘要再輸出第二份最終摘要。' }
-    foreach ($expected in @('config.toml', 'hooks.json', 'Codex', 'MCP / Context7', 'ccusage', 'ccsessions', 'cdaily', 'request-execution-optimizer', 'mattpocock/skills', 'request_user_input feature', 'Windows 開發狀態與使用量通知', 'Hook trust')) {
+    foreach ($expected in @('config.toml', 'hooks.json', '個人 Codex Settings', '社區／開源元件', 'Codex Settings', 'MCP / Context7', 'request-execution-optimizer', 'mattpocock/skills', 'request_user_input feature', 'Windows 開發狀態與使用量通知')) {
         if (-not $runnerOutput.Contains($expected)) { throw "runner 最終摘要缺少處理結果：$expected" }
+    }
+    foreach ($expected in @('PersonalResult: SUCCESS', 'CommunityResult: SUCCESS', 'OverallResult: SUCCESS', 'Personal', 'Community')) {
+        if (-not $runnerOutput.Contains($expected)) { throw "runner 最終摘要缺少分區結果或統計：$expected" }
     }
 
     $planProgress = Start-InstallProgress -Steps @(New-InstallationProgressSteps) -Root (Join-Path $testRoot 'plan-output') -RendererMode Interactive

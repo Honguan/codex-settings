@@ -11,23 +11,35 @@ function New-InstallationProgressSteps {
     )
 
     $steps = New-Object 'System.Collections.Generic.List[object]'
-    [void]$steps.Add([pscustomobject]@{ Id = 'Plan'; Name = '安裝計畫'; Detail = ''; Index = 0; Status = 'Pending'; StartedAt = $null; Result = ''; ElapsedSeconds = 0 })
-    [void]$steps.Add([pscustomobject]@{ Id = 'Prerequisites'; Name = '前置需求檢查'; Detail = ''; Index = 0; Status = 'Pending'; StartedAt = $null; Result = ''; ElapsedSeconds = 0 })
-    [void]$steps.Add([pscustomobject]@{ Id = 'Lock'; Name = '取得安裝鎖 / 回復中斷交易'; Detail = ''; Index = 0; Status = 'Pending'; StartedAt = $null; Result = ''; ElapsedSeconds = 0 })
-    [void]$steps.Add([pscustomobject]@{ Id = 'Backup'; Name = '建立交易備份'; Detail = ''; Index = 0; Status = 'Pending'; StartedAt = $null; Result = ''; ElapsedSeconds = 0 })
-    [void]$steps.Add([pscustomobject]@{ Id = 'Targets'; Name = '安裝/合併目標檔案'; Detail = ''; Index = 0; Status = 'Pending'; StartedAt = $null; Result = ''; ElapsedSeconds = 0; TargetCount = $TargetCount })
-    [void]$steps.Add([pscustomobject]@{ Id = 'Hooks'; Name = 'Hook 去重與信任驗證'; Detail = ''; Index = 0; Status = 'Pending'; StartedAt = $null; Result = ''; ElapsedSeconds = 0 })
-    if ($IncludeContext7) { [void]$steps.Add([pscustomobject]@{ Id = 'Context7'; Name = 'Context7 設定'; Detail = ''; Index = 0; Status = 'Pending'; StartedAt = $null; Result = ''; ElapsedSeconds = 0 }) }
-    [void]$steps.Add([pscustomobject]@{ Id = 'Ccusage'; Name = 'ccusage / ccsessions / cdaily'; Detail = ''; Index = 0; Status = 'Pending'; StartedAt = $null; Result = ''; ElapsedSeconds = 0 })
-    if ($IncludeSkills) { [void]$steps.Add([pscustomobject]@{ Id = 'Skills'; Name = '選用 Skills'; Detail = ''; Index = 0; Status = 'Pending'; StartedAt = $null; Result = ''; ElapsedSeconds = 0 }) }
-    if ($IncludePonytail) { [void]$steps.Add([pscustomobject]@{ Id = 'Ponytail'; Name = 'Ponytail plugin 與 lifecycle hooks'; Detail = ''; Index = 0; Status = 'Pending'; StartedAt = $null; Result = ''; ElapsedSeconds = 0 }) }
-    if ($IncludeCodexOrchestration) { [void]$steps.Add([pscustomobject]@{ Id = 'CodexOrchestration'; Name = 'Codex-Orchestration plugin 與 workflow'; Detail = ''; Index = 0; Status = 'Pending'; StartedAt = $null; Result = ''; ElapsedSeconds = 0 }) }
-    if ($IncludeSerena) { [void]$steps.Add([pscustomobject]@{ Id = 'Serena'; Name = 'Serena 安裝與 Codex MCP 設定'; Detail = ''; Index = 0; Status = 'Pending'; StartedAt = $null; Result = ''; ElapsedSeconds = 0 }) }
-    if ($IncludeNotifications) { [void]$steps.Add([pscustomobject]@{ Id = 'Notifications'; Name = 'Windows 開發狀態與使用量通知'; Detail = ''; Index = 0; Status = 'Pending'; StartedAt = $null; Result = ''; ElapsedSeconds = 0 }) }
-    [void]$steps.Add([pscustomobject]@{ Id = 'Final'; Name = 'Manifest / 最終驗證'; Detail = ''; Index = 0; Status = 'Pending'; StartedAt = $null; Result = ''; ElapsedSeconds = 0 })
+    $addStep = {
+        param([string]$Id, [string]$Name, [string]$Category, [string]$Component)
+        [void]$steps.Add([pscustomobject]@{ Id = $Id; Name = $Name; Category = $Category; Component = $Component; CategoryIndex = 0; CategoryTotal = 0; Detail = ''; Index = 0; Status = 'Pending'; StartedAt = $null; Result = ''; ElapsedSeconds = 0 })
+    }
+    & $addStep 'Plan' '安裝計畫' 'Personal' 'CodexSettings'
+    & $addStep 'Prerequisites' '前置需求檢查' 'Personal' 'CodexSettings'
+    & $addStep 'Lock' '取得安裝鎖 / 回復中斷交易' 'Personal' 'CodexSettings'
+    & $addStep 'Backup' '建立交易備份' 'Personal' 'CodexSettings'
+    & $addStep 'Targets' '安裝/合併目標檔案' 'Personal' 'CodexSettings'
+    $steps[$steps.Count - 1] | Add-Member -NotePropertyName TargetCount -NotePropertyValue $TargetCount
+    & $addStep 'Hooks' 'Hook 去重與信任驗證' 'Personal' 'CodexSettings'
+    if ($IncludeContext7) { & $addStep 'Context7' 'Context7 設定' 'Personal' 'CodexSettings' }
+    & $addStep 'PersonalCheckpoint' '個人設定 checkpoint' 'Personal' 'CodexSettings'
+    if ($IncludeNotifications) { & $addStep 'Notifications' 'Windows 開發狀態與使用量通知' 'Community' 'WindowsUsageNotifications' }
+    if ($IncludeSkills) { & $addStep 'Skills' '選用 Skills' 'Community' 'MattPocockSkills' }
+    if ($IncludePonytail) { & $addStep 'Ponytail' 'Ponytail plugin 與 lifecycle hooks' 'Community' 'Ponytail' }
+    if ($IncludeCodexOrchestration) { & $addStep 'CodexOrchestration' 'Codex-Orchestration plugin 與 workflow' 'Community' 'CodexOrchestration' }
+    if ($IncludeSerena) { & $addStep 'Serena' 'Serena 安裝與 Codex MCP 設定' 'Community' 'Serena' }
+    & $addStep 'Final' 'Manifest / 最終驗證' 'Final' 'Summary'
 
     for ($index = 0; $index -lt $steps.Count; $index++) {
         $steps[$index].Index = $index + 1
+    }
+    foreach ($category in @('Personal', 'Community', 'Final')) {
+        $categorySteps = @($steps | Where-Object Category -eq $category)
+        for ($index = 0; $index -lt $categorySteps.Count; $index++) {
+            $categorySteps[$index].CategoryIndex = $index + 1
+            $categorySteps[$index].CategoryTotal = $categorySteps.Count
+        }
     }
     return $steps.ToArray()
 }
@@ -141,7 +153,8 @@ function Format-InstallProgressStatus {
         [string]$Elapsed = '00:00:00'
     )
 
-    $prefix = '[{0}/{1}] {2}%' -f $Step.Index, $Total, $Percent
+    $hasCategory = $Step.PSObject.Properties.Name -contains 'CategoryIndex' -and [int]$Step.CategoryTotal -gt 0
+    $prefix = if ($hasCategory) { '{0} {1}/{2}  {3}%' -f $Step.Category, $Step.CategoryIndex, $Step.CategoryTotal, $Percent } else { '[{0}/{1}] {2}%' -f $Step.Index, $Total, $Percent }
     if ($Profile.WindowWidth -lt 80) {
         $status = "$prefix $($Step.Name)"
     } else {
@@ -318,7 +331,8 @@ function Fail-InstallStep {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]$Progress,
-        [Parameter(Mandatory = $true)][string]$Reason
+        [Parameter(Mandatory = $true)][string]$Reason,
+        [switch]$Continue
     )
 
     $step = $Progress.CurrentStep
@@ -329,9 +343,8 @@ function Fail-InstallStep {
         $step.Result = $Reason
         $step.ElapsedSeconds = [Math]::Round($elapsed, 1)
     }
-    $Progress.Status = 'Failed'
-    $Progress.FailureStep = $stepName
-    $Progress.FailureReason = $Reason
+    $Progress.Status = if ($Continue) { 'PartialSuccess' } else { 'Failed' }
+    if ($null -eq $Progress.FailureStep) { $Progress.FailureStep = $stepName; $Progress.FailureReason = $Reason }
     if ($Progress.RendererMode -eq 'Line') { Write-InstallConsoleLine -Progress $Progress -Text ("STEP FAILED {0}: {1}" -f $stepName, $Reason) }
     Write-InstallLog -Progress $Progress -Message ("STEP FAILED {0}: {1}" -f $stepName, $Reason)
 }
@@ -352,7 +365,7 @@ function Write-InstallResult {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]$Progress,
-        [ValidateSet('SUCCESS', 'FAILED')][string]$Status = 'SUCCESS',
+        [ValidateSet('SUCCESS', 'PARTIAL SUCCESS', 'FAILED')][string]$Status = 'SUCCESS',
         [hashtable]$Summary = @{},
         [object[]]$Results = @(),
         [object[]]$Components = @()
@@ -364,7 +377,7 @@ function Write-InstallResult {
     $glyphs = $profile.Glyphs
     Write-Host ''
     Write-Host ('=' * 60)
-    Write-Host $(if ($Status -eq 'SUCCESS') { '安裝完成' } else { '安裝失敗' })
+    Write-Host $(if ($Status -eq 'SUCCESS') { '安裝完成' } elseif ($Status -eq 'PARTIAL SUCCESS') { '安裝部分完成' } else { '安裝失敗' })
     Write-Host ('=' * 60)
     Write-Host "Result: $Status"
     Write-Host ("Elapsed: {0:N1}s" -f $Progress.Stopwatch.Elapsed.TotalSeconds)
@@ -394,19 +407,35 @@ function Write-InstallResult {
     if (@($Components).Count -gt 0) {
         Write-Host ''
         Write-Host '外部元件'
-        foreach ($component in @($Components)) {
-            Write-InstallConsoleLine -Progress $Progress -Text ("[{0}] {1}  {2}  {3}" -f (Get-InstallResultSymbol ([string]$component.Status) $glyphs), $component.Name, $component.Status, $component.Result)
+        foreach ($category in @('Personal', 'Community')) {
+            $categoryComponents = @($Components | Where-Object { $_.Category -eq $category -or ($category -eq 'Community' -and [string]::IsNullOrWhiteSpace([string]$_.Category)) })
+            if ($categoryComponents.Count -eq 0) { continue }
+            Write-InstallConsoleLine -Progress $Progress -Text $(if ($category -eq 'Personal') { '個人 Codex Settings' } else { '社區／開源元件' })
+            foreach ($component in $categoryComponents) {
+                Write-InstallConsoleLine -Progress $Progress -Text ("  [{0}] {1}  {2}  {3}" -f (Get-InstallResultSymbol ([string]$component.Status) $glyphs), $component.Name, $component.Status, $component.Result)
+            }
         }
     }
     Write-Host ''
     Write-Host '統計'
-    foreach ($name in @('Installed', 'Updated', 'Unchanged', 'Skipped', 'Failed')) {
-        $value = if ($Summary.ContainsKey($name)) { $Summary[$name] } else { 0 }
-        Write-Host ("{0}: {1}" -f $name, $value)
+    if ($Summary.ContainsKey('PersonalStats') -and $Summary.ContainsKey('CommunityStats')) {
+        foreach ($category in @('Personal', 'Community')) {
+            Write-Host $category
+            $stats = $Summary[$category + 'Stats']
+            foreach ($name in @('Installed', 'Updated', 'Unchanged', 'Skipped', 'Failed')) { Write-Host ("  {0}: {1}" -f $name, $stats[$name]) }
+        }
+    } else {
+        foreach ($name in @('Installed', 'Updated', 'Unchanged', 'Skipped', 'Failed')) {
+            $value = if ($Summary.ContainsKey($name)) { $Summary[$name] } else { 0 }
+            Write-Host ("{0}: {1}" -f $name, $value)
+        }
     }
     $rollback = if ($Summary.ContainsKey('Rollback')) { [string]$Summary.Rollback } else { 'N/A' }
     Write-Host "Rollback: $rollback"
-    if ($Status -eq 'FAILED') {
+    foreach ($name in @('PersonalResult', 'CommunityResult', 'OverallResult')) {
+        if ($Summary.ContainsKey($name)) { Write-Host ("{0}: {1}" -f $name, $Summary[$name]) }
+    }
+    if ($Status -ne 'SUCCESS') {
         Write-InstallConsoleLine -Progress $Progress -Text "失敗階段：$($Progress.FailureStep)"
         Write-InstallConsoleLine -Progress $Progress -Text "原因：$($Progress.FailureReason)"
     }

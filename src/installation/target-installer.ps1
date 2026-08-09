@@ -9,10 +9,10 @@ function Invoke-TargetInstallation($Target, $Transaction, [switch]$Force, $Previ
     $projectRoot = $null
     if ($Target.Mode -eq 'Global') {
         Remove-GlobalLineEndingHooks -Root $Target.Root -Transaction $Transaction
-        Remove-ManagedGlobalNotificationHooks -Root $Target.Root -Transaction $Transaction -ManagedHookFingerprints $managedHookFingerprints
+        if ([bool]$Target.ManageWindowsNotifications) { Remove-ManagedGlobalNotificationHooks -Root $Target.Root -Transaction $Transaction -ManagedHookFingerprints $managedHookFingerprints }
         $targetCwd = if ($Target.PSObject.Properties.Name -contains 'Cwd') { [string]$Target.Cwd } else { (Get-Location).Path }
         $projectRoot = Find-CvsProjectRoot -StartPath $targetCwd
-        if (-not [string]::IsNullOrWhiteSpace($projectRoot)) { Remove-ManagedProjectHooks -StartPath $projectRoot -Transaction $Transaction -KeepCvsLineEndingHooks:($Target.DevelopmentEnvironment -eq 'CVS') -ManagedHookFingerprints $managedHookFingerprints | Out-Null }
+        if (-not [string]::IsNullOrWhiteSpace($projectRoot)) { Remove-ManagedProjectHooks -StartPath $projectRoot -Transaction $Transaction -KeepCvsLineEndingHooks:($Target.DevelopmentEnvironment -eq 'CVS') -PreserveNotifications:(-not [bool]$Target.ManageWindowsNotifications) -ManagedHookFingerprints $managedHookFingerprints | Out-Null }
     }
     $hookCleanupChanged = $Transaction.Entries.Count -gt $transactionEntriesBeforeCleanup
     $entries = New-Object 'System.Collections.Generic.List[object]'
@@ -43,7 +43,10 @@ function Invoke-TargetInstallation($Target, $Transaction, [switch]$Force, $Previ
         if ($isOptionalFeatureConfig) { $template = Add-DefaultModeRequestUserInputFeature -Content $template -NewLine $state.NewLine }
 
         $desiredContent = $null
-        if ($Force -and $state.Exists) {
+        $preserveNotifications = $relative.Replace('\', '/') -eq 'hooks.json' -and -not [bool]$Target.ManageWindowsNotifications
+        if ($preserveNotifications) {
+            $desiredContent = Merge-HooksJson -ExistingContent (Remove-ManagedLineEndingHooksJson -Content $state.Content) -TemplateContent $template
+        } elseif ($Force -and $state.Exists) {
             $desiredContent = $template
         } elseif ($strategy.Name -eq 'replace') {
             if ($state.Exists -and -not $owned -and $state.Content -ne $template) {
@@ -69,7 +72,7 @@ function Invoke-TargetInstallation($Target, $Transaction, [switch]$Force, $Previ
                 }
                 'managed-hooks' {
                     $withoutLineEndingHooks = Remove-ManagedLineEndingHooksJson -Content $existing
-                    Merge-HooksJson -ExistingContent $withoutLineEndingHooks -TemplateContent $template -RemoveManagedGlobalHooks -ManagedHookFingerprints $managedHookFingerprints
+                    Merge-HooksJson -ExistingContent $withoutLineEndingHooks -TemplateContent $template -RemoveManagedGlobalHooks:([bool]$Target.ManageWindowsNotifications) -ManagedHookFingerprints $managedHookFingerprints
                 }
             }
             if ($isOptionalFeatureConfig) { $desiredContent = Add-DefaultModeRequestUserInputFeature -Content $desiredContent -NewLine $state.NewLine }
@@ -91,6 +94,7 @@ function Invoke-TargetInstallation($Target, $Transaction, [switch]$Force, $Previ
         foreach ($old in @($previous.Files)) {
             $oldPath = [string]$old.Path
             if ($templatePaths.Contains($oldPath)) { continue }
+            if (-not [bool]$Target.ManageWindowsNotifications -and $oldPath.Replace('\', '/') -eq 'hooks/show-codex-notification.ps1') { continue }
             $obsolete = Join-Path $Target.Root $oldPath
             if (Test-Owned $old $obsolete) {
                 Save-TransactionFile $Transaction $obsolete
@@ -109,7 +113,10 @@ function Invoke-TargetInstallation($Target, $Transaction, [switch]$Force, $Previ
         }
     }
 
-    if ($Target.Mode -eq 'Global') { Assert-GlobalLineEndingHook -DevelopmentEnvironment $Target.DevelopmentEnvironment -Root $Target.Root -InstallWindowsNotifications ([bool]$Target.InstallWindowsNotifications) -ProjectRoot $projectRoot -ManagedNotificationFingerprints $managedNotificationFingerprints -ManagedTokenFingerprints $managedTokenFingerprints | Out-Null }
+    if ($Target.Mode -eq 'Global') {
+        $notificationsExpected = if ([bool]$Target.ManageWindowsNotifications) { [bool]$Target.InstallWindowsNotifications } else { Test-WindowsNotificationsInstalled -Root $Target.Root }
+        Assert-GlobalLineEndingHook -DevelopmentEnvironment $Target.DevelopmentEnvironment -Root $Target.Root -InstallWindowsNotifications $notificationsExpected -ProjectRoot $projectRoot -ManagedNotificationFingerprints $managedNotificationFingerprints -ManagedTokenFingerprints $managedTokenFingerprints | Out-Null
+    }
 
     $hookPathsChanged = @($entries | Where-Object { $_.Changed -and ([string]$_.Path -eq 'hooks.json' -or [string]$_.Path -like 'hooks\*') }).Count -gt 0
     return New-InstallationResult -Mode $Target.Mode -Root $Target.Root -DevelopmentEnvironment $Target.DevelopmentEnvironment -Files $entries.ToArray() -Previous $previous -HookChanged ($hookPathsChanged -or $hookCleanupChanged) -TransactionId ([string]$Transaction.Root)
