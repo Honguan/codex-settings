@@ -55,6 +55,8 @@ Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 
 安裝成功後會將選擇記錄為預設專案體系。下次互動安裝按 Enter，或非互動安裝未提供 `-DevelopmentEnvironment` 時，會沿用上次的 Git／CVS 選擇。
 
+Codex-Orchestration 是預設不安裝的選用 plugin。只有選擇安裝後才會檢查 Codex CLI 與 Python 3.11+、處理 marketplace/plugin，並詢問是否設定 Planner、Advisor、Designer、Executor。Planner 預設由目前 Root 模型負責，Advisor／Designer 預設關閉，Executor 的模型與推理強度必須由使用者確認。官方 setup/status 目前是 Codex Prompt 而非 PowerShell 指令，因此安裝器會先顯示完整預覽，再產生需於新 Codex Task 貼上的 setup Prompt，並在 manifest／摘要標示 `Pending user setup`，不會假裝 workflow 已生效；更新既有 plugin 時預設保留 workflow。
+
 非互動安裝：
 
 ```powershell
@@ -79,6 +81,12 @@ Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 
 # 安裝或更新 mattpocock/skills 的 10 個預設全域技能
 .\Install.cmd -Mode Global -InstallMattPocockSkills
+
+# 安裝／更新 Codex-Orchestration plugin；非互動模式只處理 plugin，不猜測 workflow
+.\Install.cmd -Mode Global -InstallCodexOrchestration
+
+# 明確略過 Codex-Orchestration（非互動模式的預設行為）
+.\Install.cmd -Mode Global -SkipCodexOrchestration
 
 # 在 config.toml 啟用預設 request_user_input 功能
 .\Install.cmd -Mode Global -EnableDefaultModeRequestUserInput

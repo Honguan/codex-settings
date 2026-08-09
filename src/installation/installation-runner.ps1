@@ -36,12 +36,13 @@ function Invoke-InteractiveMode {
                 $installMattPocockSkills = Select-OptionalMattPocockSkills
                 $ponytailState = Get-PonytailInstallationState
                 $installPonytail = Select-OptionalPonytail -AlreadyInstalled:([bool]$ponytailState.PluginPresent)
+                $installCodexOrchestration = Select-OptionalCodexOrchestration
                 $installSerena = Select-OptionalSerena
                 $installSerenaUv = $false
                 if ($installSerena -and -not (Test-SerenaUvAvailable)) { $installSerenaUv = Select-SerenaUvInstallation }
                 $enableDefaultModeRequestUserInput = Select-OptionalDefaultModeRequestUserInput
                 $installWindowsNotifications = Select-OptionalWindowsNotifications -AlreadyInstalled:(Test-WindowsNotificationsInstalled -Root $GlobalRoot)
-                Invoke-Installer -Mode Global -InstallStyle $style -DevelopmentEnvironment $selectedEnvironment -InstallRequestExecutionOptimizer:$installRequestExecutionOptimizer -InstallMattPocockSkills:$installMattPocockSkills -InstallPonytail:$installPonytail -InstallSerena:$installSerena -InstallSerenaUv:$installSerenaUv -EnableDefaultModeRequestUserInput:$enableDefaultModeRequestUserInput -InstallWindowsNotifications:$installWindowsNotifications -SourceRoot $SourceRoot
+                Invoke-Installer -Mode Global -InstallStyle $style -DevelopmentEnvironment $selectedEnvironment -InstallRequestExecutionOptimizer:$installRequestExecutionOptimizer -InstallMattPocockSkills:$installMattPocockSkills -InstallPonytail:$installPonytail -InstallCodexOrchestration:$installCodexOrchestration -ConfigureCodexOrchestration:$installCodexOrchestration -InstallSerena:$installSerena -InstallSerenaUv:$installSerenaUv -EnableDefaultModeRequestUserInput:$enableDefaultModeRequestUserInput -InstallWindowsNotifications:$installWindowsNotifications -SourceRoot $SourceRoot
                 return
             }
 
@@ -55,7 +56,7 @@ function Invoke-InteractiveMode {
     }
 }
 
-function Invoke-InstallationRollback($Transaction, $CcusageBefore, $ContextState, [string]$Reason) {
+function Invoke-InstallationRollback($Transaction, $CcusageBefore, $ContextState, $CodexOrchestration, [string]$Reason) {
     $rollbackErrors = New-Object 'System.Collections.Generic.List[string]'
     if ($null -ne $Transaction) {
         try { Undo-FileTransaction $Transaction | Out-Null } catch { [void]$rollbackErrors.Add("File rollback failed: $($_.Exception.Message)") }
@@ -68,6 +69,9 @@ function Invoke-InstallationRollback($Transaction, $CcusageBefore, $ContextState
             [Environment]::SetEnvironmentVariable('CONTEXT7_API_KEY', $ContextState.UserBefore, 'User')
             [Environment]::SetEnvironmentVariable('CONTEXT7_API_KEY', $ContextState.ProcessBefore, 'Process')
         } catch { [void]$rollbackErrors.Add("Context7 rollback failed: $($_.Exception.Message)") }
+    }
+    if ($null -ne $CodexOrchestration -and [bool]$CodexOrchestration.InstalledNow) {
+        try { Undo-CodexOrchestrationInstallation -Result $CodexOrchestration } catch { [void]$rollbackErrors.Add("Codex-Orchestration rollback failed: $($_.Exception.Message)") }
     }
     if ($null -ne $Transaction) {
         try {
@@ -102,6 +106,7 @@ function Write-InstallationSummary {
         $ContextState,
         [int]$SkillsCount = 0,
         $Ponytail,
+        $CodexOrchestration,
         $Serena
     )
 
@@ -127,6 +132,7 @@ function Write-InstallationSummary {
             [pscustomobject]@{ Name = 'Hook trust'; Status = $hookStatus; Result = $(if ($HookTrust.Skipped) { '未變更，略過重新 trust' } else { "已驗證 $($HookTrust.TrustedCount) 個、更新 $($HookTrust.UpdatedCount) 個" }) }
         )
         $components += @(Get-PonytailInstallationComponents -Result $Ponytail)
+        $components += @(Get-CodexOrchestrationInstallationComponents -Result $CodexOrchestration)
         $components += @(Get-SerenaInstallationComponents -Result $Serena)
         Write-InstallLog -Progress $Progress -Message ("SUMMARY transaction={0}; components={1}; files={2}" -f $TransactionRoot, $components.Count, @($Results.Files).Count)
         Write-InstallResult -Progress $Progress -Status SUCCESS -Summary $fileSummary -Results $Results -Components $components
@@ -142,6 +148,9 @@ function Invoke-GlobalInstallation {
         [switch]$InstallMattPocockSkills,
         [switch]$InstallPonytail,
         [switch]$SkipPonytail,
+        [switch]$InstallCodexOrchestration,
+        [switch]$SkipCodexOrchestration,
+        [switch]$ConfigureCodexOrchestration,
         [switch]$InstallSerena,
         [switch]$SkipSerena,
         [switch]$InstallSerenaUv,
@@ -155,7 +164,7 @@ function Invoke-GlobalInstallation {
         $InstallMattPocockSkills = $true
     }
     $targets = @(New-InstallationPlan -DevelopmentEnvironment $Context.DevelopmentEnvironment -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput -InstallWindowsNotifications $Context.InstallWindowsNotifications -SourceRoot $Context.ScriptRoot -IncludeExistingSkills $Context.ExistingSkillsInstalled)
-    $steps = New-InstallationProgressSteps -TargetCount $targets.Count -IncludeContext7:(-not $SkipContext7Key) -IncludeSkills:$InstallMattPocockSkills -IncludePonytail:$InstallPonytail -IncludeSerena:$InstallSerena -IncludeNotifications:$Context.InstallWindowsNotifications
+    $steps = New-InstallationProgressSteps -TargetCount $targets.Count -IncludeContext7:(-not $SkipContext7Key) -IncludeSkills:$InstallMattPocockSkills -IncludePonytail:$InstallPonytail -IncludeCodexOrchestration:$InstallCodexOrchestration -IncludeSerena:$InstallSerena -IncludeNotifications:$Context.InstallWindowsNotifications
     $progress = Start-InstallProgress -Steps $steps -Root $Context.GlobalRoot -Metadata @{
         Mode = 'Global'
         Environment = $Context.DevelopmentEnvironment
@@ -174,6 +183,7 @@ function Invoke-GlobalInstallation {
     $currentSubOperation = ''
     $mattPocockSkillNames = @()
     $ponytail = New-PonytailSkippedResult
+    $codexOrchestration = New-CodexOrchestrationSkippedResult
     $serena = New-SerenaSkippedResult
 
     try {
@@ -186,6 +196,7 @@ function Invoke-GlobalInstallation {
         Set-InstallProgress -Progress $progress -StepId 'Prerequisites' -Detail '驗證 PowerShell、Node.js、Codex 與目標目錄'
         Test-Prerequisites 'Global' $Context.GlobalRoot
         if ($InstallPonytail) { [void](Assert-PonytailPrerequisites) }
+        if ($InstallCodexOrchestration) { [void](Assert-CodexOrchestrationPrerequisites) }
         foreach ($target in $targets) { Test-DirectoryWritable -Path $target.Root }
         Complete-InstallStep -Progress $progress -Result '通過'
 
@@ -300,6 +311,20 @@ function Invoke-GlobalInstallation {
                 Complete-InstallStep -Progress $progress -Result ($ponytail.PluginStatus + '; hooks ' + $ponytail.HookCount + '/2')
             }
 
+            if ($InstallCodexOrchestration) {
+                Set-InstallProgress -Progress $progress -StepId 'CodexOrchestration' -Detail '檢查 Python、安裝/更新 plugin、處理 workflow 設定'
+                $codexOrchestration = Invoke-CodexOrchestrationInstallation -InteractiveWorkflow:$ConfigureCodexOrchestration
+                Write-InstallLog -Progress $progress -Message ('CODEX ORCHESTRATION plugin=' + $codexOrchestration.PluginStatus + '; workflow=' + $codexOrchestration.WorkflowStatus)
+                if (-not [string]::IsNullOrWhiteSpace($codexOrchestration.SetupPrompt)) {
+                    Write-Host ''
+                    Write-Host '[!] Workflow Pending user setup'
+                    Write-Host '請在新的 Codex Task 執行：'
+                    Write-Host $codexOrchestration.SetupPrompt
+                    Write-Host '$codex-orchestration:codex-orchestration status --require-effective'
+                }
+                Complete-InstallStep -Progress $progress -Result ($codexOrchestration.PluginStatus + '; workflow ' + $codexOrchestration.WorkflowStatus)
+            }
+
             if ($InstallSerena) {
                 Set-InstallProgress -Progress $progress -StepId 'Serena' -Detail '檢查 uv、安裝或更新 Serena、初始化並安全設定 Codex MCP'
                 $serena = Invoke-SerenaInstallation -Root $Context.GlobalRoot -Transaction $transaction -InstallUv:$InstallSerenaUv
@@ -326,6 +351,7 @@ function Invoke-GlobalInstallation {
                     PackageInstalledNow = [bool]$ccusage.PackageInstalledNow
                 }
                 Ponytail = [ordered]@{ Managed = [bool]$ponytail.Managed; Marketplace = $script:PonytailMarketplaceSource; Plugin = $script:PonytailPluginId; WasInstalledBefore = [bool]$ponytail.WasInstalledBefore; InstalledNow = [bool]$ponytail.InstalledNow; UpdatedNow = [bool]$ponytail.UpdatedNow; HookCount = [int]$ponytail.HookCount; TrustedHookCount = [int]$ponytail.TrustedHookCount; HookIdentities = @($ponytail.HookIdentities); ValidationStatus = [string]$ponytail.ValidationStatus; TrustStatus = [string]$ponytail.TrustStatus }
+                CodexOrchestration = [ordered]@{ pluginManaged = [bool]$codexOrchestration.Managed; pluginPresent = $codexOrchestration.PluginPresent; pluginUpdatedThisRun = [bool]$codexOrchestration.UpdatedNow; marketplace = $script:CodexOrchestrationMarketplaceSource; plugin = $script:CodexOrchestrationPluginId; workflowManaged = [bool]$codexOrchestration.WorkflowManaged; workflowConfigured = [bool]$codexOrchestration.WorkflowConfigured; workflowEffective = [bool]$codexOrchestration.WorkflowEffective; workflowStatus = [string]$codexOrchestration.WorkflowStatus; workflowConfigurationSummary = [string]$codexOrchestration.WorkflowConfigurationSummary; setupPrompt = [string]$codexOrchestration.SetupPrompt }
                 Serena = [ordered]@{ Managed = [bool]$serena.Managed; SelectedByUser = [bool]$serena.SelectedByUser; UvAvailable = [bool]$serena.UvAvailable; UvVersion = [string]$serena.UvVersion; VersionBefore = [string]$serena.VersionBefore; VersionAfter = [string]$serena.VersionAfter; InstalledNow = [bool]$serena.InstalledNow; UpdatedNow = [bool]$serena.UpdatedNow; InitializationStatus = [string]$serena.InitializationStatus; CodexMcpConfigured = ([string]$serena.CodexMcpStatus -eq 'Configured'); RuntimeVerified = $false }
                 Context7 = [ordered]@{
                     EnvironmentVariable = 'CONTEXT7_API_KEY'
@@ -356,12 +382,12 @@ function Invoke-GlobalInstallation {
             Set-InstallProgress -Progress $progress -StepId 'Final' -Detail '寫入 Manifest 並完成交易驗證'
             Complete-Installation -Results $resultArray -Transaction $transaction -External $external -FinalizeTransaction | Out-Null
             Complete-InstallStep -Progress $progress -Result 'Manifest 與交易驗證通過'
-            Write-InstallationSummary -InstallStyle $Context.InstallStyle -DevelopmentEnvironment $Context.DevelopmentEnvironment -Results $resultArray -Ccusage $ccusage -CcusageBefore $ccusageBefore -HookTrust $hookTrust -TransactionRoot $transactionRoot -InstallWindowsNotifications $Context.InstallWindowsNotifications -Progress $progress -NotificationStatus $notificationStatus -SkippedCount $skippedCount -SkipContext7Key:$SkipContext7Key -InstallMattPocockSkills:$InstallMattPocockSkills -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput -ContextState $contextState -SkillsCount $mattPocockSkillNames.Count -Ponytail $ponytail -Serena $serena
+            Write-InstallationSummary -InstallStyle $Context.InstallStyle -DevelopmentEnvironment $Context.DevelopmentEnvironment -Results $resultArray -Ccusage $ccusage -CcusageBefore $ccusageBefore -HookTrust $hookTrust -TransactionRoot $transactionRoot -InstallWindowsNotifications $Context.InstallWindowsNotifications -Progress $progress -NotificationStatus $notificationStatus -SkippedCount $skippedCount -SkipContext7Key:$SkipContext7Key -InstallMattPocockSkills:$InstallMattPocockSkills -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput -ContextState $contextState -SkillsCount $mattPocockSkillNames.Count -Ponytail $ponytail -CodexOrchestration $codexOrchestration -Serena $serena
         } catch {
             $reason = $_.Exception.Message
             Write-InstallErrorRecord -Progress $progress -ErrorRecord $_ -CurrentSubOperation $currentSubOperation
             Fail-InstallStep -Progress $progress -Reason $reason
-            $rollbackErrors = @(Invoke-InstallationRollback -Transaction $transaction -CcusageBefore $ccusageBefore -ContextState $contextState -Reason $reason)
+            $rollbackErrors = @(Invoke-InstallationRollback -Transaction $transaction -CcusageBefore $ccusageBefore -ContextState $contextState -CodexOrchestration $codexOrchestration -Reason $reason)
             $message = "Installation failed and rollback was attempted.`nReason: $reason"
             if ($rollbackErrors.Count -gt 0) { $message += "`nRollback errors:`n- " + ($rollbackErrors -join "`n- ") }
             $rollbackStatus = if ($rollbackErrors.Count -eq 0) { 'SUCCESS' } else { 'FAILED' }
@@ -375,7 +401,7 @@ function Invoke-GlobalInstallation {
             $reason = $_.Exception.Message
             Write-InstallErrorRecord -Progress $progress -ErrorRecord $_ -CurrentSubOperation $currentSubOperation
             Fail-InstallStep -Progress $progress -Reason $reason
-            $rollbackErrors = @(Invoke-InstallationRollback -Transaction $transaction -CcusageBefore $ccusageBefore -ContextState $contextState -Reason $reason)
+            $rollbackErrors = @(Invoke-InstallationRollback -Transaction $transaction -CcusageBefore $ccusageBefore -ContextState $contextState -CodexOrchestration $codexOrchestration -Reason $reason)
             $failureSummary = Get-InstallResultSummary -Results $results.ToArray()
             $failureSummary.Rollback = if ($rollbackErrors.Count -eq 0) { 'SUCCESS' } else { 'FAILED' }
             Write-InstallResult -Progress $progress -Status FAILED -Summary $failureSummary -Results $results.ToArray()
@@ -398,6 +424,9 @@ function Invoke-Installer {
         [switch]$InstallMattPocockSkills,
         [switch]$InstallPonytail,
         [switch]$SkipPonytail,
+        [switch]$InstallCodexOrchestration,
+        [switch]$SkipCodexOrchestration,
+        [switch]$ConfigureCodexOrchestration,
         [switch]$InstallSerena,
         [switch]$SkipSerena,
         [switch]$InstallSerenaUv,
@@ -415,6 +444,8 @@ function Invoke-Installer {
     )
 
     if ($InstallPonytail -and $SkipPonytail) { throw 'InstallPonytail 與 SkipPonytail 不可同時指定。' }
+    if ($InstallCodexOrchestration -and $SkipCodexOrchestration) { throw 'InstallCodexOrchestration 與 SkipCodexOrchestration 不可同時指定。' }
+    if ($ConfigureCodexOrchestration -and -not $InstallCodexOrchestration) { throw 'ConfigureCodexOrchestration 必須搭配 InstallCodexOrchestration。' }
     if ($InstallSerena -and $SkipSerena) { throw 'InstallSerena 與 SkipSerena 不可同時指定。' }
     if ([string]::IsNullOrWhiteSpace($SourceRoot)) { $SourceRoot = [string]$ScriptRoot }
     if ($Mode -in @('Backup', 'Restore', 'Uninstall')) {
@@ -428,5 +459,5 @@ function Invoke-Installer {
         return
     }
 
-    Invoke-GlobalInstallation -Context $context -SkipContext7Key:$SkipContext7Key -SkipCcusageInstall:$SkipCcusageInstall -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -InstallMattPocockSkills:$InstallMattPocockSkills -InstallPonytail:$InstallPonytail -SkipPonytail:$SkipPonytail -InstallSerena:$InstallSerena -SkipSerena:$SkipSerena -InstallSerenaUv:$InstallSerenaUv -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput -ForceValidation:$ForceValidation -ForceNotificationTest:$ForceNotificationTest -RendererMode $(if ($NoPause) { 'Line' } else { 'Auto' })
+    Invoke-GlobalInstallation -Context $context -SkipContext7Key:$SkipContext7Key -SkipCcusageInstall:$SkipCcusageInstall -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -InstallMattPocockSkills:$InstallMattPocockSkills -InstallPonytail:$InstallPonytail -SkipPonytail:$SkipPonytail -InstallCodexOrchestration:$InstallCodexOrchestration -SkipCodexOrchestration:$SkipCodexOrchestration -ConfigureCodexOrchestration:$ConfigureCodexOrchestration -InstallSerena:$InstallSerena -SkipSerena:$SkipSerena -InstallSerenaUv:$InstallSerenaUv -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput -ForceValidation:$ForceValidation -ForceNotificationTest:$ForceNotificationTest -RendererMode $(if ($NoPause) { 'Line' } else { 'Auto' })
 }

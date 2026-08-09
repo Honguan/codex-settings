@@ -8,6 +8,8 @@ param(
     [switch]$InstallMattPocockSkills,
     [switch]$InstallPonytail,
     [switch]$SkipPonytail,
+    [switch]$InstallCodexOrchestration,
+    [switch]$SkipCodexOrchestration,
     [switch]$InstallSerena,
     [switch]$SkipSerena,
     [switch]$InstallSerenaUv,

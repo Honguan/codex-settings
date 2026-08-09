@@ -6,12 +6,12 @@ $script:ScriptRoot = Join-Path $repositoryRoot 'src'
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('codex-settings-installation-progress-' + [guid]::NewGuid().ToString('N'))
 try {
     $baseSteps = @(New-InstallationProgressSteps)
-    if ($baseSteps.Id -contains 'Context7' -or $baseSteps.Id -contains 'Skills' -or $baseSteps.Id -contains 'Serena' -or $baseSteps.Id -contains 'Notifications') {
+    if ($baseSteps.Id -contains 'Context7' -or $baseSteps.Id -contains 'Skills' -or $baseSteps.Id -contains 'CodexOrchestration' -or $baseSteps.Id -contains 'Serena' -or $baseSteps.Id -contains 'Notifications') {
         throw '未選用的選配階段不應佔用安裝進度。'
     }
 
-    $fullSteps = @(New-InstallationProgressSteps -TargetCount 2 -IncludeContext7 -IncludeSkills -IncludeSerena -IncludeNotifications)
-    foreach ($requiredId in @('Prerequisites', 'Plan', 'Lock', 'Backup', 'Targets', 'Hooks', 'Context7', 'Ccusage', 'Skills', 'Serena', 'Notifications', 'Final')) {
+    $fullSteps = @(New-InstallationProgressSteps -TargetCount 2 -IncludeContext7 -IncludeSkills -IncludeCodexOrchestration -IncludeSerena -IncludeNotifications)
+    foreach ($requiredId in @('Prerequisites', 'Plan', 'Lock', 'Backup', 'Targets', 'Hooks', 'Context7', 'Ccusage', 'Skills', 'CodexOrchestration', 'Serena', 'Notifications', 'Final')) {
         if ($fullSteps.Id -notcontains $requiredId) { throw "缺少安裝進度階段：$requiredId" }
     }
     if (@($fullSteps | Where-Object Id -eq 'Targets')[0].TargetCount -ne 2) { throw '安裝進度未記錄目標數量。' }
