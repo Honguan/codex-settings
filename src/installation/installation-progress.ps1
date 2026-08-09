@@ -5,6 +5,7 @@ function New-InstallationProgressSteps {
         [switch]$IncludeContext7,
         [switch]$IncludeSkills,
         [switch]$IncludePonytail,
+        [switch]$IncludeSerena,
         [switch]$IncludeNotifications
     )
 
@@ -19,6 +20,7 @@ function New-InstallationProgressSteps {
     [void]$steps.Add([pscustomobject]@{ Id = 'Ccusage'; Name = 'ccusage / ccsessions / cdaily'; Detail = ''; Index = 0; Status = 'Pending'; StartedAt = $null; Result = ''; ElapsedSeconds = 0 })
     if ($IncludeSkills) { [void]$steps.Add([pscustomobject]@{ Id = 'Skills'; Name = '選用 Skills'; Detail = ''; Index = 0; Status = 'Pending'; StartedAt = $null; Result = ''; ElapsedSeconds = 0 }) }
     if ($IncludePonytail) { [void]$steps.Add([pscustomobject]@{ Id = 'Ponytail'; Name = 'Ponytail plugin 與 lifecycle hooks'; Detail = ''; Index = 0; Status = 'Pending'; StartedAt = $null; Result = ''; ElapsedSeconds = 0 }) }
+    if ($IncludeSerena) { [void]$steps.Add([pscustomobject]@{ Id = 'Serena'; Name = 'Serena 安裝與 Codex MCP 設定'; Detail = ''; Index = 0; Status = 'Pending'; StartedAt = $null; Result = ''; ElapsedSeconds = 0 }) }
     if ($IncludeNotifications) { [void]$steps.Add([pscustomobject]@{ Id = 'Notifications'; Name = 'Windows 開發狀態與使用量通知'; Detail = ''; Index = 0; Status = 'Pending'; StartedAt = $null; Result = ''; ElapsedSeconds = 0 }) }
     [void]$steps.Add([pscustomobject]@{ Id = 'Final'; Name = 'Manifest / 最終驗證'; Detail = ''; Index = 0; Status = 'Pending'; StartedAt = $null; Result = ''; ElapsedSeconds = 0 })
 
