@@ -161,6 +161,7 @@ function Invoke-GlobalInstallation {
     $skippedCount = 0
     $discovery = $null
     $changePlan = $null
+    $currentSubOperation = ''
 
     try {
         Set-InstallProgress -Progress $progress -StepId 'Plan' -Detail '整理目標與外部套件狀態'
@@ -203,27 +204,43 @@ function Invoke-GlobalInstallation {
             foreach ($result in @(Invoke-InstallationPlan -Targets $targets -Transaction $transaction -Discovery $discovery -Force:$Context.Force)) { [void]$results.Add($result) }
             Complete-InstallStep -Progress $progress -Result ("完成 $($results.Count) 個目標")
 
-            $changePlan = New-InstallationChangePlan -Discovery $discovery -Results $results.ToArray() -CcusageBefore $ccusageBefore -ForceValidation:$ForceValidation -Force:$Context.Force -ForceNotificationTest:$ForceNotificationTest -SkipContext7Key:$SkipContext7Key -InstallMattPocockSkills:$InstallMattPocockSkills -SkipPackageInstall:$SkipCcusageInstall
+            [object[]]$resultArray = $results.ToArray()
+            $changePlan = New-InstallationChangePlan -Discovery $discovery -Results $resultArray -CcusageBefore $ccusageBefore -ForceValidation:$ForceValidation -Force:$Context.Force -ForceNotificationTest:$ForceNotificationTest -SkipContext7Key:$SkipContext7Key -InstallMattPocockSkills:$InstallMattPocockSkills -SkipPackageInstall:$SkipCcusageInstall
             Save-TransactionMetadata -Transaction $transaction -Metadata @{ ChangePlan = $changePlan }
             Write-InstallLog -Progress $progress -Message ("WORKFLOW PLAN level={0}; hooksChanged={1}; configChanged={2}; usageToolsChanged={3}; notificationTest={4}; context7={5}" -f $changePlan.validationLevel, $changePlan.hooksChanged, $changePlan.configChanged, $changePlan.usageToolsChanged, $changePlan.runNotificationTest, $changePlan.runContext7)
 
             Set-InstallProgress -Progress $progress -StepId 'Hooks' -Detail '驗證受管理 Hook 狀態；未變更時略過昂貴的 trust 呼叫'
-            $global = @($results | Where-Object Mode -eq 'Global' | Select-Object -First 1)[0]
-            if (Test-CodexWorkflowDecision -Plan $changePlan -Operation HookTrust) {
+            $currentSubOperation = 'ResolveGlobalResult'
+            Write-InstallLog -Progress $progress -Message "HOOKS subOperation=$currentSubOperation"
+            $global = @($resultArray | Where-Object Mode -eq 'Global' | Select-Object -First 1)[0]
+
+            $currentSubOperation = 'WorkflowDecision'
+            Write-InstallLog -Progress $progress -Message "HOOKS subOperation=$currentSubOperation"
+            $runHookTrust = Test-CodexWorkflowDecision -Plan $changePlan -Operation HookTrust
+            if ($runHookTrust) {
+                $currentSubOperation = 'HookTrust'
+                Write-InstallLog -Progress $progress -Message "HOOKS subOperation=$currentSubOperation"
                 $hookTrust = Set-CodexSettingsHookTrust -Root $Context.GlobalRoot -Cwd $Context.GlobalRoot
             } else {
                 $hookTrust = [pscustomobject]@{ TrustedCount = 0; UpdatedCount = 0; Verified = $true; Skipped = $true }
                 Write-InstallLog -Progress $progress -Message 'HOOK TRUST skipped; no managed Hook changes detected'
             }
+
+            $currentSubOperation = 'ConfigValidation'
+            Write-InstallLog -Progress $progress -Message "HOOKS subOperation=$currentSubOperation"
             $configEntry = @($global.Files | Where-Object Path -eq 'config.toml' | Select-Object -First 1)[0]
             if ($null -ne $configEntry -and (Test-CodexWorkflowDecision -Plan $changePlan -Operation ConfigValidation)) {
                 $configHash = (Get-FileHash -LiteralPath (Join-Path $Context.GlobalRoot 'config.toml') -Algorithm SHA256).Hash
                 if ([string]$configEntry.Sha256 -ne $configHash) { $configEntry.Changed = $true; $configEntry.Status = 'Updated' }
                 $configEntry.Sha256 = $configHash
             }
-            $validateResults = $changePlan.validationLevel -ne 'Fast' -or @($results | Where-Object { $_.Summary.Created -gt 0 -or $_.Summary.Updated -gt 0 }).Count -gt 0
+
+            $currentSubOperation = 'InstallationResultValidation'
+            Write-InstallLog -Progress $progress -Message "HOOKS subOperation=$currentSubOperation"
+            $changedResults = @($resultArray | Where-Object { $_.Summary.Created -gt 0 -or $_.Summary.Updated -gt 0 })
+            $validateResults = $changePlan.validationLevel -ne 'Fast' -or $changedResults.Count -gt 0
             if ($validateResults) {
-                foreach ($result in @($results)) {
+                foreach ($result in $resultArray) {
                     $result.validation = Get-InstallationVerificationResult -Result $result
                     if (-not [bool]$result.validation.Valid) { throw "安裝結果驗證失敗：$($result.validation.errors -join '; ')" }
                 }
@@ -231,6 +248,7 @@ function Invoke-GlobalInstallation {
                 Write-InstallLog -Progress $progress -Message 'VALIDATION skipped; no managed content changes detected'
             }
             Complete-InstallStep -Progress $progress -Result $(if ($hookTrust.Skipped) { 'Hook 未變更，略過重新 trust' } else { "已驗證 $($hookTrust.TrustedCount) 個" })
+            $currentSubOperation = ''
 
             if (-not $SkipContext7Key) {
                 Set-InstallProgress -Progress $progress -StepId 'Context7' -Detail $(if ($changePlan.runContext7) { '沿用或設定 Context7 API Key' } else { 'Context7 未變更，略過設定流程' })
@@ -287,7 +305,7 @@ function Invoke-GlobalInstallation {
                 }
             }
 
-            Complete-Installation -Results $results.ToArray() -Transaction $transaction -External $external | Out-Null
+            Complete-Installation -Results $resultArray -Transaction $transaction -External $external | Out-Null
 
             if ($Context.InstallWindowsNotifications) {
                 Set-InstallProgress -Progress $progress -StepId 'Notifications' -Detail '最後執行非關鍵通知測試'
@@ -304,11 +322,12 @@ function Invoke-GlobalInstallation {
             }
 
             Set-InstallProgress -Progress $progress -StepId 'Final' -Detail '寫入 Manifest 並完成交易驗證'
-            Complete-Installation -Results $results.ToArray() -Transaction $transaction -External $external -FinalizeTransaction | Out-Null
+            Complete-Installation -Results $resultArray -Transaction $transaction -External $external -FinalizeTransaction | Out-Null
             Complete-InstallStep -Progress $progress -Result 'Manifest 與交易驗證通過'
-            Write-InstallationSummary -InstallStyle $Context.InstallStyle -DevelopmentEnvironment $Context.DevelopmentEnvironment -Results $results.ToArray() -Ccusage $ccusage -CcusageBefore $ccusageBefore -HookTrust $hookTrust -TransactionRoot $transactionRoot -InstallWindowsNotifications $Context.InstallWindowsNotifications -Progress $progress -NotificationStatus $notificationStatus -SkippedCount $skippedCount
+            Write-InstallationSummary -InstallStyle $Context.InstallStyle -DevelopmentEnvironment $Context.DevelopmentEnvironment -Results $resultArray -Ccusage $ccusage -CcusageBefore $ccusageBefore -HookTrust $hookTrust -TransactionRoot $transactionRoot -InstallWindowsNotifications $Context.InstallWindowsNotifications -Progress $progress -NotificationStatus $notificationStatus -SkippedCount $skippedCount
         } catch {
             $reason = $_.Exception.Message
+            Write-InstallErrorRecord -Progress $progress -ErrorRecord $_ -CurrentSubOperation $currentSubOperation
             Fail-InstallStep -Progress $progress -Reason $reason
             $rollbackErrors = @(Invoke-InstallationRollback -Transaction $transaction -CcusageBefore $ccusageBefore -ContextState $contextState -Reason $reason)
             $message = "Installation failed and rollback was attempted.`nReason: $reason"
@@ -322,6 +341,7 @@ function Invoke-GlobalInstallation {
     } catch {
         if ($progress.Status -ne 'Failed') {
             $reason = $_.Exception.Message
+            Write-InstallErrorRecord -Progress $progress -ErrorRecord $_ -CurrentSubOperation $currentSubOperation
             Fail-InstallStep -Progress $progress -Reason $reason
             $rollbackErrors = @(Invoke-InstallationRollback -Transaction $transaction -CcusageBefore $ccusageBefore -ContextState $contextState -Reason $reason)
             $failureSummary = Get-InstallResultSummary -Results $results.ToArray()

@@ -42,6 +42,46 @@ function Write-InstallLog {
     }
 }
 
+function Protect-InstallLogText {
+    [CmdletBinding()]
+    param([AllowNull()]$Value)
+
+    $text = [string]$Value
+    if ([string]::IsNullOrEmpty($text)) { return '' }
+    $text = [regex]::Replace($text, '(?i)(CONTEXT7_API_KEY\s*[=:]\s*)[^\s;]+', '$1<REDACTED>')
+    $text = [regex]::Replace($text, '(?i)\b(Bearer\s+)[A-Za-z0-9._~+/=-]+', '$1<REDACTED>')
+    $text = [regex]::Replace($text, '(?i)((?:token|credential|api[_ -]?key)\s*[=:]\s*)[^\s;]+', '$1<REDACTED>')
+    return ($text -replace '\r?\n', ' | ')
+}
+
+function Write-InstallErrorRecord {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]$Progress,
+        [Parameter(Mandatory = $true)]$ErrorRecord,
+        [string]$CurrentSubOperation = ''
+    )
+
+    $invocation = $ErrorRecord.InvocationInfo
+    $stepId = if ($null -ne $Progress.CurrentStep) { [string]$Progress.CurrentStep.Id } else { '' }
+    $commandName = if ($null -ne $invocation -and $null -ne $invocation.MyCommand) { [string]$invocation.MyCommand.Name } else { '' }
+    $scriptName = if ($null -ne $invocation) { [string]$invocation.ScriptName } else { '' }
+    $lineNumber = if ($null -ne $invocation) { [int]$invocation.ScriptLineNumber } else { 0 }
+    $exceptionType = if ($null -ne $ErrorRecord.Exception) { $ErrorRecord.Exception.GetType().FullName } else { '' }
+    $message = if ($null -ne $ErrorRecord.Exception) { $ErrorRecord.Exception.Message } else { [string]$ErrorRecord }
+
+    Write-InstallLog -Progress $Progress -Message ("ERROR CurrentStepId={0}; CurrentSubOperation={1}" -f (Protect-InstallLogText $stepId), (Protect-InstallLogText $CurrentSubOperation))
+    Write-InstallLog -Progress $Progress -Message ("ExceptionType={0}" -f (Protect-InstallLogText $exceptionType))
+    Write-InstallLog -Progress $Progress -Message ("Message={0}" -f (Protect-InstallLogText $message))
+    Write-InstallLog -Progress $Progress -Message ("FullyQualifiedErrorId={0}" -f (Protect-InstallLogText $ErrorRecord.FullyQualifiedErrorId))
+    Write-InstallLog -Progress $Progress -Message ("CategoryInfo={0}" -f (Protect-InstallLogText $ErrorRecord.CategoryInfo))
+    Write-InstallLog -Progress $Progress -Message ("InvocationInfo.MyCommand={0}" -f (Protect-InstallLogText $commandName))
+    Write-InstallLog -Progress $Progress -Message ("InvocationInfo.ScriptName={0}" -f (Protect-InstallLogText $scriptName))
+    Write-InstallLog -Progress $Progress -Message ("InvocationInfo.ScriptLineNumber={0}" -f $lineNumber)
+    Write-InstallLog -Progress $Progress -Message ("InvocationInfo.PositionMessage={0}" -f (Protect-InstallLogText $invocation.PositionMessage))
+    Write-InstallLog -Progress $Progress -Message ("ScriptStackTrace={0}" -f (Protect-InstallLogText $ErrorRecord.ScriptStackTrace))
+}
+
 function Start-InstallProgress {
     [CmdletBinding()]
     param(
