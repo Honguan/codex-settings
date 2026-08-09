@@ -32,6 +32,137 @@ function New-InstallationProgressSteps {
     return $steps.ToArray()
 }
 
+function New-InstallRendererProfile {
+    [CmdletBinding()]
+    param(
+        [ValidateSet('Auto', 'Interactive', 'Line')][string]$RendererMode = 'Auto',
+        [Text.Encoding]$OutputEncoding = [Console]::OutputEncoding,
+        [int]$WindowWidth = 0
+    )
+
+    $mode = if ($RendererMode -ne 'Auto') {
+        $RendererMode
+    } elseif ($env:CI -or $env:CODEX_SETTINGS_INSTALLER_NONINTERACTIVE -eq '1' -or [Console]::IsOutputRedirected) {
+        'Line'
+    } else {
+        try { if ($null -ne $Host.UI.RawUI.WindowSize) { 'Interactive' } else { 'Line' } } catch { 'Line' }
+    }
+    if ($WindowWidth -le 0) {
+        $WindowWidth = try { [Math]::Max(40, [int]$Host.UI.RawUI.WindowSize.Width) } catch { 80 }
+    }
+    $supportsUnicode = $null -ne $OutputEncoding -and $OutputEncoding.WebName -eq 'utf-8'
+    $glyphs = if ($supportsUnicode) {
+        [ordered]@{ Success = '✓'; Failure = '✗'; Updated = '~'; Separator = '—'; ProgressFilled = '█'; ProgressEmpty = '░'; Ellipsis = '…' }
+    } else {
+        [ordered]@{ Success = 'OK'; Failure = 'X'; Updated = '~'; Separator = '-'; ProgressFilled = '#'; ProgressEmpty = '.'; Ellipsis = '...' }
+    }
+    return [pscustomobject]@{
+        Name = $mode + $(if ($supportsUnicode -and $mode -eq 'Line') { 'Utf8' } elseif ($supportsUnicode) { 'Unicode' } else { 'Ascii' })
+        IsInteractive = $mode -eq 'Interactive'
+        OutputRedirected = [Console]::IsOutputRedirected
+        SupportsUnicode = $supportsUnicode
+        SupportsAnsi = $false
+        WindowWidth = $WindowWidth
+        OutputEncoding = $OutputEncoding
+        Glyphs = $glyphs
+    }
+}
+
+function Get-TerminalDisplayWidth {
+    [CmdletBinding()]
+    param([AllowEmptyString()][string]$Text = '')
+
+    $width = 0
+    for ($index = 0; $index -lt $Text.Length; $index++) {
+        $code = [int]$Text[$index]
+        $category = [Globalization.CharUnicodeInfo]::GetUnicodeCategory($Text, $index)
+        if ($category -in @([Globalization.UnicodeCategory]::NonSpacingMark, [Globalization.UnicodeCategory]::EnclosingMark, [Globalization.UnicodeCategory]::Format, [Globalization.UnicodeCategory]::Control)) { continue }
+        if ([char]::IsHighSurrogate($Text[$index]) -and $index + 1 -lt $Text.Length -and [char]::IsLowSurrogate($Text[$index + 1])) {
+            $index++
+            $width += 2
+        } elseif (($code -ge 0x1100 -and $code -le 0x115F) -or
+            ($code -ge 0x2E80 -and $code -le 0xA4CF) -or
+            ($code -ge 0xAC00 -and $code -le 0xD7A3) -or
+            ($code -ge 0xF900 -and $code -le 0xFAFF) -or
+            ($code -ge 0xFE10 -and $code -le 0xFE19) -or
+            ($code -ge 0xFE30 -and $code -le 0xFE6F) -or
+            ($code -ge 0xFF01 -and $code -le 0xFF60) -or
+            ($code -ge 0xFFE0 -and $code -le 0xFFE6)) {
+            $width += 2
+        } else {
+            $width++
+        }
+    }
+    return $width
+}
+
+function Pad-TerminalText {
+    [CmdletBinding()]
+    param(
+        [AllowEmptyString()][string]$Text = '',
+        [Parameter(Mandatory = $true)][int]$Width
+    )
+
+    return $Text + (' ' * [Math]::Max(0, $Width - (Get-TerminalDisplayWidth $Text)))
+}
+
+function Truncate-TerminalText {
+    [CmdletBinding()]
+    param(
+        [AllowEmptyString()][string]$Text = '',
+        [Parameter(Mandatory = $true)][int]$Width,
+        [string]$Ellipsis = '…'
+    )
+
+    if ($Width -le 0) { return '' }
+    if ((Get-TerminalDisplayWidth $Text) -le $Width) { return $Text }
+    $available = [Math]::Max(0, $Width - (Get-TerminalDisplayWidth $Ellipsis))
+    $builder = New-Object Text.StringBuilder
+    $used = 0
+    $elements = [Globalization.StringInfo]::GetTextElementEnumerator($Text)
+    while ($elements.MoveNext()) {
+        $element = [string]$elements.Current
+        $elementWidth = Get-TerminalDisplayWidth $element
+        if ($used + $elementWidth -gt $available) { break }
+        [void]$builder.Append($element)
+        $used += $elementWidth
+    }
+    return $builder.ToString() + $(if ((Get-TerminalDisplayWidth $Ellipsis) -le $Width) { $Ellipsis } else { '' })
+}
+
+function Format-InstallProgressStatus {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]$Profile,
+        [Parameter(Mandatory = $true)]$Step,
+        [Parameter(Mandatory = $true)][int]$Total,
+        [Parameter(Mandatory = $true)][int]$Percent,
+        [string]$Detail = '',
+        [string]$Elapsed = '00:00:00'
+    )
+
+    $prefix = '[{0}/{1}] {2}%' -f $Step.Index, $Total, $Percent
+    if ($Profile.WindowWidth -lt 80) {
+        $status = "$prefix $($Step.Name)"
+    } else {
+        $status = "$prefix  $($Step.Name)  $Elapsed"
+        if ($Profile.WindowWidth -ge 120 -and -not [string]::IsNullOrWhiteSpace($Detail)) {
+            $status += " $($Profile.Glyphs.Separator) $Detail"
+        }
+    }
+    return Truncate-TerminalText -Text $status -Width $Profile.WindowWidth -Ellipsis $Profile.Glyphs.Ellipsis
+}
+
+function Write-InstallConsoleLine {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]$Progress,
+        [AllowEmptyString()][string]$Text = ''
+    )
+
+    Write-Host (Truncate-TerminalText -Text $Text -Width $Progress.RendererProfile.WindowWidth -Ellipsis $Progress.RendererProfile.Glyphs.Ellipsis)
+}
+
 function Write-InstallLog {
     [CmdletBinding()]
     param(
@@ -94,20 +225,16 @@ function Start-InstallProgress {
         [Parameter(Mandatory = $true)][object[]]$Steps,
         [Parameter(Mandatory = $true)][string]$Root,
         [hashtable]$Metadata = @{},
-        [ValidateSet('Auto', 'Interactive', 'Line')][string]$RendererMode = 'Auto'
+        [ValidateSet('Auto', 'Interactive', 'Line')][string]$RendererMode = 'Auto',
+        $RendererProfile
     )
 
     $logDirectory = Join-Path $Root 'logs\installer'
     New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
     $startedAt = Get-Date
     $logPath = Join-Path $logDirectory ('install-{0}.log' -f $startedAt.ToString('yyyyMMdd-HHmmss'))
-    $resolvedRendererMode = if ($RendererMode -ne 'Auto') {
-        $RendererMode
-    } elseif ($env:CI -or $env:CODEX_SETTINGS_INSTALLER_NONINTERACTIVE -eq '1' -or [Console]::IsOutputRedirected) {
-        'Line'
-    } else {
-        try { if ($null -ne $Host.UI.RawUI.WindowSize) { 'Interactive' } else { 'Line' } } catch { 'Line' }
-    }
+    $profile = if ($null -ne $RendererProfile) { $RendererProfile } else { New-InstallRendererProfile -RendererMode $RendererMode }
+    $resolvedRendererMode = if ($profile.IsInteractive) { 'Interactive' } else { 'Line' }
     $progress = [pscustomobject]@{
         Steps = @($Steps)
         StartedAt = $startedAt
@@ -121,6 +248,7 @@ function Start-InstallProgress {
         LogWriteFailed = $false
         Metadata = $Metadata
         RendererMode = $resolvedRendererMode
+        RendererProfile = $profile
     }
     [IO.File]::WriteAllText($logPath, '', (New-Object Text.UTF8Encoding($false)))
     $metadataText = @($Metadata.GetEnumerator() | ForEach-Object { '{0}={1}' -f $_.Key, $_.Value }) -join '; '
@@ -136,11 +264,10 @@ function Write-InstallProgressDisplay($Progress, $Step, [string]$Detail) {
     $total = [Math]::Max(1, @($Progress.Steps).Count)
     $percent = [int][Math]::Floor((([int]$Step.Index - 1) / $total) * 100)
     if ($Progress.RendererMode -eq 'Interactive') {
-        $status = "{0}%  {1}/{2}  {3}  elapsed {4}" -f $percent, $Step.Index, $total, $Step.Name, $Progress.Stopwatch.Elapsed.ToString('hh\:mm\:ss')
-        if (-not [string]::IsNullOrWhiteSpace($Detail)) { $status += " — $Detail" }
-        Write-Progress -Id 1 -Activity 'Codex Settings Installer' -Status $status -PercentComplete $percent
+        $status = Format-InstallProgressStatus -Profile $Progress.RendererProfile -Step $Step -Total $total -Percent $percent -Detail $Detail -Elapsed $Progress.Stopwatch.Elapsed.ToString('hh\:mm\:ss')
+        Write-Progress -Id 1 -Activity 'Codex Settings' -Status $status -PercentComplete $percent
     } else {
-        Write-Host ("STEP START {0}/{1} {2}: {3}" -f $Step.Index, $total, $Step.Name, $Detail)
+        Write-InstallConsoleLine -Progress $Progress -Text ("STEP START {0}/{1} {2}: {3}" -f $Step.Index, $total, $Step.Name, $Detail)
     }
 }
 
@@ -179,9 +306,10 @@ function Complete-InstallStep {
     $total = [Math]::Max(1, @($Progress.Steps).Count)
     $percent = [int][Math]::Round(([int]$step.Index / $total) * 100)
     if ($Progress.RendererMode -eq 'Interactive') {
-        Write-Progress -Id 1 -Activity 'Codex Settings Installer' -Status ("{0}%  {1}/{2}  {3} — {4}  elapsed {5}" -f $percent, $step.Index, $total, $step.Name, $Result, $Progress.Stopwatch.Elapsed.ToString('hh\:mm\:ss')) -PercentComplete $percent
+        $status = Format-InstallProgressStatus -Profile $Progress.RendererProfile -Step $step -Total $total -Percent $percent -Detail $Result -Elapsed $Progress.Stopwatch.Elapsed.ToString('hh\:mm\:ss')
+        Write-Progress -Id 1 -Activity 'Codex Settings' -Status $status -PercentComplete $percent
     } else {
-        Write-Host ("STEP END {0}/{1} {2}: {3} ({4:N1}s)" -f $step.Index, $total, $step.Name, $Result, $step.ElapsedSeconds)
+        Write-InstallConsoleLine -Progress $Progress -Text ("STEP END {0}/{1} {2}: {3} ({4:N1}s)" -f $step.Index, $total, $step.Name, $Result, $step.ElapsedSeconds)
     }
     Write-InstallLog -Progress $Progress -Message ("STEP END {0}: {1}; elapsed={2:N1}s" -f $step.Id, $Result, $step.ElapsedSeconds)
 }
@@ -204,18 +332,18 @@ function Fail-InstallStep {
     $Progress.Status = 'Failed'
     $Progress.FailureStep = $stepName
     $Progress.FailureReason = $Reason
-    if ($Progress.RendererMode -eq 'Line') { Write-Host ("STEP FAILED {0}: {1}" -f $stepName, $Reason) }
+    if ($Progress.RendererMode -eq 'Line') { Write-InstallConsoleLine -Progress $Progress -Text ("STEP FAILED {0}: {1}" -f $stepName, $Reason) }
     Write-InstallLog -Progress $Progress -Message ("STEP FAILED {0}: {1}" -f $stepName, $Reason)
 }
 
-function Get-InstallResultSymbol([string]$Status) {
+function Get-InstallResultSymbol([string]$Status, $Glyphs) {
     switch -Regex ($Status) {
         '^(?:Installed|Created|Enabled)$' { return '+' }
         '^Updated$' { return '~' }
         '^(?:Existing|Unchanged|Current|Validated)$' { return '=' }
         '^(?:Skipped|SkippedByUser|SkippedUnchanged|NotConfigured)$' { return '-' }
         '^PendingUserSetup$' { return '!' }
-        '^Failed$' { return '✗' }
+        '^Failed$' { return $(if ($null -ne $Glyphs) { $Glyphs.Failure } else { '✗' }) }
         default { return '=' }
     }
 }
@@ -231,7 +359,9 @@ function Write-InstallResult {
     )
 
     $Progress.Status = $Status
-    if ($Progress.RendererMode -eq 'Interactive') { Write-Progress -Id 1 -Activity 'Codex Settings Installer' -Completed }
+    if ($Progress.RendererMode -eq 'Interactive') { Write-Progress -Id 1 -Activity 'Codex Settings' -Completed }
+    $profile = $Progress.RendererProfile
+    $glyphs = $profile.Glyphs
     Write-Host ''
     Write-Host ('=' * 60)
     Write-Host $(if ($Status -eq 'SUCCESS') { '安裝完成' } else { '安裝失敗' })
@@ -243,20 +373,21 @@ function Write-InstallResult {
     Write-Host ''
     Write-Host '步驟'
     foreach ($step in @($Progress.Steps | Where-Object Status -ne 'Pending')) {
-        $symbol = if ($step.Status -eq 'Completed') { '✓' } elseif ($step.Status -eq 'Failed') { '✗' } else { '…' }
-        Write-Host ("[{0}] {1,-28} {2,6:N1}s  {3}" -f $symbol, $step.Name, $step.ElapsedSeconds, $step.Result)
+        $symbol = if ($step.Status -eq 'Completed') { $glyphs.Success } elseif ($step.Status -eq 'Failed') { $glyphs.Failure } else { $glyphs.ProgressEmpty }
+        $name = Pad-TerminalText -Text (Truncate-TerminalText -Text ([string]$step.Name) -Width 28 -Ellipsis $glyphs.Ellipsis) -Width 28
+        Write-InstallConsoleLine -Progress $Progress -Text ("[{0}] {1} {2,6:N1}s  {3}" -f $symbol, $name, $step.ElapsedSeconds, $step.Result)
     }
     if (@($Results).Count -gt 0) {
         Write-Host ''
         Write-Host '安裝內容'
         foreach ($result in @($Results)) {
-            Write-Host ("{0}: {1}" -f $result.Mode, $result.Root)
+            Write-InstallConsoleLine -Progress $Progress -Text ("{0}: {1}" -f $result.Mode, $result.Root)
             foreach ($file in @($result.Files)) {
                 $fileStatus = [string]$file.Status
                 if ([string]::IsNullOrWhiteSpace($fileStatus)) {
                     $fileStatus = if (-not [bool]$file.ExistedBefore) { 'Installed' } elseif ([bool]$file.Changed) { 'Updated' } else { 'Unchanged' }
                 }
-                Write-Host ("  [{0}] {1}  {2}" -f (Get-InstallResultSymbol $fileStatus), $file.RelativePath, $fileStatus)
+                Write-InstallConsoleLine -Progress $Progress -Text ("  [{0}] {1}  {2}" -f (Get-InstallResultSymbol $fileStatus $glyphs), $file.RelativePath, $fileStatus)
             }
         }
     }
@@ -264,7 +395,7 @@ function Write-InstallResult {
         Write-Host ''
         Write-Host '外部元件'
         foreach ($component in @($Components)) {
-            Write-Host ("[{0}] {1}  {2}  {3}" -f (Get-InstallResultSymbol ([string]$component.Status)), $component.Name, $component.Status, $component.Result)
+            Write-InstallConsoleLine -Progress $Progress -Text ("[{0}] {1}  {2}  {3}" -f (Get-InstallResultSymbol ([string]$component.Status) $glyphs), $component.Name, $component.Status, $component.Result)
         }
     }
     Write-Host ''
@@ -276,11 +407,11 @@ function Write-InstallResult {
     $rollback = if ($Summary.ContainsKey('Rollback')) { [string]$Summary.Rollback } else { 'N/A' }
     Write-Host "Rollback: $rollback"
     if ($Status -eq 'FAILED') {
-        Write-Host "失敗階段：$($Progress.FailureStep)"
-        Write-Host "原因：$($Progress.FailureReason)"
+        Write-InstallConsoleLine -Progress $Progress -Text "失敗階段：$($Progress.FailureStep)"
+        Write-InstallConsoleLine -Progress $Progress -Text "原因：$($Progress.FailureReason)"
     }
-    if ($Summary.ContainsKey('Footer') -and -not [string]::IsNullOrWhiteSpace([string]$Summary.Footer)) { Write-Host ([string]$Summary.Footer) }
-    Write-Host "Log: $($Progress.LogPath)"
+    if ($Summary.ContainsKey('Footer') -and -not [string]::IsNullOrWhiteSpace([string]$Summary.Footer)) { Write-InstallConsoleLine -Progress $Progress -Text ([string]$Summary.Footer) }
+    Write-InstallConsoleLine -Progress $Progress -Text "Log: $($Progress.LogPath)"
     Write-Host ('=' * 60)
     Write-InstallLog -Progress $Progress -Message ("INSTALL END status=$Status; elapsed={0:N1}s; rollback=$rollback" -f $Progress.Stopwatch.Elapsed.TotalSeconds)
 }
