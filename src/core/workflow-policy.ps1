@@ -41,6 +41,16 @@ function New-InstallationChangePlan {
     $runNotificationTest = $ForceNotificationTest -or $hooksChanged
     $runContext7 = -not $SkipContext7Key -and (-not $context7Present -or $fullValidation)
     $runSkills = [bool]$InstallMattPocockSkills
+    $serenaSelected = $null -ne $Discovery -and $null -ne $Discovery.serenaDashboard -and [bool]$Discovery.serenaDashboard.Selected
+    $serenaDashboardChanged = $serenaSelected -and [bool]$Discovery.serenaDashboard.NeedsChange
+    $serenaDashboardAction = if (-not $serenaSelected) { 'SkippedByUser' } else {
+        switch ([string]$Discovery.serenaDashboard.DashboardConfigStatus) {
+            'Disabled' { 'AlreadyConfigured' }
+            'Invalid' { 'ConfigurationConflict' }
+            default { 'ConfigureDoNotAutoOpen' }
+        }
+    }
+    if (-not $fullValidation -and $validationLevel -eq 'Fast' -and $serenaDashboardChanged) { $validationLevel = 'ChangedOnly' }
 
     return [pscustomobject][ordered]@{
         schemaVersion = 1
@@ -56,7 +66,9 @@ function New-InstallationChangePlan {
         environmentChanged = $runContext7
         skillsChanged = $runSkills
         externalPackagesChanged = $externalPackageChanged
-        manifestChanged = $targetChanged -or $previousMissing -or $usageToolsChanged
+        externalConfigurationChanged = $serenaDashboardChanged
+        serenaDashboard = [ordered]@{ selected = $serenaSelected; currentStatus = $(if ($serenaSelected) { [string]$Discovery.serenaDashboard.DashboardConfigStatus } else { 'SkippedByUser' }); action = $serenaDashboardAction; requiresChange = $serenaDashboardChanged }
+        manifestChanged = $targetChanged -or $previousMissing -or $usageToolsChanged -or $serenaDashboardChanged
         runHookTrust = $runHookTrust
         runHookValidation = $runHookValidation
         runConfigValidation = $runConfigValidation
@@ -67,7 +79,7 @@ function New-InstallationChangePlan {
         critical = @('ownership-conflict', 'transaction-rollback', 'changed-file-integrity')
         conditional = @('hook-trust', 'hook-validation', 'config-validation', 'usage-runtime-validation', 'notification-test', 'external-package-resolution')
         deferred = @('state-ttl-cleanup', 'log-rotation', 'manifest-reconciliation')
-        reason = if ($fullValidation) { 'full-validation-required' } elseif ($changedPaths.Count -eq 0 -and -not $usageToolsChanged) { 'no-managed-change' } else { 'changed-components-only' }
+        reason = if ($fullValidation) { 'full-validation-required' } elseif ($changedPaths.Count -eq 0 -and -not $usageToolsChanged -and -not $serenaDashboardChanged) { 'no-managed-change' } else { 'changed-components-only' }
     }
 }
 

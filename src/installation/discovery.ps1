@@ -3,7 +3,8 @@ function Get-InstallationDiscovery {
     param(
         [Parameter(Mandatory = $true)]$Context,
         [Parameter(Mandatory = $true)][object[]]$Targets,
-        [AllowNull()]$CcusageBefore = $null
+        [AllowNull()]$CcusageBefore = $null,
+        [AllowNull()]$SerenaDashboard = $null
     )
 
     $targetSnapshots = New-Object 'System.Collections.Generic.List[object]'
@@ -35,5 +36,6 @@ function Get-InstallationDiscovery {
             profilePaths = @($PROFILE.CurrentUserAllHosts, $PROFILE.CurrentUserCurrentHost) | Select-Object -Unique
         }
         context7UserPresent = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable('CONTEXT7_API_KEY', 'User'))
+        serenaDashboard = $SerenaDashboard
     }
 }
