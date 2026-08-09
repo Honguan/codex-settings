@@ -180,7 +180,7 @@ function Invoke-GlobalInstallation {
         Set-InstallProgress -Progress $progress -StepId 'Plan' -Detail '整理目標與外部套件狀態'
         $ccusageBefore = Get-CcusageState
         $discovery = Get-InstallationDiscovery -Context $Context -Targets $targets -CcusageBefore $ccusageBefore
-        Write-InstallationPlan -Progress $progress -Context $Context -Targets $targets -CcusageBefore $ccusageBefore -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -InstallMattPocockSkills:$InstallMattPocockSkills -InstallPonytail:$InstallPonytail -SkipPonytail:$SkipPonytail -InstallSerena:$InstallSerena -SkipSerena:$SkipSerena -InstallSerenaUv:$InstallSerenaUv -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput -SkipContext7Key:$SkipContext7Key
+        Write-InstallationPlan -Progress $progress -Context $Context -Targets $targets -CcusageBefore $ccusageBefore -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -InstallMattPocockSkills:$InstallMattPocockSkills -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput -SkipContext7Key:$SkipContext7Key
         Complete-InstallStep -Progress $progress -Result ("已建立 $($targets.Count) 個目標")
 
         Set-InstallProgress -Progress $progress -StepId 'Prerequisites' -Detail '驗證 PowerShell、Node.js、Codex 與目標目錄'
