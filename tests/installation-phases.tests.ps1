@@ -39,7 +39,7 @@ try {
     foreach ($field in @('pluginStatus', 'workflowRequested', 'workflowStatus', 'setupPrompt', 'actionRequired', 'lastVerified')) {
         if ($manifest.community.codexOrchestration.PSObject.Properties.Name -notcontains $field) { throw "Codex-Orchestration ownership 缺少狀態欄位：$field" }
     }
-    foreach ($field in @('ManagedPaths', 'ManagedExternalState', 'RollbackScope')) {
+    foreach ($field in @('ManagedPaths', 'ManagedExternalState', 'RollbackScope', 'scriptPresent', 'hookConfigured', 'hookTrusted', 'hookEffective', 'directToastShown', 'lastInvocation', 'lastResult')) {
         if ($manifest.community.windowsUsageNotifications.PSObject.Properties.Name -notcontains $field) { throw "WindowsUsageNotifications ownership 缺少 $field。" }
     }
 } finally {

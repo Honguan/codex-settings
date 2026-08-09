@@ -52,6 +52,16 @@ $script:CcSessionsAttemptDurationsMs = [Collections.Generic.List[long]]::new()
 $script:CcSessionsResultAcceptedAtAttempt = 0
 $script:CcSessionsResultReason = ''
 $script:CcSessionsFallbackReason = ''
+$script:PayloadParsed = $false
+$script:SettingsEnabled = $false
+$script:MainSessionResult = 'Unknown'
+$script:MainSessionEvidence = 'not-classified'
+$script:DedupeResult = 'not-checked'
+$script:UsageRequested = $false
+$script:UsageResult = 'not-requested'
+$script:NativeToastError = ''
+$script:FallbackError = ''
+$script:DeliveryResultReason = 'unexpected-error'
 
 function Add-HookTiming([string]$Name, [long]$Milliseconds) {
     if ($script:HookTimings.Contains($Name)) { $script:HookTimings[$Name] = [long]$script:HookTimings[$Name] + $Milliseconds }
@@ -107,7 +117,16 @@ function Write-HookDiagnostic($InputObject, [string]$Result, [string]$Details) {
             handler = 'windows-notification'
             stopKind = 'notification'
             notificationType = $Type
+            hookInvoked = $true
+            payloadParsed = [bool]$script:PayloadParsed
+            settingsEnabled = [bool]$script:SettingsEnabled
+            mainSessionResult = [string]$script:MainSessionResult
+            mainSessionEvidence = [string]$script:MainSessionEvidence
+            dedupeResult = [string]$script:DedupeResult
+            usageRequested = [bool]$script:UsageRequested
+            usageResult = [string]$script:UsageResult
             result = $Result
+            resultReason = [string]$script:DeliveryResultReason
             sessionId = $sessionId
             turnId = if ($null -eq $InputObject) { '' } else { [string]$InputObject.turn_id }
             tool = if ($null -eq $InputObject) { '' } else { [string]$InputObject.tool_name }
@@ -121,6 +140,8 @@ function Write-HookDiagnostic($InputObject, [string]$Result, [string]$Details) {
             nativeToastShown = [bool]$script:NativeToastShown
             fallbackAttempted = [bool]$script:FallbackAttempted
             fallbackShown = [bool]$script:FallbackShown
+            nativeToastError = [string]$script:NativeToastError
+            fallbackError = [string]$script:FallbackError
             cleanupScheduled = [bool]$script:CleanupScheduled
             hookSource = $script:HookSource
             invocationSource = '{0}:{1}' -f $script:HookSource, $script:NotificationHandlerId
@@ -151,7 +172,7 @@ function Write-HookDiagnostic($InputObject, [string]$Result, [string]$Details) {
             ccsessionsRetryCount = [long]$script:CcSessionsRetryCount
             ccsessionsAttemptDurationsMs = @($script:CcSessionsAttemptDurationsMs)
             resultAcceptedAtAttempt = [long]$script:CcSessionsResultAcceptedAtAttempt
-            resultReason = [string]$script:CcSessionsResultReason
+            usageResultReason = [string]$script:CcSessionsResultReason
             fallbackReason = [string]$script:CcSessionsFallbackReason
             foregroundElapsedMs = $elapsedMs
             transcriptReadMs = [long]$script:HookTimings.transcriptReadMs
@@ -159,7 +180,9 @@ function Write-HookDiagnostic($InputObject, [string]$Result, [string]$Details) {
         }
         New-Item -ItemType Directory -Path $root -Force | Out-Null
         [IO.File]::AppendAllText((Join-Path $root ($safeSessionId + '.log')), (($entry | ConvertTo-Json -Compress) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
-    } catch {} finally { Add-HookTiming -Name 'diagnosticWriteMs' -Milliseconds $stopwatch.ElapsedMilliseconds }
+    } catch {
+        try { [Console]::Error.WriteLine('notification diagnostic write failed: ' + $_.Exception.Message) } catch {}
+    } finally { Add-HookTiming -Name 'diagnosticWriteMs' -Milliseconds $stopwatch.ElapsedMilliseconds }
 }
 
 function Get-NotificationSettings([string]$Root) {
@@ -171,6 +194,7 @@ function Get-NotificationSettings([string]$Root) {
         error = $true
         sound = $true
         mainSessionOnly = $true
+        unknownMainSessionPolicy = 'Allow'
         dedupeSeconds = 10
     }
     $path = Join-Path $Root 'settings.json'
@@ -217,7 +241,13 @@ function Get-NotificationClaimIdentity($InputObject, [string]$NotificationType) 
     $sessionId = [string]$InputObject.session_id
     $turnId = [string]$InputObject.turn_id
     if ([string]::IsNullOrWhiteSpace($sessionId)) { $sessionId = 'unknown-session' }
-    if ([string]::IsNullOrWhiteSpace($turnId)) { $turnId = 'unknown-turn' }
+    if ([string]::IsNullOrWhiteSpace($turnId)) {
+        foreach ($name in @('event_id', 'notification_id', 'call_id', 'timestamp')) {
+            $value = [string]$InputObject.$name
+            if (-not [string]::IsNullOrWhiteSpace($value)) { $turnId = "fallback-$name-$value"; break }
+        }
+        if ([string]::IsNullOrWhiteSpace($turnId)) { $turnId = 'fallback-' + [guid]::NewGuid().ToString('N') }
+    }
     $key = if ($NotificationType -eq 'Completed') { "$sessionId|$turnId|Completed" } else { "$sessionId|$turnId|$NotificationType" }
     $sha = [Security.Cryptography.SHA256]::Create()
     try { $hash = ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($key)))).Replace('-', '').ToLowerInvariant() }
@@ -248,7 +278,10 @@ function Read-NotificationClaim([string]$Path) {
 }
 
 function Test-NotificationClaimActive($Claim) {
-    return $null -ne $Claim -and [string]$Claim.state -in @('showing', 'shown')
+    if ($null -eq $Claim) { return $false }
+    if ([string]$Claim.state -eq 'shown') { return $true }
+    if ([string]$Claim.state -ne 'showing') { return $false }
+    try { return ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse([string]$Claim.createdAt).ToUniversalTime()).TotalSeconds -lt 45 } catch { return $false }
 }
 
 function Acquire-NotificationClaim([string]$Root, $InputObject, [string]$NotificationType) {
@@ -439,16 +472,16 @@ function Start-DetachedPowerShell([string[]]$Arguments, [switch]$Wait) {
     if ($null -eq $powershell) { throw 'Windows PowerShell 5.1 is required for Windows Toast notifications.' }
     $startInfo = [Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = $powershell.Source
-    $startInfo.UseShellExecute = $false
+    $startInfo.UseShellExecute = -not $Wait
     $startInfo.CreateNoWindow = $true
     $startInfo.WindowStyle = [Diagnostics.ProcessWindowStyle]::Hidden
-    $startInfo.RedirectStandardInput = $true
-    $startInfo.RedirectStandardOutput = $true
-    $startInfo.RedirectStandardError = $true
+    $startInfo.RedirectStandardInput = [bool]$Wait
+    $startInfo.RedirectStandardOutput = [bool]$Wait
+    $startInfo.RedirectStandardError = [bool]$Wait
     Set-ProcessArguments -StartInfo $startInfo -Arguments $Arguments
     $process = [Diagnostics.Process]::Start($startInfo)
     try {
-        $process.StandardInput.Close()
+        if ($Wait) { $process.StandardInput.Close() }
         if (-not $Wait) { return [pscustomobject]@{ Started = $true; ExitCode = $null; StandardOutput = ''; StandardError = '' } }
         if (-not $process.WaitForExit(10000)) {
             try { $process.Kill() } catch {}
@@ -563,6 +596,8 @@ function Invoke-WindowsPowerShellToast([string]$Title, [string]$Message, [string
 }
 
 function Show-NativeToast([string]$Title, [string]$Message, [string]$NotificationType, [bool]$Sound, [string]$Tag) {
+    if ($env:CODEX_SETTINGS_NATIVE_TOAST_TEST_RESULT -eq 'shown') { return [pscustomobject]@{ Shown = $true; CleanupScheduled = $false } }
+    if ($env:CODEX_SETTINGS_NATIVE_TOAST_TEST_RESULT -eq 'failed') { throw 'native toast test failure' }
     if ($PSVersionTable.PSEdition -eq 'Desktop') {
         return Show-NativeToastCore -Title $Title -Message $Message -NotificationType $NotificationType -Sound $Sound -Tag $Tag
     } else {
@@ -571,6 +606,8 @@ function Show-NativeToast([string]$Title, [string]$Message, [string]$Notificatio
 }
 
 function Show-BalloonFallback([string]$Title, [string]$Message, [string]$NotificationType, [bool]$Sound) {
+    if ($env:CODEX_SETTINGS_FALLBACK_TEST_RESULT -eq 'shown') { return [pscustomobject]@{ Shown = $true } }
+    if ($env:CODEX_SETTINGS_FALLBACK_TEST_RESULT -eq 'failed') { throw 'fallback test failure' }
     Add-Type -AssemblyName System.Windows.Forms
     Add-Type -AssemblyName System.Drawing
     $icon = [Windows.Forms.NotifyIcon]::new()
@@ -1324,8 +1361,12 @@ try {
         }
     } else {
         $inputObject = Read-CodexHookInvocation
-        if ($null -eq $inputObject) { $inputObject = [pscustomobject]@{} }
+        if ($null -eq $inputObject) {
+            $inputObject = [pscustomobject]@{}
+            $script:DeliveryResultReason = 'invalid-payload'
+        }
     }
+    $script:PayloadParsed = $inputObject.PSObject.Properties.Count -gt 0
 
     $script:HookSource = Get-CodexHookSource
     $script:HookInvocationContext = New-CodexHookInvocationContext -InputObject $inputObject -HookSource $script:HookSource
@@ -1342,17 +1383,29 @@ try {
     }
     $root = Get-NotificationRoot
     $settings = Get-NotificationSettings -Root $root
+    $script:SettingsEnabled = [bool]$settings.enabled
     $settingName = $Type.Substring(0, 1).ToLowerInvariant() + $Type.Substring(1)
-    $mainSession = Test-CodexMainSession -InputObject $inputObject
-    if (-not $Test -and (-not [bool]$settings.enabled -or -not [bool]$settings.$settingName)) {
+    $mainSessionClassification = Get-CodexMainSessionClassification -InputObject $inputObject
+    $script:MainSessionResult = [string]$mainSessionClassification.Classification
+    $script:MainSessionEvidence = [string]$mainSessionClassification.Evidence
+    $mainSession = $script:MainSessionResult -eq 'Main' -or ($script:MainSessionResult -eq 'Unknown' -and [string]$settings.unknownMainSessionPolicy -eq 'Allow')
+    if (-not $Test -and -not $script:PayloadParsed) {
+        $script:DeliveryResultReason = 'invalid-payload'
+        Write-HookDiagnostic -InputObject $inputObject -Result 'invalid-payload' -Details ''
+    } elseif (-not $Test -and (-not [bool]$settings.enabled -or -not [bool]$settings.$settingName)) {
+        $script:DeliveryResultReason = 'skipped-disabled'
         Write-HookDiagnostic -InputObject $inputObject -Result 'disabled' -Details ''
     } elseif (-not $Test -and [bool]$settings.mainSessionOnly -and -not $mainSession) {
-        Write-HookDiagnostic -InputObject $inputObject -Result 'skipped' -Details 'notification=non-main-session'
+        $script:DeliveryResultReason = 'skipped-not-main'
+        Write-HookDiagnostic -InputObject $inputObject -Result 'skipped' -Details ('mainSessionEvidence=' + $script:MainSessionEvidence)
     } else {
         $notificationClaim = Acquire-NotificationClaim -Root $root -InputObject $inputObject -NotificationType $Type
         if (-not [bool]$notificationClaim.Acquired) {
+            $script:DedupeResult = 'duplicate'
+            $script:DeliveryResultReason = 'skipped-duplicate'
             Write-HookDiagnostic -InputObject $inputObject -Result 'deduplicated' -Details ('claimState={0};claimAlreadyOwned=true' -f $notificationClaim.State)
         } else {
+            $script:DedupeResult = 'acquired'
             $content = switch ($Type) {
                 'PermissionRequired' { [pscustomobject]@{ Title = 'Codex 等待權限核准'; Message = '需要你的核准才能繼續執行' } }
                 'QuestionRequired' { [pscustomobject]@{ Title = 'Codex 等待你的回答'; Message = '請回到 Codex 繼續' } }
@@ -1364,8 +1417,10 @@ try {
             if ($Type -eq 'Completed') {
                 $tokenSettings = Get-TokenUsageSettings -Root (Get-TokenUsageRoot)
                 if ([bool]$tokenSettings.enabled -and [bool]$tokenSettings.showAfterEachTurn -and (-not [bool]$tokenSettings.mainSessionOnly -or $mainSession)) {
+                    $script:UsageRequested = $true
                     try {
                         $usage = Get-TokenUsageDisplay -InputObject $inputObject -Settings $tokenSettings
+                        $script:UsageResult = 'available'
                         if ([bool]$usage.Duplicate) {
                             $skipNotification = $true
                             $details = 'tokenUsage=duplicate; source={0}' -f $usage.Source
@@ -1392,6 +1447,7 @@ try {
                             }
                         }
                     } catch {
+                        $script:UsageResult = 'unavailable-status-shown'
                         $content.Message = 'Token 用量暫時無法取得'
                         $details = 'tokenUsageError={0}' -f $_.Exception.ToString()
                         try {
@@ -1405,6 +1461,8 @@ try {
                             }
                         } catch {}
                     }
+                } elseif ([bool]$tokenSettings.enabled -and [bool]$tokenSettings.showAfterEachTurn) {
+                    $script:UsageResult = 'skipped-not-main'
                 }
             }
 
@@ -1419,6 +1477,7 @@ try {
                         Add-Content -LiteralPath $env:CODEX_SETTINGS_NOTIFICATION_TEST_LOG -Value (@{ type = $Type; title = $content.Title; message = $content.Message } | ConvertTo-Json -Compress) -Encoding UTF8
                     }
                     $deliverySucceeded = $true
+                    $script:DeliveryResultReason = 'shown-test'
                 } else {
                     $tag = Get-ToastTag -InputObject $inputObject -NotificationType $Type
                     $script:NativeToastAttempted = $true
@@ -1428,6 +1487,7 @@ try {
                         $script:CleanupScheduled = $null -ne $nativeDelivery -and [bool]$nativeDelivery.CleanupScheduled
                         $deliverySucceeded = [bool]$script:NativeToastShown
                     } catch {
+                        $script:NativeToastError = $_.Exception.Message
                         if (-not $script:NativeToastShown) {
                             $script:FallbackAttempted = $true
                             try {
@@ -1435,17 +1495,18 @@ try {
                                 $script:FallbackShown = $null -ne $fallbackDelivery -and [bool]$fallbackDelivery.Shown
                                 $deliverySucceeded = [bool]$script:FallbackShown
                             } catch {
+                                $script:FallbackError = $_.Exception.Message
                                 if ([bool]$settings.sound) { [Console]::Error.Write([char]7) }
+                            }
                         }
                     }
-                } elseif ([bool]$tokenSettings.enabled -and [bool]$tokenSettings.showAfterEachTurn -and [bool]$tokenSettings.mainSessionOnly -and -not $mainSession) {
-                    $details = 'tokenUsage=skipped-non-main-session'
                 }
-            }
                 if ($deliverySucceeded) {
                     Set-NotificationClaimState -Claim $notificationClaim -State shown -Result $(if ($testMode) { 'test' } elseif ($script:NativeToastShown) { 'native-toast' } else { 'balloon-fallback' })
+                    if (-not $testMode) { $script:DeliveryResultReason = if ($script:NativeToastShown) { 'shown-native' } else { 'shown-fallback' } }
                 } else {
                     Set-NotificationClaimState -Claim $notificationClaim -State failed -Result 'no-notification-shown'
+                    $script:DeliveryResultReason = if ($script:FallbackAttempted) { 'fallback-failed' } else { 'native-toast-failed' }
                 }
                 $deliveryDetails = 'claimState={0};nativeToastAttempted={1};nativeToastShown={2};fallbackAttempted={3};fallbackShown={4};cleanupScheduled={5}' -f $script:NotificationClaimState, $script:NativeToastAttempted, $script:NativeToastShown, $script:FallbackAttempted, $script:FallbackShown, $script:CleanupScheduled
                 $details = if ([string]::IsNullOrWhiteSpace($details)) { $deliveryDetails } else { $details + ';' + $deliveryDetails }
@@ -1454,6 +1515,8 @@ try {
         }
     }
 } catch {
+    if ($script:DeliveryResultReason -notin @('invalid-payload', 'timeout')) { $script:DeliveryResultReason = 'unexpected-error' }
+    if ($null -ne $notificationClaim -and $script:NotificationClaimState -eq 'showing') { Set-NotificationClaimState -Claim $notificationClaim -State failed -Result 'unexpected-error' }
     Write-HookDiagnostic -InputObject $inputObject -Result 'error' -Details $_.Exception.ToString()
 }
 

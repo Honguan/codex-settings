@@ -439,18 +439,33 @@ function Invoke-GlobalInstallation {
                     } else { New-CcusageUnchangedResult -PackageState $ccusageBefore }
                     $trust = Set-CodexSettingsHookTrust -Root $Context.GlobalRoot -Cwd $Context.GlobalRoot -Kind Notification
                     $status = '腳本、Hook 與使用量工具未變更'
+                    $notificationProbe = $null
                     if ($files.Changed -or (Test-CodexWorkflowDecision -Plan $changePlan -Operation NotificationTest)) {
+                        $diagnosticRoot = if ([string]::IsNullOrWhiteSpace($env:CODEX_SETTINGS_HOOK_LOG_ROOT)) { Join-Path $Context.GlobalRoot 'logs\hooks' } else { $env:CODEX_SETTINGS_HOOK_LOG_ROOT }
+                        $diagnosticPath = Join-Path $diagnosticRoot 'notification-test.log'
+                        $diagnosticLength = if (Test-Path -LiteralPath $diagnosticPath -PathType Leaf) { (Get-Item -LiteralPath $diagnosticPath).Length } else { 0 }
                         $notificationOutput = & pwsh -NoLogo -NoProfile -NonInteractive -File $files.ScriptPath -Type Completed -Test 2>&1
                         if ($LASTEXITCODE -ne 0) { throw "Windows 通知測試失敗，結束碼：$LASTEXITCODE" }
-                        $status = '已送出測試通知'
+                        if (-not (Test-Path -LiteralPath $diagnosticPath -PathType Leaf) -or (Get-Item -LiteralPath $diagnosticPath).Length -le $diagnosticLength) { throw 'Windows 通知測試未產生 delivery 診斷。' }
+                        $notificationProbe = Get-Content -LiteralPath $diagnosticPath | Select-Object -Last 1 | ConvertFrom-Json -ErrorAction Stop
+                        if ($notificationProbe.result -ne 'success' -or (-not [bool]$notificationProbe.nativeToastShown -and -not [bool]$notificationProbe.fallbackShown -and $notificationProbe.resultReason -ne 'shown-test')) { throw "Windows 通知未顯示：$($notificationProbe.resultReason)" }
+                        $status = '測試通知已顯示'
                     }
-                    [pscustomobject]@{ Files = $files; Ccusage = $usage; HookTrust = $trust; NotificationStatus = $status }
+                    [pscustomobject]@{ Files = $files; Ccusage = $usage; HookTrust = $trust; NotificationProbe = $notificationProbe; NotificationStatus = $status }
                 } -RollbackExternal { param($ignored) Restore-CcusageState $ccusageBefore | Out-Null }
                 [void]$communityResults.Add($component)
                 $ownership.community.windowsUsageNotifications.Status = $component.Status
                 if ($component.Status -eq 'SUCCESS') {
                     $ccusage = $component.Result.Ccusage
                     $notificationStatus = $component.Result.NotificationStatus
+                    $notificationOwner = $ownership.community.windowsUsageNotifications
+                    $notificationOwner.scriptPresent = Test-Path -LiteralPath (Join-Path $Context.GlobalRoot 'hooks\show-codex-notification.ps1') -PathType Leaf
+                    $notificationOwner.hookConfigured = @($component.Result.HookTrust.Hooks).Count -eq 3
+                    $notificationOwner.hookTrusted = @($component.Result.HookTrust.Hooks | Where-Object Trusted).Count -eq 3
+                    $notificationOwner.hookEffective = @($component.Result.HookTrust.Hooks | Where-Object Effective).Count -eq 3
+                    $notificationOwner.directToastShown = $null -ne $component.Result.NotificationProbe -and ([bool]$component.Result.NotificationProbe.nativeToastShown -or [bool]$component.Result.NotificationProbe.fallbackShown)
+                    $notificationOwner.lastInvocation = if ($null -ne $component.Result.NotificationProbe) { [string]$component.Result.NotificationProbe.timestamp } else { $null }
+                    $notificationOwner.lastResult = if ($null -ne $component.Result.NotificationProbe) { [string]$component.Result.NotificationProbe.resultReason } else { 'not-tested' }
                     Complete-InstallStep -Progress $progress -Result $notificationStatus
                 } else { Fail-InstallStep -Progress $progress -Reason $component.Error -Continue }
             }

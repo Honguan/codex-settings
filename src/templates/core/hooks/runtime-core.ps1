@@ -90,26 +90,33 @@ function Get-CodexToolImpactClassification {
     return [pscustomobject][ordered]@{ schemaVersion = 1; classification = 'UnknownWriteScope'; workClass = 'Critical'; validationLevel = 'Full'; knownWriteTargets = @(); reason = 'write-scope-cannot-be-proven' }
 }
 
-function Test-CodexMainSession {
+function Get-CodexMainSessionClassification {
     [CmdletBinding()]
     param([AllowNull()]$InputObject)
 
-    if ($null -eq $InputObject) { return $true }
+    if ($null -eq $InputObject) { return [pscustomobject]@{ Classification = 'Unknown'; Evidence = 'payload-null' } }
     foreach ($name in @('is_main_session', 'main_session', 'is_main')) {
         $property = $InputObject.PSObject.Properties[$name]
         if ($null -eq $property) { continue }
         if ($property.Value -is [string]) {
             $text = ([string]$property.Value).Trim().ToLowerInvariant()
-            if ($text -in @('true', '1', 'yes')) { return $true }
-            if ($text -in @('false', '0', 'no')) { return $false }
+            if ($text -in @('true', '1', 'yes')) { return [pscustomobject]@{ Classification = 'Main'; Evidence = "$name=$text" } }
+            if ($text -in @('false', '0', 'no')) { return [pscustomobject]@{ Classification = 'Subagent'; Evidence = "$name=$text" } }
         }
-        return [bool]$property.Value
+        return [pscustomobject]@{ Classification = $(if ([bool]$property.Value) { 'Main' } else { 'Subagent' }); Evidence = "$name=$($property.Value)" }
     }
     foreach ($name in @('parent_session_id', 'parent_session', 'forked_from_session_id')) {
         $property = $InputObject.PSObject.Properties[$name]
-        if ($null -ne $property -and -not [string]::IsNullOrWhiteSpace([string]$property.Value)) { return $false }
+        if ($null -ne $property -and -not [string]::IsNullOrWhiteSpace([string]$property.Value)) { return [pscustomobject]@{ Classification = 'Subagent'; Evidence = "$name=present" } }
     }
-    return $true
+    return [pscustomobject]@{ Classification = 'Unknown'; Evidence = 'no-main-session-fields' }
+}
+
+function Test-CodexMainSession {
+    [CmdletBinding()]
+    param([AllowNull()]$InputObject)
+
+    return (Get-CodexMainSessionClassification -InputObject $InputObject).Classification -ne 'Subagent'
 }
 
 function Read-CodexHookInvocation {

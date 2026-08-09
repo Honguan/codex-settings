@@ -84,11 +84,12 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
     if ($singleResult.TrustedCount -ne 1 -or $singleResult.UpdatedCount -ne 1 -or -not [bool]$singleResult.Verified) {
         throw 'Installer did not accept a single runtime Hook using commandWindows and an object matcher.'
     }
+    if (@($singleResult.Hooks).Count -ne 1 -or -not $singleResult.Hooks[0].Trusted -or -not $singleResult.Hooks[0].Effective -or [string]::IsNullOrWhiteSpace($singleResult.Hooks[0].CommandFingerprint)) { throw 'Effective Hook descriptor 缺少 trust、effective 或 command fingerprint。' }
     Remove-Item Env:\CODEX_SETTINGS_TEST_SINGLE_MANAGED_HOOK
 
     $env:CODEX_SETTINGS_TEST_NO_MANAGED_HOOKS = '1'
     $emptyResult = Set-CodexSettingsHookTrust -Root $globalRoot -Cwd $repositoryRoot
-    if ($emptyResult.TrustedCount -ne 0 -or $emptyResult.UpdatedCount -ne 0 -or -not [bool]$emptyResult.Verified) {
+    if ($emptyResult.TrustedCount -ne 0 -or $emptyResult.UpdatedCount -ne 0 -or -not [bool]$emptyResult.Verified -or @($emptyResult.Hooks).Count -ne 0) {
         throw 'Installer did not accept an installation without managed Hooks.'
     }
     Remove-Item Env:\CODEX_SETTINGS_TEST_NO_MANAGED_HOOKS
