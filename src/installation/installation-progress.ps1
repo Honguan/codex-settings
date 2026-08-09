@@ -5,6 +5,7 @@ function New-InstallationProgressSteps {
         [switch]$IncludeContext7,
         [switch]$IncludeSkills,
         [switch]$IncludePonytail,
+        [switch]$IncludeSerena,
         [switch]$IncludeNotifications
     )
 
