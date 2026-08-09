@@ -56,12 +56,43 @@ function Install-SerenaUv {
     if (-not (Test-SerenaUvAvailable)) { throw 'uv 已安裝，但目前 PowerShell 尚未解析到 uv。請重新開啟 PowerShell 後重跑安裝器。' }
 }
 
-function Remove-SerenaMcpSection {
+$script:SerenaMcpSectionPattern = '(?ms)^\[mcp_servers\.serena\][^\S\r\n]*(?:#[^\r\n]*)?(?:\r?\n|$).*?(?=^\[[^\]]+\][^\r\n]*(?:\r?\n|$)|\z)'
+
+function Get-SerenaMcpSection {
     [CmdletBinding()]
     param([AllowEmptyString()][string]$Content)
 
-    $pattern = '(?ms)^\[mcp_servers\.serena\]\s*\r?\n.*?(?=^\[[^\]]+\]|\z)'
-    return [regex]::Replace($Content, $pattern, '').Trim()
+    $match = [regex]::Match($Content, $script:SerenaMcpSectionPattern)
+    if (-not $match.Success) { return '' }
+    return $match.Value
+}
+
+function Set-SerenaMcpSection {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Content,
+        [Parameter(Mandatory = $true)][string]$Section,
+        [Parameter(Mandatory = $true)][string]$NewLine
+    )
+
+    $normalizedSection = ([regex]::Replace($Section, '\r\n|\r|\n', $NewLine)).TrimEnd() + $NewLine
+    $match = [regex]::Match($Content, $script:SerenaMcpSectionPattern)
+    if ($match.Success) {
+        return $Content.Substring(0, $match.Index) + $normalizedSection + $Content.Substring($match.Index + $match.Length)
+    }
+    if ([string]::IsNullOrEmpty($Content)) { return $normalizedSection }
+    $separator = if ($Content.EndsWith($NewLine + $NewLine)) { '' } elseif ($Content.EndsWith($NewLine)) { $NewLine } else { $NewLine + $NewLine }
+    return $Content + $separator + $normalizedSection
+}
+
+function Test-SerenaCodexMcpContent {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Content)
+
+    $shape = Get-TomlShape -Content $Content
+    if ($shape.Duplicates.Count -gt 0 -or -not $shape.Sections.Contains($script:SerenaMcpSection)) { return $false }
+    $section = Get-SerenaMcpSection -Content $Content
+    return $section -match '(?m)^\s*command\s*=\s*"serena"\s*$' -and $section -match '(?m)^\s*args\s*=\s*\[.*"start-mcp-server".*"--context=codex".*"--project-from-cwd".*\]'
 }
 
 function Test-SerenaCodexMcpConfiguration {
@@ -69,11 +100,30 @@ function Test-SerenaCodexMcpConfiguration {
     param([Parameter(Mandatory = $true)][string]$ConfigPath)
 
     if (-not (Test-Path -LiteralPath $ConfigPath -PathType Leaf)) { return $false }
-    $content = Get-Content -LiteralPath $ConfigPath -Raw
-    $shape = Get-TomlShape -Content $content
-    if ($shape.Duplicates.Count -gt 0 -or -not $shape.Sections.Contains($script:SerenaMcpSection)) { return $false }
-    $section = [regex]::Match($content, '(?ms)^\[mcp_servers\.serena\]\s*\r?\n(.*?)(?=^\[[^\]]+\]|\z)').Groups[1].Value
-    return $section -match '(?m)^\s*command\s*=\s*"serena"\s*$' -and $section -match '(?m)^\s*args\s*=\s*\[.*"start-mcp-server".*"--context=codex".*"--project-from-cwd".*\]'
+    return Test-SerenaCodexMcpContent -Content ([IO.File]::ReadAllText($ConfigPath))
+}
+
+function Invoke-SerenaCodexSetupInStagingHome {
+    [CmdletBinding()]
+    param()
+
+    $stagingRoot = Join-Path ([IO.Path]::GetTempPath()) ('codex-settings-serena-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $stagingRoot -Force | Out-Null
+    try {
+        $previousCodexHome = $env:CODEX_HOME
+        try {
+            $env:CODEX_HOME = $stagingRoot
+            $setup = Invoke-SerenaCommand -Command 'serena' -Arguments @('setup', 'codex')
+        } finally {
+            $env:CODEX_HOME = $previousCodexHome
+        }
+        if ($setup.ExitCode -ne 0) { throw "Serena Codex MCP 設定失敗：$($setup.Output -join [Environment]::NewLine)" }
+        $stagedConfigPath = Join-Path $stagingRoot 'config.toml'
+        if (-not (Test-SerenaCodexMcpConfiguration -ConfigPath $stagedConfigPath)) { throw 'Serena MCP 設定驗證失敗：缺少官方 Codex 啟動參數或 TOML 結構無效。' }
+        return Get-SerenaMcpSection -Content ([IO.File]::ReadAllText($stagedConfigPath))
+    } finally {
+        if (Test-Path -LiteralPath $stagingRoot) { [IO.Directory]::Delete($stagingRoot, $true) }
+    }
 }
 
 function Invoke-SerenaCodexSetup {
@@ -82,21 +132,18 @@ function Invoke-SerenaCodexSetup {
 
     $configPath = Join-Path $Root 'config.toml'
     $before = Get-TextFileState -Path $configPath
+    $serenaSection = Invoke-SerenaCodexSetupInStagingHome
+    $updatedContent = Set-SerenaMcpSection -Content $before.Content -Section $serenaSection -NewLine $before.NewLine
+    if (-not (Test-SerenaCodexMcpContent -Content $updatedContent)) { throw 'Serena MCP 設定驗證失敗：缺少官方 Codex 啟動參數或 TOML 結構無效。' }
     Save-TransactionFile -Transaction $Transaction -Path $configPath
-    $previousCodexHome = $env:CODEX_HOME
     try {
-        $env:CODEX_HOME = $Root
-        $setup = Invoke-SerenaCommand -Command 'serena' -Arguments @('setup', 'codex')
-    } finally {
-        $env:CODEX_HOME = $previousCodexHome
+        Write-TextFileState -Path $configPath -Content $updatedContent -Encoding $before.Encoding
+        if (-not (Test-SerenaCodexMcpConfiguration -ConfigPath $configPath)) { throw 'Serena MCP 設定驗證失敗：缺少官方 Codex 啟動參數或 TOML 結構無效。' }
+    } catch {
+        if ($before.Exists) { Write-TextFileState -Path $configPath -Content $before.Content -Encoding $before.Encoding }
+        else { Remove-Item -LiteralPath $configPath -Force -ErrorAction SilentlyContinue }
+        throw
     }
-    if ($setup.ExitCode -ne 0) { throw "Serena Codex MCP 設定失敗：$($setup.Output -join [Environment]::NewLine)" }
-    $after = Get-TextFileState -Path $configPath
-    if ((Remove-SerenaMcpSection $before.Content) -ne (Remove-SerenaMcpSection $after.Content)) {
-        Write-TextFileState -Path $configPath -Content $before.Content -Encoding $before.Encoding
-        throw 'serena setup codex 嘗試修改非 Serena MCP 設定；已還原 config.toml。'
-    }
-    if (-not (Test-SerenaCodexMcpConfiguration -ConfigPath $configPath)) { throw 'Serena MCP 設定驗證失敗：缺少官方 Codex 啟動參數或 TOML 結構無效。' }
     return 'Configured'
 }
 
