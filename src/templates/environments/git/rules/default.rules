@@ -35,56 +35,63 @@ prefix_rule(
     justification = "Allow read-only Git repository inspection.",
 )
 
-# 6. Confirm Git mutations.
+# 6. Allow common Git development operations.
 prefix_rule(
-    pattern = [["git", "git.exe"], ["add", "commit", "push", "pull", "fetch", "merge", "rebase", "checkout", "switch", "restore", "reset", "clean", "branch", "tag", "stash", "cherry-pick", "revert", "worktree", "submodule"]],
-    decision = "prompt",
-    justification = "Confirm Git operations that may change the working tree, history, index, or remote state.",
+    pattern = [["git", "git.exe"], ["add", "commit", "fetch", "pull", "push", "checkout", "switch", "branch", "stash", "merge", "rebase", "cherry-pick", "revert", "tag"]],
+    decision = "allow",
+    justification = "Allow common Git development operations.",
 )
 
-# 7. Block hard reset.
+# 7. Confirm other Git mutations.
+prefix_rule(
+    pattern = [["git", "git.exe"], ["restore", "reset", "clean", "worktree", "submodule"]],
+    decision = "prompt",
+    justification = "Confirm Git operations that are not approved for automatic execution.",
+)
+
+# 8. Block hard reset.
 prefix_rule(
     pattern = [["git", "git.exe"], ["reset"], ["--hard"]],
     decision = "forbidden",
     justification = "Hard reset can discard local work.",
 )
 
-# 8. Block forced clean.
+# 9. Block forced clean.
 prefix_rule(
     pattern = [["git", "git.exe"], ["clean"], ["-f", "-fd", "-df", "-fdx", "-xdf", "-ff", "-ffdx"]],
     decision = "forbidden",
     justification = "Forced clean can delete untracked files.",
 )
 
-# 9. Block force push.
+# 10. Block force push.
 prefix_rule(
     pattern = [["git", "git.exe"], ["push"], ["--force", "-f", "--force-with-lease"]],
     decision = "forbidden",
     justification = "Force push rewrites remote history.",
 )
 
-# 10. Confirm GitHub Actions mutations.
+# 11. Confirm GitHub Actions mutations.
 prefix_rule(
     pattern = [["gh", "gh.exe"], ["workflow", "run"], ["enable", "disable", "run", "delete", "rerun", "cancel"]],
     decision = "prompt",
     justification = "Confirm GitHub Actions workflow changes, cancellations, and reruns.",
 )
 
-# 11. Confirm GitHub collaboration mutations.
+# 12. Confirm GitHub collaboration mutations.
 prefix_rule(
     pattern = [["gh", "gh.exe"], ["pr", "issue", "release"], ["create", "edit", "close", "reopen", "delete", "merge", "review", "ready", "comment", "lock", "unlock", "checkout", "upload"]],
     decision = "prompt",
     justification = "Confirm pull request, issue, and release operations that modify local or remote state.",
 )
 
-# 12. Confirm package scripts.
+# 13. Confirm package scripts.
 prefix_rule(
     pattern = [["npm", "npm.cmd", "pnpm", "pnpm.cmd", "yarn", "yarn.cmd", "bun", "bun.exe"], ["run", "test", "exec", "dlx", "x"]],
     decision = "prompt",
     justification = "Confirm package scripts and executable runners because they execute project code.",
 )
 
-# 13. Confirm dependency mutations.
+# 14. Confirm dependency mutations.
 prefix_rule(
     pattern = [["npm", "npm.cmd", "pnpm", "pnpm.cmd", "yarn", "yarn.cmd", "bun", "bun.exe"], ["install", "i", "add", "remove", "uninstall", "update", "upgrade", "publish", "link"]],
     decision = "prompt",
