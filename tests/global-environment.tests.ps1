@@ -246,7 +246,7 @@ try {
     }
 
     $serenaSource = Get-Content -LiteralPath (Join-Path $script:ScriptRoot 'installation\serena.ps1') -Raw
-    foreach ($requiredCommand in @("uv tool install -p 3.13 serena-agent", "uv tool upgrade serena-agent", "serena setup codex")) {
+    foreach ($requiredCommand in @("@(''tool'', ''install'', ''-p'', ''3.13''", "@(''tool'', ''upgrade'', $script:SerenaPackageName)", "@(''setup'', ''codex'')")) {
         if ($serenaSource -notmatch [regex]::Escape($requiredCommand)) { throw "Serena installer does not use the required official command: $requiredCommand" }
     }
     if ($serenaSource -match 'uvx' -or $serenaSource -match 'git\+') { throw 'Serena installer must not configure uvx or Git-based MCP startup.' }
