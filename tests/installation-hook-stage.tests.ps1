@@ -6,7 +6,9 @@ if ([string]::IsNullOrWhiteSpace($testRoot)) {
     $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('codex-settings-issue39-' + [guid]::NewGuid().ToString('N'))
     $homeRoot = Join-Path $testRoot 'home'
     $localAppData = Join-Path $testRoot 'local-app-data'
-    New-Item -ItemType Directory -Path $homeRoot, $localAppData -Force | Out-Null
+    $commandRoot = Join-Path $testRoot 'bin'
+    New-Item -ItemType Directory -Path $homeRoot, $localAppData, $commandRoot -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $commandRoot 'codex.cmd'), "@exit /b 0`r`n", [Text.ASCIIEncoding]::new())
 
     try {
         $startInfo = [Diagnostics.ProcessStartInfo]::new()
@@ -19,6 +21,8 @@ if ([string]::IsNullOrWhiteSpace($testRoot)) {
         $startInfo.Environment['HOME'] = $homeRoot
         $startInfo.Environment['USERPROFILE'] = $homeRoot
         $startInfo.Environment['LOCALAPPDATA'] = $localAppData
+        $startInfo.Environment['PATH'] = "$commandRoot$([IO.Path]::PathSeparator)$($startInfo.Environment['PATH'])"
+        $startInfo.Environment['CODEX_SETTINGS_APP_SERVER_TEST_COMMAND'] = Join-Path $PSScriptRoot 'fixtures\successful-app-server.ps1'
         $process = [Diagnostics.Process]::Start($startInfo)
         $stdout = $process.StandardOutput.ReadToEnd()
         $stderr = $process.StandardError.ReadToEnd()
