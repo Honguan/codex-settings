@@ -61,7 +61,7 @@ function New-CodexOrchestrationSkippedResult {
 }
 
 function New-SerenaSkippedResult {
-    return [pscustomobject]@{ Managed = $false; SelectedByUser = $false; UvAvailable = $false; UvVersion = ''; VersionBefore = ''; VersionAfter = ''; InstalledNow = $false; UpdatedNow = $false; ToolStatus = 'SkippedByUser'; InitializationStatus = 'SkippedByUser'; CodexMcpStatus = 'SkippedByUser'; RuntimeStatus = 'SkippedByUser' }
+    return [pscustomobject]@{ Managed = $false; SelectedByUser = $false; UvAvailable = $false; UvVersion = ''; VersionBefore = ''; VersionAfter = ''; InstalledNow = $false; UpdatedNow = $false; ToolStatus = 'SkippedByUser'; InitializationStatus = 'SkippedByUser'; DashboardStatus = 'SkippedByUser'; DashboardAutoOpenStatus = 'SkippedByUser'; DashboardConfigStatus = 'SkippedByUser'; CodexMcpStatus = 'SkippedByUser'; RuntimeStatus = 'SkippedByUser' }
 }
 
 function Get-PonytailInstallationComponents($Result) {
@@ -91,6 +91,8 @@ function Get-SerenaInstallationComponents($Result) {
         [pscustomobject]@{ Name = 'Serena / uv'; Status = $(if ($Result.UvAvailable) { 'Available' } else { [string]$Result.ToolStatus }); Result = [string]$Result.UvVersion }
         [pscustomobject]@{ Name = 'Serena CLI'; Status = [string]$Result.ToolStatus; Result = [string]$Result.VersionAfter }
         [pscustomobject]@{ Name = 'Serena initialization'; Status = [string]$Result.InitializationStatus; Result = $(if ($Result.InitializationStatus -eq 'Existing') { '保留既有設定' } else { '全域設定已初始化' }) }
+        [pscustomobject]@{ Name = 'Serena Dashboard'; Status = [string]$Result.DashboardStatus; Result = 'Dashboard server remains available' }
+        [pscustomobject]@{ Name = 'Serena Dashboard auto-open'; Status = [string]$Result.DashboardAutoOpenStatus; Result = [string]$Result.DashboardConfigStatus }
         [pscustomobject]@{ Name = 'Serena Codex MCP'; Status = [string]$Result.CodexMcpStatus; Result = 'serena start-mcp-server --context=codex --project-from-cwd' }
         [pscustomobject]@{ Name = 'Serena MCP runtime'; Status = [string]$Result.RuntimeStatus; Result = '請重新啟動 Codex，並以 /mcp 確認 connected' }
     )

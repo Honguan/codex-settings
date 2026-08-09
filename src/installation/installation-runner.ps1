@@ -326,8 +326,9 @@ function Invoke-GlobalInstallation {
     try {
         Set-InstallProgress -Progress $progress -StepId 'Plan' -Detail '整理目標與外部套件狀態'
         $ccusageBefore = Get-CcusageState
-        $discovery = Get-InstallationDiscovery -Context $Context -Targets $targets -CcusageBefore $ccusageBefore
-        Write-InstallationPlan -Progress $progress -Context $Context -Targets $targets -CcusageBefore $ccusageBefore -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -InstallMattPocockSkills:$InstallMattPocockSkills -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput -SkipContext7Key:$SkipContext7Key
+        $serenaDashboardDiscovery = if ($InstallSerena) { $value = Get-SerenaConfigurationState; $value | Add-Member -NotePropertyName Selected -NotePropertyValue $true -PassThru } else { $null }
+        $discovery = Get-InstallationDiscovery -Context $Context -Targets $targets -CcusageBefore $ccusageBefore -SerenaDashboard $serenaDashboardDiscovery
+        Write-InstallationPlan -Progress $progress -Context $Context -Targets $targets -CcusageBefore $ccusageBefore -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -InstallMattPocockSkills:$InstallMattPocockSkills -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput -SkipContext7Key:$SkipContext7Key -SerenaDashboard $serenaDashboardDiscovery
         Complete-InstallStep -Progress $progress -Result ("已建立 $($targets.Count) 個目標")
 
         Set-InstallProgress -Progress $progress -StepId 'Prerequisites' -Detail '驗證 PowerShell、Node.js、Codex 與目標目錄'
@@ -523,7 +524,7 @@ function Invoke-GlobalInstallation {
                 $component = Invoke-IsolatedCommunityComponent -Name Serena -BackupRoot $Context.BackupRoot -Operation { param($componentTransaction) Invoke-SerenaInstallation -Root $Context.GlobalRoot -Transaction $componentTransaction -InstallUv:$InstallSerenaUv }
                 [void]$communityResults.Add($component)
                 $ownership.community.serena.Status = $component.Status
-                if ($component.Status -eq 'SUCCESS') { $serena = $component.Result; Complete-InstallStep -Progress $progress -Result ($serena.ToolStatus + '; ' + $serena.CodexMcpStatus) }
+                if ($component.Status -eq 'SUCCESS') { $serena = $component.Result; Complete-InstallStep -Progress $progress -Result ($serena.ToolStatus + '; Dashboard auto-open ' + $serena.DashboardAutoOpenStatus + '; ' + $serena.CodexMcpStatus) }
                 else { Fail-InstallStep -Progress $progress -Reason $component.Error -Continue }
             }
 
@@ -547,7 +548,7 @@ function Invoke-GlobalInstallation {
                 }
                 Ponytail = [ordered]@{ Managed = [bool]$ponytail.Managed; Marketplace = $script:PonytailMarketplaceSource; MarketplaceSource = [string]$ponytail.MarketplaceSource; MarketplaceStatus = [string]$ponytail.MarketplaceStatus; MarketplaceAddedNow = [bool]$ponytail.MarketplaceAddedNow; MarketplaceSwitchedNow = [bool]$ponytail.MarketplaceSwitchedNow; MarketplaceRecoveredNow = [bool]$ponytail.MarketplaceRecoveredNow; Plugin = $script:PonytailPluginId; WasInstalledBefore = [bool]$ponytail.WasInstalledBefore; InstalledNow = [bool]$ponytail.InstalledNow; UpdatedNow = [bool]$ponytail.UpdatedNow; HookCount = [int]$ponytail.HookCount; TrustedHookCount = [int]$ponytail.TrustedHookCount; HookIdentities = @($ponytail.HookIdentities); ValidationStatus = [string]$ponytail.ValidationStatus; TrustStatus = [string]$ponytail.TrustStatus }
                 CodexOrchestration = [ordered]@{ pluginManaged = [bool]$codexOrchestration.Managed; pluginPresent = $codexOrchestration.PluginPresent; pluginStatus = [string]$codexOrchestration.PluginStatus; pluginUpdatedThisRun = [bool]$codexOrchestration.UpdatedNow; marketplace = $script:CodexOrchestrationMarketplaceSource; plugin = $script:CodexOrchestrationPluginId; workflowRequested = [bool]$codexOrchestration.WorkflowRequested; workflowManaged = [bool]$codexOrchestration.WorkflowManaged; workflowConfigured = [bool]$codexOrchestration.WorkflowConfigured; workflowEffective = [bool]$codexOrchestration.WorkflowEffective; workflowStatus = [string]$codexOrchestration.WorkflowStatus; workflowConfigurationSummary = [string]$codexOrchestration.WorkflowConfigurationSummary; setupPrompt = [string]$codexOrchestration.SetupPrompt; actionRequired = [bool]$codexOrchestration.ActionRequired; lastVerified = [string]$codexOrchestration.LastVerified }
-                Serena = [ordered]@{ Managed = [bool]$serena.Managed; SelectedByUser = [bool]$serena.SelectedByUser; UvAvailable = [bool]$serena.UvAvailable; UvVersion = [string]$serena.UvVersion; VersionBefore = [string]$serena.VersionBefore; VersionAfter = [string]$serena.VersionAfter; InstalledNow = [bool]$serena.InstalledNow; UpdatedNow = [bool]$serena.UpdatedNow; InitializationStatus = [string]$serena.InitializationStatus; CodexMcpConfigured = ([string]$serena.CodexMcpStatus -eq 'Configured'); RuntimeVerified = $false }
+                Serena = [ordered]@{ Managed = [bool]$serena.Managed; SelectedByUser = [bool]$serena.SelectedByUser; UvAvailable = [bool]$serena.UvAvailable; UvVersion = [string]$serena.UvVersion; VersionBefore = [string]$serena.VersionBefore; VersionAfter = [string]$serena.VersionAfter; InstalledNow = [bool]$serena.InstalledNow; UpdatedNow = [bool]$serena.UpdatedNow; InitializationStatus = [string]$serena.InitializationStatus; DashboardEnabled = ([string]$serena.DashboardStatus -eq 'Enabled'); DashboardAutoOpen = $false; DashboardConfigStatus = [string]$serena.DashboardConfigStatus; CodexMcpConfigured = ([string]$serena.CodexMcpStatus -eq 'Configured'); RuntimeVerified = $false }
                 Context7 = [ordered]@{
                     EnvironmentVariable = 'CONTEXT7_API_KEY'
                     CreatedByInstaller = [bool]$contextState.CreatedByInstaller

@@ -40,6 +40,14 @@ try {
     if ($fastPlan.validationLevel -ne 'Fast' -or $fastPlan.runHookTrust -or $fastPlan.runNotificationTest -or $fastPlan.usageToolsChanged) { throw 'Unchanged install was not reduced to the fast workflow.' }
     if (Test-CodexWorkflowDecision -Plan $fastPlan -Operation HookTrust) { throw 'Fast workflow incorrectly enabled Hook trust.' }
 
+    $serenaDiscovery = [pscustomobject]@{ context7UserPresent = $true; usageTools = [pscustomobject]@{ profileCurrent = $true }; serenaDashboard = [pscustomobject]@{ Selected = $true; DashboardConfigStatus = 'Enabled'; NeedsChange = $true } }
+    $serenaPlan = New-InstallationChangePlan -Discovery $serenaDiscovery -Results @($existingResult) -CcusageBefore ([pscustomobject]@{ Installed = $true; Version = '1.0.0' })
+    if ($serenaPlan.validationLevel -ne 'ChangedOnly' -or -not $serenaPlan.externalConfigurationChanged -or $serenaPlan.serenaDashboard.action -ne 'ConfigureDoNotAutoOpen') { throw 'Current Serena package did not expose the required Dashboard ChangePlan item.' }
+    $serenaDiscovery.serenaDashboard.DashboardConfigStatus = 'Disabled'
+    $serenaDiscovery.serenaDashboard.NeedsChange = $false
+    $serenaPlan = New-InstallationChangePlan -Discovery $serenaDiscovery -Results @($existingResult) -CcusageBefore ([pscustomobject]@{ Installed = $true; Version = '1.0.0' })
+    if ($serenaPlan.serenaDashboard.action -ne 'AlreadyConfigured' -or $serenaPlan.externalConfigurationChanged) { throw 'Already configured Serena Dashboard plan is invalid.' }
+
     $changedFile = New-InstallFileResult -Path 'hooks.json' -RelativePath 'hooks.json' -Changed $true -Updated $true -Status Updated
     $changedResult = New-InstallationResult -Mode Global -Root $root -Files @($changedFile) -Previous ([pscustomobject]@{ Version = 5 }) -HookChanged $true
     $changedPlan = New-InstallationChangePlan -Discovery $discovery -Results @($changedResult) -CcusageBefore ([pscustomobject]@{ Installed = $true; Version = '1.0.0' })

@@ -481,10 +481,15 @@ function Write-InstallationPlan {
         [switch]$InstallRequestExecutionOptimizer,
         [switch]$InstallMattPocockSkills,
         [switch]$EnableDefaultModeRequestUserInput,
-        [switch]$SkipContext7Key
+        [switch]$SkipContext7Key,
+        [AllowNull()]$SerenaDashboard = $null
     )
 
     $ccusageStatus = if ($null -eq $CcusageBefore) { '待偵測' } elseif ([bool]$CcusageBefore.Installed) { "已存在，沿用 $($CcusageBefore.Version)" } else { '未安裝，將安裝' }
     Write-InstallLog -Progress $Progress -Message ("PLAN environment={0}; style={1}; notifications={2}; targets={3}; skills={4}; defaultModeRequestUserInput={5}" -f $Context.DevelopmentEnvironment, $Context.InstallStyle, $Context.InstallWindowsNotifications, $Targets.Count, ($InstallRequestExecutionOptimizer -or $InstallMattPocockSkills), $EnableDefaultModeRequestUserInput)
     Write-InstallLog -Progress $Progress -Message ("PLAN targetRoots={0}; ccusage={1}; context7={2}" -f ((@($Targets | ForEach-Object { $_.Root }) -join ',')), $ccusageStatus, $(if ($SkipContext7Key) { 'skipped-by-user' } else { 'configure-or-existing' }))
+    if ($null -ne $SerenaDashboard -and [bool]$SerenaDashboard.Selected) {
+        $dashboardAction = switch ([string]$SerenaDashboard.DashboardConfigStatus) { 'Disabled' { 'Already configured' }; 'Invalid' { 'ConfigurationConflict' }; default { 'Configure: do not auto-open' } }
+        Write-InstallLog -Progress $Progress -Message "PLAN Serena=selected; Serena Dashboard=$dashboardAction"
+    }
 }
