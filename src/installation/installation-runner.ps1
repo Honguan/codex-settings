@@ -119,7 +119,7 @@ function Write-InstallationSummary {
             [pscustomobject]@{ Name = 'request-execution-optimizer'; Status = $(if ($InstallRequestExecutionOptimizer) { 'Enabled' } else { 'SkippedByUser' }); Result = $(if ($InstallRequestExecutionOptimizer) { '已選用' } else { '未選用' }) }
             [pscustomobject]@{ Name = 'mattpocock/skills'; Status = $(if ($InstallMattPocockSkills) { 'Updated' } else { 'SkippedByUser' }); Result = $(if ($InstallMattPocockSkills) { "已處理 $SkillsCount 個" } else { '未選用' }) }
             [pscustomobject]@{ Name = 'request_user_input feature'; Status = $(if ($EnableDefaultModeRequestUserInput) { 'Enabled' } else { 'SkippedByUser' }); Result = $(if ($EnableDefaultModeRequestUserInput) { '已啟用' } else { '未啟用' }) }
-            [pscustomobject]@{ Name = 'Windows notifications'; Status = $notificationComponentStatus; Result = $(if ($InstallWindowsNotifications) { $NotificationStatus } else { '未安裝' }) }
+            [pscustomobject]@{ Name = 'Windows 開發狀態與使用量通知'; Status = $notificationComponentStatus; Result = $(if ($InstallWindowsNotifications) { $NotificationStatus + '（開發狀態 + Token / Cost 使用量）' } else { '未安裝' }) }
             [pscustomobject]@{ Name = 'Hook trust'; Status = $hookStatus; Result = $(if ($HookTrust.Skipped) { '未變更，略過重新 trust' } else { "已驗證 $($HookTrust.TrustedCount) 個、更新 $($HookTrust.UpdatedCount) 個" }) }
         )
         $components += @(Get-PonytailInstallationComponents -Result $Ponytail)
@@ -320,7 +320,7 @@ function Invoke-GlobalInstallation {
             Complete-Installation -Results $resultArray -Transaction $transaction -External $external | Out-Null
 
             if ($Context.InstallWindowsNotifications) {
-                Set-InstallProgress -Progress $progress -StepId 'Notifications' -Detail '最後執行非關鍵通知測試'
+                Set-InstallProgress -Progress $progress -StepId 'Notifications' -Detail '驗證開發狀態與 Token / Cost 使用量通知'
                 if (Test-CodexWorkflowDecision -Plan $changePlan -Operation NotificationTest) {
                     $notificationScript = Join-Path $Context.GlobalRoot 'hooks\show-codex-notification.ps1'
                     $notificationOutput = & pwsh -NoLogo -NoProfile -NonInteractive -File $notificationScript -Type Completed -Test 2>&1
