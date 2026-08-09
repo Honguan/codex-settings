@@ -16,6 +16,111 @@ try {
     }
     if (@($fullSteps | Where-Object Id -eq 'Targets')[0].TargetCount -ne 2) { throw '安裝進度未記錄目標數量。' }
 
+    $script:progressCalls = New-Object 'System.Collections.Generic.List[object]'
+    function Write-Progress {
+        param([int]$Id, [string]$Activity, [string]$Status, [int]$PercentComplete, [switch]$Completed)
+        [void]$script:progressCalls.Add([pscustomobject]@{ Id = $Id; Status = $Status; Percent = $PercentComplete; Completed = [bool]$Completed })
+    }
+
+    $dynamicRoot = Join-Path $testRoot 'dynamic'
+    $dynamicSteps = @(New-InstallationProgressSteps)
+    $dynamicProgress = Start-InstallProgress -Steps $dynamicSteps -Root $dynamicRoot -RendererMode Interactive
+    Set-InstallProgress -Progress $dynamicProgress -StepId 'Plan' -Detail '第一個動態步驟'
+    $firstDynamicCall = $script:progressCalls[0]
+    if ($dynamicSteps[0].Id -ne 'Plan' -or $firstDynamicCall.Percent -ne 0 -or $firstDynamicCall.Status -notmatch "1/$($dynamicSteps.Count)") { throw '動態步驟的第一階段未從一致的 0% 與 1/total 開始。' }
+    Complete-InstallStep -Progress $dynamicProgress -Result '完成'
+    $completedDynamicCall = $script:progressCalls[$script:progressCalls.Count - 1]
+    $expectedFirstCompletion = [int][Math]::Round(100 / $dynamicSteps.Count)
+    if ($completedDynamicCall.Percent -ne $expectedFirstCompletion) { throw "第一個動態步驟完成比例錯誤：expected=$expectedFirstCompletion actual=$($completedDynamicCall.Percent)" }
+    $script:progressCalls.Clear()
+
+    $interactiveRoot = Join-Path $testRoot 'interactive'
+    $interactiveSteps = @(New-InstallationProgressSteps)
+    $interactiveProgress = Start-InstallProgress -Steps $interactiveSteps -Root $interactiveRoot -Metadata @{ Test = 'interactive-progress' } -RendererMode Interactive
+    $runningOutput = (& {
+        Set-InstallProgress -Progress $interactiveProgress -StepId 'Plan' -Detail '整理安裝計畫'
+        Complete-InstallStep -Progress $interactiveProgress -Result '已建立 1 個目標'
+        Set-InstallProgress -Progress $interactiveProgress -StepId 'Prerequisites' -Detail '驗證環境'
+        Complete-InstallStep -Progress $interactiveProgress -Result '通過'
+    } 6>&1 | Out-String)
+    if ($runningOutput -match '\[(?:✓|✗)\]' -or $runningOutput -match '(?m)^\[[█░]+\]') { throw '互動式安裝期間不應永久輸出進度條或 Step 歷史行。' }
+    if (@($script:progressCalls | Where-Object Id -ne 1).Count -ne 0 -or @($script:progressCalls | Where-Object Completed).Count -ne 0) { throw '互動式安裝期間只能維持一個未完成的 installation progress record。' }
+
+    $finalOutput = (& { Write-InstallResult -Progress $interactiveProgress -Status SUCCESS -Summary @{ Installed = 0; Updated = 0; Unchanged = 0; Skipped = 0 } } 6>&1 | Out-String)
+    if (@($script:progressCalls | Where-Object Completed).Count -ne 1) { throw '最終摘要前未清除 installation progress record。' }
+    foreach ($stepName in @('安裝計畫', '前置需求檢查')) {
+        if (@([regex]::Matches($finalOutput, [regex]::Escape($stepName))).Count -ne 1) { throw "完成 Step 未在最終摘要中恰好顯示一次：$stepName" }
+    }
+    if ($finalOutput -notmatch '\[✓\].*安裝計畫.*已建立 1 個目標' -or $finalOutput -notmatch '\[✓\].*前置需求檢查.*通過') { throw '最終摘要未使用 Progress.Steps 顯示完整 Step 結果。' }
+
+    $fileResults = @(
+        [pscustomobject]@{ RelativePath = 'config.toml'; Status = 'Unchanged'; Changed = $false; ExistedBefore = $true },
+        [pscustomobject]@{ RelativePath = 'hooks.json'; Status = 'Updated'; Changed = $true; ExistedBefore = $true },
+        [pscustomobject]@{ RelativePath = 'hooks\show-codex-notification.ps1'; Status = 'Installed'; Changed = $true; ExistedBefore = $false },
+        [pscustomobject]@{ RelativePath = 'optional.txt'; Status = 'Skipped'; Changed = $false; ExistedBefore = $false }
+    )
+    $installationResults = @([pscustomobject]@{ Mode = 'Global'; Root = 'C:\Users\tester\.codex'; Files = $fileResults })
+    $components = @(
+        [pscustomobject]@{ Name = 'ccusage'; Status = 'Existing'; Result = '20.0.19' },
+        [pscustomobject]@{ Name = 'ccsessions'; Status = 'Updated'; Result = 'Profile 已更新' },
+        [pscustomobject]@{ Name = 'Context7'; Status = 'SkippedByUser'; Result = '使用者略過' },
+        [pscustomobject]@{ Name = 'Windows notifications'; Status = 'Unchanged'; Result = 'Hook 未變更' }
+    )
+    $contentOutput = (& { Write-InstallResult -Progress $interactiveProgress -Status SUCCESS -Summary @{ Installed = 1; Updated = 1; Unchanged = 1; Skipped = 1 } -Results $installationResults -Components $components } 6>&1 | Out-String)
+    foreach ($expected in @('[=] config.toml', '[~] hooks.json', '[+] hooks\show-codex-notification.ps1', '[-] optional.txt', '[=] ccusage', '[~] ccsessions', '[-] Context7', '[=] Windows notifications')) {
+        if (-not $contentOutput.Contains($expected)) { throw "最終摘要缺少安裝內容：$expected" }
+    }
+    $staleSummaryResult = [pscustomobject]@{ Files = $fileResults; Summary = [pscustomobject]@{ Created = 4; Installed = 4; Updated = 0; Unchanged = 0; Failed = 0 } }
+    $recomputedSummary = Get-InstallResultSummary -Results @($staleSummaryResult)
+    if ($recomputedSummary.Installed -ne 1 -or $recomputedSummary.Updated -ne 1 -or $recomputedSummary.Unchanged -ne 1 -or $recomputedSummary.Skipped -ne 1) { throw '最終統計未依 InstallationResult.Files 的最終狀態重新計算。' }
+
+    $runnerProgress = Start-InstallProgress -Steps @(New-InstallationProgressSteps) -Root (Join-Path $testRoot 'runner-summary') -Metadata @{ Environment = 'Git'; InstallStyle = 'Merge' } -RendererMode Interactive
+    Set-InstallProgress -Progress $runnerProgress -StepId 'Plan' -Detail '建立計畫'
+    Complete-InstallStep -Progress $runnerProgress -Result '完成'
+    $ccusageBefore = [pscustomobject]@{ Installed = $true; Version = '20.0.19' }
+    $ccusage = [pscustomobject]@{ PackageInstalledNow = $false; CommandsUpdated = $true; PackageAfter = [pscustomobject]@{ Version = '20.0.19' } }
+    $hookTrust = [pscustomobject]@{ Skipped = $false; TrustedCount = 3; UpdatedCount = 1 }
+    $runnerOutput = (& {
+        Write-InstallationSummary -InstallStyle Merge -DevelopmentEnvironment Git -Results $installationResults -Ccusage $ccusage -CcusageBefore $ccusageBefore -HookTrust $hookTrust -TransactionRoot 'C:\backup' -InstallWindowsNotifications $true -Progress $runnerProgress -NotificationStatus '已送出測試通知' -SkippedCount 0 -SkipContext7Key $true -InstallMattPocockSkills $false -InstallRequestExecutionOptimizer $false -EnableDefaultModeRequestUserInput $true
+    } 6>&1 | Out-String)
+    if (@([regex]::Matches($runnerOutput, '(?m)^安裝完成')).Count -ne 1) { throw 'runner 不應先輸出舊摘要再輸出第二份最終摘要。' }
+    foreach ($expected in @('config.toml', 'hooks.json', 'Codex', 'MCP / Context7', 'ccusage', 'ccsessions', 'cdaily', 'request-execution-optimizer', 'mattpocock/skills', 'request_user_input feature', 'Windows notifications', 'Hook trust')) {
+        if (-not $runnerOutput.Contains($expected)) { throw "runner 最終摘要缺少處理結果：$expected" }
+    }
+
+    $planProgress = Start-InstallProgress -Steps @(New-InstallationProgressSteps) -Root (Join-Path $testRoot 'plan-output') -RendererMode Interactive
+    $planContext = [pscustomobject]@{ DevelopmentEnvironment = 'Git'; InstallStyle = 'Merge'; GlobalRoot = 'C:\Users\tester\.codex'; InstallWindowsNotifications = $true }
+    $planTargets = @([pscustomobject]@{ Mode = 'Global'; Root = $planContext.GlobalRoot })
+    $planOutput = (& { Write-InstallationPlan -Progress $planProgress -Context $planContext -Targets $planTargets -CcusageBefore $ccusageBefore -SkipContext7Key } 6>&1 | Out-String)
+    if (-not [string]::IsNullOrWhiteSpace($planOutput)) { throw '安裝計畫不得在互動執行期間繞過單一 progress renderer 輸出歷史內容。' }
+    $planLog = Get-Content -LiteralPath $planProgress.LogPath -Raw
+    if ($planLog -notmatch 'PLAN environment=Git; style=Merge; notifications=True; targets=1') { throw '精簡 console 後 installer log 仍須保留完整 PLAN。' }
+
+    $lineProgress = Start-InstallProgress -Steps @(New-InstallationProgressSteps) -Root (Join-Path $testRoot 'line-mode') -RendererMode Line
+    $lineOutput = (& {
+        Set-InstallProgress -Progress $lineProgress -StepId 'Plan' -Detail '建立計畫'
+        Complete-InstallStep -Progress $lineProgress -Result '完成'
+    } 6>&1 | Out-String)
+    if (@([regex]::Matches($lineOutput, '(?m)^STEP START ')).Count -ne 1 -or @([regex]::Matches($lineOutput, '(?m)^STEP END ')).Count -ne 1) { throw 'line-mode 每個 Step 事件必須只輸出一行。' }
+    if ($lineOutput.Contains([char]27) -or $lineOutput -match '[█░]') { throw 'redirected / line-mode 不得輸出 ANSI 游標控制或互動式進度條。' }
+
+    $failureSteps = @(New-InstallationProgressSteps | Select-Object -First 6)
+    $failureProgress = Start-InstallProgress -Steps $failureSteps -Root (Join-Path $testRoot 'failure') -RendererMode Interactive
+    $script:progressCalls.Clear()
+    foreach ($step in @($failureSteps | Select-Object -First 5)) {
+        Set-InstallProgress -Progress $failureProgress -StepId $step.Id -Detail "執行 $($step.Name)"
+        Complete-InstallStep -Progress $failureProgress -Result '完成'
+    }
+    $failedStep = $failureSteps[5]
+    Set-InstallProgress -Progress $failureProgress -StepId $failedStep.Id -Detail '人工失敗'
+    Fail-InstallStep -Progress $failureProgress -Reason 'intentional step failure'
+    $failureOutput = (& { Write-InstallResult -Progress $failureProgress -Status FAILED -Summary @{ Installed = 1; Updated = 2; Unchanged = 3; Skipped = 0; Rollback = 'SUCCESS' } -Results $installationResults } 6>&1 | Out-String)
+    if (@($script:progressCalls | Where-Object Completed).Count -ne 1) { throw '失敗摘要前未清除互動式 progress record。' }
+    foreach ($step in @($failureSteps | Select-Object -First 5)) {
+        if ($failureOutput -notmatch ('\[✓\].*' + [regex]::Escape($step.Name))) { throw "失敗摘要缺少已完成 Step：$($step.Name)" }
+    }
+    if ($failureOutput -notmatch ('\[✗\].*' + [regex]::Escape($failedStep.Name) + '.*intentional step failure') -or $failureOutput -notmatch 'Rollback: SUCCESS' -or $failureOutput -notmatch '原因：intentional step failure') { throw '失敗摘要缺少失敗 Step、reason 或 rollback。' }
+
     $progress = Start-InstallProgress -Steps $fullSteps -Root $testRoot -Metadata @{ Test = 'installation-progress' }
     Set-InstallProgress -Progress $progress -StepId 'Plan' -Detail '測試安裝計畫'
     Complete-InstallStep -Progress $progress -Result '通過'

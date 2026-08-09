@@ -21,8 +21,8 @@ try {
     if ($installationSource -match 'Write-Warning\s+"已回復中斷的交易') {
         throw 'Installer startup must not render recovered transactions as a yellow warning.'
     }
-    if ($installationSource -notmatch 'Write-Host\s+"已自動回復上次中斷的安裝交易') {
-        throw 'Installer startup did not preserve a clear recovered-transaction status message.'
+    if ($installationSource -notmatch 'RECOVERY restored=') {
+        throw 'Installer startup did not preserve recovered-transaction diagnostics in the installer log.'
     }
     foreach ($managementScript in @('commands\restore-settings.ps1', 'commands\uninstall-settings.ps1')) {
         $managementSource = Get-Content -LiteralPath (Join-Path $script:ScriptRoot $managementScript) -Raw
