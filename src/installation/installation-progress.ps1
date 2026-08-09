@@ -355,7 +355,7 @@ function Get-InstallResultSymbol([string]$Status, $Glyphs) {
         '^Updated$' { return '~' }
         '^(?:Existing|Unchanged|Current|Validated)$' { return '=' }
         '^(?:Skipped|SkippedByUser|SkippedUnchanged|NotConfigured)$' { return '-' }
-        '^PendingUserSetup$' { return '!' }
+        '^ActionRequired$' { return '!' }
         '^Failed$' { return $(if ($null -ne $Glyphs) { $Glyphs.Failure } else { '✗' }) }
         default { return '=' }
     }
@@ -412,7 +412,13 @@ function Write-InstallResult {
             if ($categoryComponents.Count -eq 0) { continue }
             Write-InstallConsoleLine -Progress $Progress -Text $(if ($category -eq 'Personal') { '個人 Codex Settings' } else { '社區／開源元件' })
             foreach ($component in $categoryComponents) {
-                Write-InstallConsoleLine -Progress $Progress -Text ("  [{0}] {1}  {2}  {3}" -f (Get-InstallResultSymbol ([string]$component.Status) $glyphs), $component.Name, $component.Status, $component.Result)
+                $componentResult = [string]$component.Result
+                if ($componentResult -match '[\r\n]') {
+                    Write-InstallConsoleLine -Progress $Progress -Text ("  [{0}] {1}  {2}" -f (Get-InstallResultSymbol ([string]$component.Status) $glyphs), $component.Name, $component.Status)
+                    Write-Host $componentResult
+                } else {
+                    Write-InstallConsoleLine -Progress $Progress -Text ("  [{0}] {1}  {2}  {3}" -f (Get-InstallResultSymbol ([string]$component.Status) $glyphs), $component.Name, $component.Status, $componentResult)
+                }
             }
         }
     }
@@ -435,7 +441,7 @@ function Write-InstallResult {
     foreach ($name in @('PersonalResult', 'CommunityResult', 'OverallResult')) {
         if ($Summary.ContainsKey($name)) { Write-Host ("{0}: {1}" -f $name, $Summary[$name]) }
     }
-    if ($Status -ne 'SUCCESS') {
+    if ($Status -eq 'FAILED') {
         Write-InstallConsoleLine -Progress $Progress -Text "失敗階段：$($Progress.FailureStep)"
         Write-InstallConsoleLine -Progress $Progress -Text "原因：$($Progress.FailureReason)"
     }

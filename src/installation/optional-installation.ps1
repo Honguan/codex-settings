@@ -57,7 +57,7 @@ function New-PonytailSkippedResult([bool]$AlreadyInstalled = $false) {
 }
 
 function New-CodexOrchestrationSkippedResult {
-    return [pscustomobject]@{ Managed = $false; PluginPresent = $null; WasInstalledBefore = $false; InstalledNow = $false; UpdatedNow = $false; MarketplaceStatus = 'SkippedByUser'; PluginStatus = 'SkippedByUser'; PluginVersion = ''; WorkflowManaged = $false; WorkflowConfigured = $false; WorkflowEffective = $false; WorkflowStatus = 'SkippedByUser'; WorkflowConfigurationSummary = ''; SetupPrompt = '' }
+    return [pscustomobject]@{ Managed = $false; PluginPresent = $null; WasInstalledBefore = $false; InstalledNow = $false; UpdatedNow = $false; MarketplaceStatus = 'SkippedByUser'; PluginStatus = 'SkippedByUser'; PluginVersion = ''; WorkflowRequested = $false; WorkflowManaged = $false; WorkflowConfigured = $false; WorkflowEffective = $false; WorkflowStatus = 'SkippedByUser'; WorkflowConfigurationSummary = ''; SetupPrompt = ''; ActionRequired = $false; LastVerified = $null }
 }
 
 function New-SerenaSkippedResult {
@@ -75,7 +75,7 @@ function Get-PonytailInstallationComponents($Result) {
 
 function Get-CodexOrchestrationInstallationComponents($Result) {
     $workflowResult = switch ([string]$Result.WorkflowStatus) {
-        'PendingUserSetup' { '請在新的 Codex Task 貼上產生的 setup Prompt' }
+        'ActionRequired' { "請完全關閉並重新啟動 Codex，建立新的 Codex Task 並貼上（不是 PowerShell 命令）：`n`n$($Result.SetupPrompt)`n`n設定完成後，再建立另一個新的 Codex Task，workflow 才會生效。" }
         'Preserved' { '保留既有 workflow，未重新設定' }
         'NotConfigured' { 'Plugin only / workflow not configured' }
         default { '未選用' }

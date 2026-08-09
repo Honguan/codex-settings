@@ -134,8 +134,10 @@ function Write-CodexOrchestrationPreview($Roles) {
 function Select-CodexOrchestrationWorkflow {
     Write-Host ''
     Write-Host 'Codex-Orchestration 已安裝。'
+    Write-Host '工作流設定必須在安裝後的新 Codex Task 中完成。'
+    Write-Host '安裝程式只會產生完整 Setup Prompt，不會把 Codex 對話 Prompt 當成終端機命令執行。'
     Write-Host ''
-    if (-not (Read-YesNoChoice -Prompt '是否現在設定工作流角色？[Y/n]' -Default $true)) {
+    if (-not (Read-YesNoChoice -Prompt '要產生工作流 Setup Prompt 嗎？[Y/n]' -Default $true)) {
         return [pscustomobject]@{ Requested = $false; Status = 'NotConfigured'; SetupPrompt = ''; Roles = $null }
     }
 
@@ -174,8 +176,8 @@ function Select-CodexOrchestrationWorkflow {
             Executor = New-CodexOrchestrationRole -Name 'Executor' -Enabled $true
         }
         Write-CodexOrchestrationPreview -Roles $roles
-        if (Read-YesNoChoice -Prompt '套用這個設定嗎？[Y/n]' -Default $true) {
-            return [pscustomobject]@{ Requested = $true; Status = 'PendingUserSetup'; SetupPrompt = ConvertTo-CodexOrchestrationSetupPrompt -Roles $roles; Roles = $roles }
+        if (Read-YesNoChoice -Prompt '要產生這個 workflow Setup Prompt 嗎？[Y/n]' -Default $true) {
+            return [pscustomobject]@{ Requested = $true; Status = 'ActionRequired'; SetupPrompt = ConvertTo-CodexOrchestrationSetupPrompt -Roles $roles; Roles = $roles }
         }
     }
 }
@@ -187,7 +189,7 @@ function Invoke-CodexOrchestrationInstallation {
     $before = Get-CodexOrchestrationInstallationState
     $action = if ($before.PluginPresent -and $InteractiveWorkflow) { Select-CodexOrchestrationExistingAction } elseif ($before.PluginPresent) { 'UpdatePreserve' } else { 'Install' }
     if ($action -eq 'KeepCurrent') {
-        return [pscustomobject]@{ Managed = $false; PluginPresent = $true; WasInstalledBefore = $true; InstalledNow = $false; UpdatedNow = $false; MarketplaceStatus = 'Current'; PluginStatus = 'Current'; PluginVersion = $before.Version; WorkflowManaged = $false; WorkflowConfigured = $false; WorkflowEffective = $false; WorkflowStatus = 'Preserved'; WorkflowConfigurationSummary = 'Existing workflow preserved'; SetupPrompt = '' }
+        return [pscustomobject]@{ Managed = $false; PluginPresent = $true; WasInstalledBefore = $true; InstalledNow = $false; UpdatedNow = $false; MarketplaceStatus = 'Current'; PluginStatus = 'Current'; PluginVersion = $before.Version; WorkflowRequested = $false; WorkflowManaged = $false; WorkflowConfigured = $false; WorkflowEffective = $false; WorkflowStatus = 'Preserved'; WorkflowConfigurationSummary = 'Existing workflow preserved'; SetupPrompt = ''; ActionRequired = $false; LastVerified = (Get-Date).ToString('o') }
     }
 
     $marketplace = if ($before.MarketplacePresent) {
@@ -217,12 +219,15 @@ function Invoke-CodexOrchestrationInstallation {
         MarketplaceStatus = if ($before.MarketplacePresent) { 'Updated' } else { 'Installed' }
         PluginStatus = $pluginStatus
         PluginVersion = $after.Version
+        WorkflowRequested = [bool]$workflow.Requested
         WorkflowManaged = $false
         WorkflowConfigured = $false
         WorkflowEffective = $false
         WorkflowStatus = [string]$workflow.Status
         WorkflowConfigurationSummary = $summary
         SetupPrompt = [string]$workflow.SetupPrompt
+        ActionRequired = $workflow.Status -eq 'ActionRequired'
+        LastVerified = (Get-Date).ToString('o')
     }
 }
 

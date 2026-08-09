@@ -489,7 +489,17 @@ function Invoke-GlobalInstallation {
                 $component = Invoke-IsolatedCommunityComponent -Name CodexOrchestration -BackupRoot $Context.BackupRoot -Operation { param($componentTransaction) [void](Assert-CodexOrchestrationPrerequisites); Invoke-CodexOrchestrationInstallation -InteractiveWorkflow:$ConfigureCodexOrchestration } -RollbackExternal { param($value) if ($null -ne $value) { Undo-CodexOrchestrationInstallation -Result $value } }
                 [void]$communityResults.Add($component)
                 $ownership.community.codexOrchestration.Status = $component.Status
-                if ($component.Status -eq 'SUCCESS') { $codexOrchestration = $component.Result; Complete-InstallStep -Progress $progress -Result ($codexOrchestration.PluginStatus + '; workflow ' + $codexOrchestration.WorkflowStatus) }
+                if ($component.Status -eq 'SUCCESS') {
+                    $codexOrchestration = $component.Result
+                    $owner = $ownership.community.codexOrchestration
+                    $owner.pluginStatus = [string]$codexOrchestration.PluginStatus
+                    $owner.workflowRequested = [bool]$codexOrchestration.WorkflowRequested
+                    $owner.workflowStatus = [string]$codexOrchestration.WorkflowStatus
+                    $owner.setupPrompt = [string]$codexOrchestration.SetupPrompt
+                    $owner.actionRequired = [bool]$codexOrchestration.ActionRequired
+                    $owner.lastVerified = [string]$codexOrchestration.LastVerified
+                    Complete-InstallStep -Progress $progress -Result ($codexOrchestration.PluginStatus + '; workflow ' + $codexOrchestration.WorkflowStatus)
+                }
                 else { Fail-InstallStep -Progress $progress -Reason $component.Error -Continue }
             }
 
@@ -521,7 +531,7 @@ function Invoke-GlobalInstallation {
                     PackageInstalledNow = [bool]$ccusage.PackageInstalledNow
                 }
                 Ponytail = [ordered]@{ Managed = [bool]$ponytail.Managed; Marketplace = $script:PonytailMarketplaceSource; MarketplaceSource = [string]$ponytail.MarketplaceSource; MarketplaceStatus = [string]$ponytail.MarketplaceStatus; MarketplaceAddedNow = [bool]$ponytail.MarketplaceAddedNow; MarketplaceSwitchedNow = [bool]$ponytail.MarketplaceSwitchedNow; MarketplaceRecoveredNow = [bool]$ponytail.MarketplaceRecoveredNow; Plugin = $script:PonytailPluginId; WasInstalledBefore = [bool]$ponytail.WasInstalledBefore; InstalledNow = [bool]$ponytail.InstalledNow; UpdatedNow = [bool]$ponytail.UpdatedNow; HookCount = [int]$ponytail.HookCount; TrustedHookCount = [int]$ponytail.TrustedHookCount; HookIdentities = @($ponytail.HookIdentities); ValidationStatus = [string]$ponytail.ValidationStatus; TrustStatus = [string]$ponytail.TrustStatus }
-                CodexOrchestration = [ordered]@{ pluginManaged = [bool]$codexOrchestration.Managed; pluginPresent = $codexOrchestration.PluginPresent; pluginUpdatedThisRun = [bool]$codexOrchestration.UpdatedNow; marketplace = $script:CodexOrchestrationMarketplaceSource; plugin = $script:CodexOrchestrationPluginId; workflowManaged = [bool]$codexOrchestration.WorkflowManaged; workflowConfigured = [bool]$codexOrchestration.WorkflowConfigured; workflowEffective = [bool]$codexOrchestration.WorkflowEffective; workflowStatus = [string]$codexOrchestration.WorkflowStatus; workflowConfigurationSummary = [string]$codexOrchestration.WorkflowConfigurationSummary; setupPrompt = [string]$codexOrchestration.SetupPrompt }
+                CodexOrchestration = [ordered]@{ pluginManaged = [bool]$codexOrchestration.Managed; pluginPresent = $codexOrchestration.PluginPresent; pluginStatus = [string]$codexOrchestration.PluginStatus; pluginUpdatedThisRun = [bool]$codexOrchestration.UpdatedNow; marketplace = $script:CodexOrchestrationMarketplaceSource; plugin = $script:CodexOrchestrationPluginId; workflowRequested = [bool]$codexOrchestration.WorkflowRequested; workflowManaged = [bool]$codexOrchestration.WorkflowManaged; workflowConfigured = [bool]$codexOrchestration.WorkflowConfigured; workflowEffective = [bool]$codexOrchestration.WorkflowEffective; workflowStatus = [string]$codexOrchestration.WorkflowStatus; workflowConfigurationSummary = [string]$codexOrchestration.WorkflowConfigurationSummary; setupPrompt = [string]$codexOrchestration.SetupPrompt; actionRequired = [bool]$codexOrchestration.ActionRequired; lastVerified = [string]$codexOrchestration.LastVerified }
                 Serena = [ordered]@{ Managed = [bool]$serena.Managed; SelectedByUser = [bool]$serena.SelectedByUser; UvAvailable = [bool]$serena.UvAvailable; UvVersion = [string]$serena.UvVersion; VersionBefore = [string]$serena.VersionBefore; VersionAfter = [string]$serena.VersionAfter; InstalledNow = [bool]$serena.InstalledNow; UpdatedNow = [bool]$serena.UpdatedNow; InitializationStatus = [string]$serena.InitializationStatus; CodexMcpConfigured = ([string]$serena.CodexMcpStatus -eq 'Configured'); RuntimeVerified = $false }
                 Context7 = [ordered]@{
                     EnvironmentVariable = 'CONTEXT7_API_KEY'
@@ -548,7 +558,7 @@ function Invoke-GlobalInstallation {
             $finalTransaction = New-FileTransaction -Root (Join-Path $Context.BackupRoot ((Get-Date -Format 'yyyyMMdd-HHmmss-fffffff') + '-manifest')) -Mode 'ManifestTransaction'
             Complete-Installation -Results $resultArray -Transaction $finalTransaction -External $external -Ownership $ownership -FinalizeTransaction | Out-Null
             Complete-InstallStep -Progress $progress -Result 'Manifest 與交易驗證通過'
-            $overallStatus = if (@($communityResults | Where-Object Status -eq 'FAILED').Count -gt 0) { 'PARTIAL SUCCESS' } else { 'SUCCESS' }
+            $overallStatus = if (@($communityResults | Where-Object Status -eq 'FAILED').Count -gt 0 -or $codexOrchestration.ActionRequired) { 'PARTIAL SUCCESS' } else { 'SUCCESS' }
             Write-InstallationSummary -InstallStyle $Context.InstallStyle -DevelopmentEnvironment $Context.DevelopmentEnvironment -Results $resultArray -Ccusage $ccusage -CcusageBefore $ccusageBefore -HookTrust $hookTrust -TransactionRoot $transactionRoot -InstallWindowsNotifications $Context.InstallWindowsNotifications -Progress $progress -NotificationStatus $notificationStatus -SkippedCount $skippedCount -SkipContext7Key:$SkipContext7Key -InstallMattPocockSkills:$InstallMattPocockSkills -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput -ContextState $contextState -SkillsCount $mattPocockSkillNames.Count -Ponytail $ponytail -CodexOrchestration $codexOrchestration -Serena $serena -CommunityResults $communityResults.ToArray() -OverallStatus $overallStatus
         } catch {
             $reason = $_.Exception.Message

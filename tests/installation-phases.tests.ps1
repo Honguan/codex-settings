@@ -36,6 +36,9 @@ try {
     if ($manifest.community.windowsUsageNotifications.Owner -ne 'WindowsUsageNotifications' -or @($manifest.community.windowsUsageNotifications.ManagedHooks).Count -ne 3) {
         throw 'WindowsUsageNotifications ownership 未涵蓋單一 bundle 的三類 lifecycle hooks。'
     }
+    foreach ($field in @('pluginStatus', 'workflowRequested', 'workflowStatus', 'setupPrompt', 'actionRequired', 'lastVerified')) {
+        if ($manifest.community.codexOrchestration.PSObject.Properties.Name -notcontains $field) { throw "Codex-Orchestration ownership 缺少狀態欄位：$field" }
+    }
     foreach ($field in @('ManagedPaths', 'ManagedExternalState', 'RollbackScope')) {
         if ($manifest.community.windowsUsageNotifications.PSObject.Properties.Name -notcontains $field) { throw "WindowsUsageNotifications ownership 缺少 $field。" }
     }
