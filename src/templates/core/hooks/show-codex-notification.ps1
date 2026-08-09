@@ -47,6 +47,11 @@ $script:CcSessionsCommandName = $null
 $script:CcSessionsCommandKind = $null
 $script:CcSessionsCommandPath = $null
 $script:CcSessionsQueryCount = 0
+$script:CcSessionsRetryCount = 0
+$script:CcSessionsAttemptDurationsMs = [Collections.Generic.List[long]]::new()
+$script:CcSessionsResultAcceptedAtAttempt = 0
+$script:CcSessionsResultReason = ''
+$script:CcSessionsFallbackReason = ''
 
 function Add-HookTiming([string]$Name, [long]$Milliseconds) {
     if ($script:HookTimings.Contains($Name)) { $script:HookTimings[$Name] = [long]$script:HookTimings[$Name] + $Milliseconds }
@@ -143,6 +148,12 @@ function Write-HookDiagnostic($InputObject, [string]$Result, [string]$Details) {
             ccsessionsRunMs = [long]$script:HookTimings.ccsessionsRunMs
             ccsessionsRetrySleepMs = [long]$script:HookTimings.ccsessionsRetrySleepMs
             ccsessionsQueryCount = [long]$script:CcSessionsQueryCount
+            ccsessionsRetryCount = [long]$script:CcSessionsRetryCount
+            ccsessionsAttemptDurationsMs = @($script:CcSessionsAttemptDurationsMs)
+            resultAcceptedAtAttempt = [long]$script:CcSessionsResultAcceptedAtAttempt
+            resultReason = [string]$script:CcSessionsResultReason
+            fallbackReason = [string]$script:CcSessionsFallbackReason
+            foregroundElapsedMs = $elapsedMs
             transcriptReadMs = [long]$script:HookTimings.transcriptReadMs
             details = $Details
         }
@@ -608,21 +619,66 @@ function Test-CcSessionsRetryableError {
     return $message -match '(?i)(?:usage\s+not\s+ready|not\s+ready|stale|no\s+matching\s+session|different\s+session|session\s+mismatch)'
 }
 
+function Invoke-CcSessionsProcess {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]$Command,
+        [Parameter(Mandatory = $true)][string]$SessionId,
+        [int]$TimeoutMilliseconds = 2000
+    )
+
+    $startInfo = [Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = 'pwsh'
+    foreach ($argument in @('-NoLogo', '-NoProfile', '-NonInteractive')) { $startInfo.ArgumentList.Add($argument) }
+    if ($Command.Kind -eq 'test') {
+        foreach ($argument in @('-File', [string]$Command.Path, '-SessionId', $SessionId)) { $startInfo.ArgumentList.Add($argument) }
+    } else {
+        $profileCommands = @($PROFILE.CurrentUserAllHosts, $PROFILE.CurrentUserCurrentHost) | Select-Object -Unique | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | ForEach-Object { ". '" + ([string]$_).Replace("'", "''") + "' *> `$null" }
+        $escapedSessionId = $SessionId.Replace("'", "''")
+        $commandText = (@($profileCommands) + "ccsessions -Json '$escapedSessionId'") -join '; '
+        foreach ($argument in @('-Command', $commandText)) { $startInfo.ArgumentList.Add($argument) }
+    }
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+
+    $process = [Diagnostics.Process]::Start($startInfo)
+    try {
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit($TimeoutMilliseconds)) {
+            try { $process.Kill($true) } catch {}
+            try { [void]$process.WaitForExit(1000) } catch {}
+            throw [TimeoutException]::new("ccsessions query timed out after $TimeoutMilliseconds ms")
+        }
+        $stdout = $stdoutTask.GetAwaiter().GetResult()
+        $stderr = $stderrTask.GetAwaiter().GetResult()
+        if ($process.ExitCode -ne 0) { throw "ccsessions exited with code $($process.ExitCode): $stderr" }
+        return (@($stdout, $stderr) -join [Environment]::NewLine).Trim()
+    } finally {
+        $process.Dispose()
+    }
+}
+
 function Invoke-CcSessionsJson([string]$SessionId, $Baseline) {
-    $script:CcSessionsQueryCount++
     $lastError = $null
-    $retryDelays = @(150, 250, 400, 650, 900, 1200)
+    $retryDelays = @(100, 150)
     $command = Resolve-CcSessionsCommand
+    $queryBudgetStopwatch = [Diagnostics.Stopwatch]::StartNew()
     for ($attempt = 0; $attempt -le $retryDelays.Count; $attempt++) {
+        $attemptNumber = $attempt + 1
+        $remainingBudgetMs = 2600 - [long]$queryBudgetStopwatch.ElapsedMilliseconds
+        if ($remainingBudgetMs -le 0) {
+            $script:CcSessionsResultReason = 'foreground-budget-exhausted'
+            $script:CcSessionsFallbackReason = 'foreground-budget-exhausted'
+            throw [TimeoutException]::new('ccsessions foreground budget exhausted')
+        }
+        $script:CcSessionsQueryCount++
+        $attemptStopwatch = [Diagnostics.Stopwatch]::StartNew()
         try {
             $runStopwatch = [Diagnostics.Stopwatch]::StartNew()
-            if ($command.Kind -eq 'test') {
-                $output = & pwsh -NoLogo -NoProfile -File $command.Path -SessionId $SessionId 2>&1
-            } else {
-                $output = & $command.Name -Json $SessionId 2>&1
-            }
-            Add-HookTiming -Name 'ccsessionsRunMs' -Milliseconds $runStopwatch.ElapsedMilliseconds
-            $text = ($output | Out-String).Trim()
+            try { $text = Invoke-CcSessionsProcess -Command $command -SessionId $SessionId -TimeoutMilliseconds ([int][Math]::Min(2000, $remainingBudgetMs)) } finally { Add-HookTiming -Name 'ccsessionsRunMs' -Milliseconds $runStopwatch.ElapsedMilliseconds }
             $start = $text.IndexOf('{')
             $end = $text.LastIndexOf('}')
             if ($start -lt 0 -or $end -le $start) {
@@ -636,21 +692,48 @@ function Invoke-CcSessionsJson([string]$SessionId, $Baseline) {
             if ($null -ne $Baseline) {
                 $candidate = ConvertTo-Snapshot -Usage $result -SessionId $SessionId -Source 'ccsessions'
                 if (-not (Test-SnapshotChanged -Current $candidate -Previous $Baseline)) {
-                    if ($attempt -ge $retryDelays.Count) { return [pscustomobject]@{ Data = $result; RetryCount = $attempt } }
+                    if ($attempt -ge $retryDelays.Count) {
+                        $script:CcSessionsRetryCount = $attempt
+                        $script:CcSessionsResultReason = 'stale-baseline'
+                        return [pscustomobject]@{ Data = $result; RetryCount = $attempt }
+                    }
                     $sleepStopwatch = [Diagnostics.Stopwatch]::StartNew()
                     Start-Sleep -Milliseconds $retryDelays[$attempt]
                     Add-HookTiming -Name 'ccsessionsRetrySleepMs' -Milliseconds $sleepStopwatch.ElapsedMilliseconds
+                    $script:CcSessionsRetryCount = $attemptNumber
                     continue
                 }
             }
+            $script:CcSessionsRetryCount = $attempt
+            $script:CcSessionsResultAcceptedAtAttempt = $attemptNumber
+            $script:CcSessionsResultReason = if ($null -eq $Baseline) { 'no-baseline' } else { 'new-snapshot' }
             return [pscustomobject]@{ Data = $result; RetryCount = $attempt }
         } catch {
             $lastError = $_
+            $script:CcSessionsRetryCount = $attempt
             try { $lastError.Exception.Data['ccsessionsRetryCount'] = $attempt } catch {}
-            if (-not (Test-CcSessionsRetryableError -ErrorRecord $_) -or $attempt -ge $retryDelays.Count) { throw }
+            if ($_.Exception -is [TimeoutException]) {
+                $script:CcSessionsResultReason = 'query-timeout'
+                $script:CcSessionsFallbackReason = 'query-timeout'
+                throw
+            }
+            if (-not (Test-CcSessionsRetryableError -ErrorRecord $_)) {
+                $script:CcSessionsResultReason = 'non-retryable-error'
+                $script:CcSessionsFallbackReason = 'non-retryable-error'
+                throw
+            }
+            if ($attempt -ge $retryDelays.Count) {
+                $script:CcSessionsResultReason = 'transient-not-ready'
+                $script:CcSessionsFallbackReason = 'transient-not-ready'
+                throw
+            }
             $sleepStopwatch = [Diagnostics.Stopwatch]::StartNew()
             Start-Sleep -Milliseconds $retryDelays[$attempt]
             Add-HookTiming -Name 'ccsessionsRetrySleepMs' -Milliseconds $sleepStopwatch.ElapsedMilliseconds
+            $script:CcSessionsRetryCount = $attemptNumber
+        } finally {
+            $attemptStopwatch.Stop()
+            $script:CcSessionsAttemptDurationsMs.Add([long]$attemptStopwatch.ElapsedMilliseconds)
         }
     }
     throw $lastError
@@ -1133,6 +1216,7 @@ function Get-TokenUsageDisplayCore($InputObject, $Settings) {
             $modelSource = if ([bool]$display.hasModel) { 'ccsessions' } else { 'N/A' }
             $costSource = if ([bool]$display.hasCost) { 'ccsessions' } else { 'N/A' }
         } elseif ($null -ne $realtimeSnapshot) {
+            $script:CcSessionsFallbackReason = if ([string]::IsNullOrWhiteSpace($script:CcSessionsResultReason)) { 'stale-baseline' } else { $script:CcSessionsResultReason }
             $metadataSnapshot = if ($null -ne $baseline) { $baseline } else { $ccsessionsSnapshot }
             $display = New-DisplaySnapshot -TokenSnapshot $realtimeSnapshot -MetadataSnapshot $metadataSnapshot -ModelFallback $modelFallback -UseMetadataCost $true -Source 'realtime-fallback'
             $showAsTurnDelta = $true
@@ -1143,6 +1227,7 @@ function Get-TokenUsageDisplayCore($InputObject, $Settings) {
             return [pscustomobject]@{ Duplicate = $true; Source = 'ccsessions-total' }
         }
     } elseif ($null -ne $realtimeSnapshot) {
+        if ([string]::IsNullOrWhiteSpace($script:CcSessionsFallbackReason)) { $script:CcSessionsFallbackReason = if ([string]::IsNullOrWhiteSpace($script:CcSessionsResultReason)) { 'ccsessions-unavailable' } else { $script:CcSessionsResultReason } }
         $display = New-DisplaySnapshot -TokenSnapshot $realtimeSnapshot -MetadataSnapshot $baseline -ModelFallback $modelFallback -UseMetadataCost $true -Source 'realtime-fallback'
         $showAsTurnDelta = $true
         $tokenSource = 'realtime-fallback'
