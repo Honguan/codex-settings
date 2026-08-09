@@ -97,7 +97,8 @@ function Write-InstallationSummary {
         [switch]$InstallRequestExecutionOptimizer,
         [switch]$EnableDefaultModeRequestUserInput,
         $ContextState,
-        [int]$SkillsCount = 0
+        [int]$SkillsCount = 0,
+        $Ponytail
     )
 
     if ($null -ne $Progress) {
@@ -121,6 +122,7 @@ function Write-InstallationSummary {
             [pscustomobject]@{ Name = 'Windows notifications'; Status = $notificationComponentStatus; Result = $(if ($InstallWindowsNotifications) { $NotificationStatus } else { '未安裝' }) }
             [pscustomobject]@{ Name = 'Hook trust'; Status = $hookStatus; Result = $(if ($HookTrust.Skipped) { '未變更，略過重新 trust' } else { "已驗證 $($HookTrust.TrustedCount) 個、更新 $($HookTrust.UpdatedCount) 個" }) }
         )
+        $components += @(Get-PonytailInstallationComponents -Result $Ponytail)
         Write-InstallLog -Progress $Progress -Message ("SUMMARY transaction={0}; components={1}; files={2}" -f $TransactionRoot, $components.Count, @($Results.Files).Count)
         Write-InstallResult -Progress $Progress -Status SUCCESS -Summary $fileSummary -Results $Results -Components $components
     }
