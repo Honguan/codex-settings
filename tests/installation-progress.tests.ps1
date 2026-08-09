@@ -108,6 +108,11 @@ try {
     if (@([regex]::Matches($lineOutput, '(?m)^STEP START ')).Count -ne 1 -or @([regex]::Matches($lineOutput, '(?m)^STEP END ')).Count -ne 1) { throw 'line-mode 每個 Step 事件必須只輸出一行。' }
     if ($lineOutput.Contains([char]27) -or $lineOutput -match '[█░]') { throw 'redirected / line-mode 不得輸出 ANSI 游標控制或互動式進度條。' }
 
+    $setupPrompt = '$codex-orchestration:codex-orchestration setup executor: GPT-5.6 Luna Extra High'
+    $actionComponents = @([pscustomobject]@{ Category = 'Community'; Name = 'Codex-Orchestration workflow'; Status = 'ActionRequired'; Result = "請建立新的 Codex Task 並貼上：`n`n$setupPrompt" })
+    $actionOutput = (& { Write-InstallResult -Progress $lineProgress -Status 'PARTIAL SUCCESS' -Summary @{ PersonalResult = 'SUCCESS'; CommunityResult = 'PARTIAL SUCCESS'; OverallResult = 'PARTIAL SUCCESS' } -Components $actionComponents } 6>&1 | Out-String)
+    if (-not $actionOutput.Contains($setupPrompt) -or $actionOutput.Contains([char]27) -or $actionOutput -match '失敗階段：') { throw 'line-mode ActionRequired 摘要未完整輸出 Prompt，或誤報為失敗。' }
+
     $failureSteps = @(New-InstallationProgressSteps | Select-Object -First 6)
     $failureProgress = Start-InstallProgress -Steps $failureSteps -Root (Join-Path $testRoot 'failure') -RendererMode Interactive
     $script:progressCalls.Clear()
