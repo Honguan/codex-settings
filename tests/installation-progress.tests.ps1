@@ -64,7 +64,7 @@ try {
         [pscustomobject]@{ Name = 'ccusage'; Status = 'Existing'; Result = '20.0.19' },
         [pscustomobject]@{ Name = 'ccsessions'; Status = 'Updated'; Result = 'Profile 已更新' },
         [pscustomobject]@{ Name = 'Context7'; Status = 'SkippedByUser'; Result = '使用者略過' },
-        [pscustomobject]@{ Name = 'Windows 開發狀態與使用量通知'; Status = 'Unchanged'; Result = 'Hook 未變更' }
+        [pscustomobject]@{ Name = 'Windows notifications'; Status = 'Unchanged'; Result = 'Hook 未變更' }
     )
     $contentOutput = (& { Write-InstallResult -Progress $interactiveProgress -Status SUCCESS -Summary @{ Installed = 1; Updated = 1; Unchanged = 1; Skipped = 1 } -Results $installationResults -Components $components } 6>&1 | Out-String)
     foreach ($expected in @('[=] config.toml', '[~] hooks.json', '[+] hooks\show-codex-notification.ps1', '[-] optional.txt', '[=] ccusage', '[~] ccsessions', '[-] Context7', '[=] Windows notifications')) {
