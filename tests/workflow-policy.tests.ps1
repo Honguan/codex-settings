@@ -26,7 +26,10 @@ if ($knownWrite.classification -ne 'KnownWriteTargets' -or @($knownWrite.knownWr
 $unknownWrite = Get-CodexToolImpactClassification -InputObject (New-TestInput -ToolName 'exec' -Command 'pwsh -File update.ps1')
 if ($unknownWrite.classification -ne 'UnknownWriteScope' -or $unknownWrite.validationLevel -ne 'Full') { throw 'UnknownWriteScope policy decision failed.' }
 
-if (-not (Test-CodexMainSession -InputObject (New-TestInput -ToolName 'exec')) -or (Test-CodexMainSession -InputObject ([pscustomobject]@{ parent_session_id = 'parent' }))) { throw 'Main-session gate policy decision failed.' }
+$mainSession = Get-CodexMainSessionClassification -InputObject ([pscustomobject]@{ is_main_session = $true })
+$subagentSession = Get-CodexMainSessionClassification -InputObject ([pscustomobject]@{ parent_session_id = 'parent' })
+$unknownSession = Get-CodexMainSessionClassification -InputObject (New-TestInput -ToolName 'exec')
+if ($mainSession.Classification -ne 'Main' -or $subagentSession.Classification -ne 'Subagent' -or $unknownSession.Classification -ne 'Unknown' -or -not (Test-CodexMainSession -InputObject (New-TestInput -ToolName 'exec'))) { throw 'Main-session 三態或 Unknown allow policy decision failed.' }
 
 $root = Join-Path ([IO.Path]::GetTempPath()) ('codex-settings-workflow-policy-' + [guid]::NewGuid().ToString('N'))
 try {

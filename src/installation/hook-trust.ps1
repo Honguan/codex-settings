@@ -85,7 +85,7 @@ function Set-CodexSettingsHookTrust([string]$Root, [string]$Cwd = (Get-Location)
             $(if ($Kind -eq 'Personal') { Test-ManagedLineEndingHookEntry $_ } elseif ($Kind -eq 'Notification') { Test-ManagedNotificationHookEntry $_ } else { (Test-ManagedGlobalHookEntry $_) -or (Test-ManagedLineEndingHookEntry $_) })
         })
         if ($managedHooks.Count -eq 0) {
-            return [pscustomobject]@{ TrustedCount = 0; UpdatedCount = 0; Verified = $true }
+            return [pscustomobject]@{ TrustedCount = 0; UpdatedCount = 0; Verified = $true; Hooks = @() }
         }
 
         $pendingHooks = @($managedHooks | Where-Object { [string]$_.trustStatus -ne 'trusted' })
@@ -123,7 +123,17 @@ function Set-CodexSettingsHookTrust([string]$Root, [string]$Cwd = (Get-Location)
         if ($verifiedHooks.Count -ne $managedHooks.Count -or @($verifiedHooks | Where-Object { [string]$_.trustStatus -ne 'trusted' }).Count -gt 0) {
             throw 'Codex Settings Hook trust verification failed.'
         }
-        return [pscustomobject]@{ TrustedCount = $verifiedHooks.Count; UpdatedCount = $pendingHooks.Count; Verified = $true }
+        $descriptors = @($verifiedHooks | ForEach-Object {
+            [pscustomobject]@{
+                Event = $(if ([string]$_.key -match ':(?<event>[^:]+):\d+:\d+$') { $Matches.event } else { '' })
+                Matcher = [string]$_.matcher
+                CommandFingerprint = [string]$_.currentHash
+                Source = 'global'
+                Trusted = [string]$_.trustStatus -eq 'trusted'
+                Effective = [bool]$_.enabled
+            }
+        })
+        return [pscustomobject]@{ TrustedCount = $verifiedHooks.Count; UpdatedCount = $pendingHooks.Count; Verified = $true; Hooks = $descriptors }
     } finally {
         if ($null -ne $process) {
             try { $process.StandardInput.Close() } catch {}

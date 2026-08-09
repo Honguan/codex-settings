@@ -37,6 +37,7 @@ function Invoke-NotificationHook([string]$SessionId, [string]$TurnId, [hashtable
     $process.StandardInput.Close()
     $stdout = $process.StandardOutput.ReadToEnd()
     $stderr = $process.StandardError.ReadToEnd()
+    $script:LastHookStderr = $stderr
     $process.WaitForExit()
     if ($process.ExitCode -ne 0 -or $stdout -ne '{}') { throw "通知 Hook 失敗：exit=$($process.ExitCode) stdout=$stdout stderr=$stderr" }
     return $stdout | ConvertFrom-Json
@@ -101,6 +102,67 @@ Get-Content -LiteralPath $env:CODEX_SETTINGS_CCSESSIONS_SNAPSHOT -Raw
     $env:CODEX_SETTINGS_CCSESSIONS_TEST_COMMAND = $mockPath
     $env:CODEX_SETTINGS_CCSESSIONS_SNAPSHOT = $snapshotPath
 
+    $vscodeSession = '019fe798-1ecb-7221-b31d-2f2d3280a361'
+    Set-Snapshot -SessionId $vscodeSession -InputTokens 100 -CachedInputTokens 20 -CacheWriteTokens 0 -OutputTokens 10 -TotalTokens 130 -CostUsd 0.01
+    $vscodePayload = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'fixtures\codex-vscode-stop.json') -Raw
+    [void](Invoke-NotificationHook -SessionId $vscodeSession -TurnId 'ignored' -RawInput $vscodePayload)
+    $vscodeDiagnostic = Get-Content -LiteralPath (Join-Path $diagnosticRoot ($vscodeSession + '.log')) -Raw | ConvertFrom-Json
+    if ((Get-LastNotification).type -ne 'Completed' -or $vscodeDiagnostic.mainSessionResult -ne 'Main' -or $vscodeDiagnostic.resultReason -ne 'shown-test') { throw '真實 codex_vscode Stop fixture 未走到 Completed delivery。' }
+
+    $eventsBeforeMissingTurn = @(Get-Content -LiteralPath $logPath).Count
+    [void](Invoke-NotificationHook -SessionId 'missing-turn-session' -TurnId '' -AdditionalInput @{ event_id = 'event-a' } -Type PermissionRequired)
+    [void](Invoke-NotificationHook -SessionId 'missing-turn-session' -TurnId '' -AdditionalInput @{ event_id = 'event-b' } -Type PermissionRequired)
+    [void](Invoke-NotificationHook -SessionId 'missing-turn-session' -TurnId '' -AdditionalInput @{ event_id = 'event-a' } -Type PermissionRequired)
+    if (@(Get-Content -LiteralPath $logPath).Count -ne $eventsBeforeMissingTurn + 2) { throw '缺少 turn_id 的不同 lifecycle event 被永久去重，或同 event_id 未 exactly-once。' }
+
+    $staleKey = 'stale-claim-session|stale-claim-turn|PermissionRequired'
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { $staleHash = ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($staleKey)))).Replace('-', '').ToLowerInvariant() } finally { $sha.Dispose() }
+    $staleClaimPath = Join-Path (Join-Path $notificationRoot 'claims') ($staleHash + '.json')
+    [IO.File]::WriteAllText($staleClaimPath, (@{ sessionId = 'stale-claim-session'; turnId = 'stale-claim-turn'; type = 'PermissionRequired'; state = 'showing'; createdAt = [DateTimeOffset]::UtcNow.AddMinutes(-5).ToString('o') } | ConvertTo-Json -Compress), [Text.UTF8Encoding]::new($false))
+    $eventsBeforeStaleClaim = @(Get-Content -LiteralPath $logPath).Count
+    [void](Invoke-NotificationHook -SessionId 'stale-claim-session' -TurnId 'stale-claim-turn' -Type PermissionRequired)
+    if (@(Get-Content -LiteralPath $logPath).Count -ne $eventsBeforeStaleClaim + 1 -or (Get-Content -LiteralPath $staleClaimPath -Raw | ConvertFrom-Json).state -ne 'shown') { throw '被 timeout 留下的 stale showing claim 永久阻擋後續 delivery。' }
+
+    [void](Invoke-NotificationHook -SessionId 'subagent-session' -TurnId 'subagent-turn' -AdditionalInput @{ is_main_session = $false } -Type PermissionRequired)
+    $subagentDiagnostic = Get-Content -LiteralPath (Join-Path $diagnosticRoot 'subagent-session.log') -Raw | ConvertFrom-Json
+    if ($subagentDiagnostic.mainSessionResult -ne 'Subagent' -or $subagentDiagnostic.resultReason -ne 'skipped-not-main') { throw 'Subagent main-session policy 或診斷錯誤。' }
+
+    $unwritableDiagnosticRoot = Join-Path $testRoot 'diagnostic-root-is-a-file'
+    [IO.File]::WriteAllText($unwritableDiagnosticRoot, 'not a directory')
+    $env:CODEX_SETTINGS_HOOK_LOG_ROOT = $unwritableDiagnosticRoot
+    [void](Invoke-NotificationHook -SessionId 'diagnostic-failure' -TurnId 'diagnostic-failure-turn' -Type PermissionRequired)
+    $env:CODEX_SETTINGS_HOOK_LOG_ROOT = $diagnosticRoot
+    if ($script:LastHookStderr -notmatch 'notification diagnostic write failed') { throw '主要診斷路徑不可寫時，secondary diagnostic 未出現在 stderr。' }
+
+    $tokenSettingsPath = Join-Path $tokenRoot 'settings.json'
+    $tokenSettingsBeforeLoop = Get-Content -LiteralPath $tokenSettingsPath -Raw
+    [IO.File]::WriteAllText($tokenSettingsPath, '{"enabled":false,"showAfterEachTurn":false,"mainSessionOnly":true}', [Text.UTF8Encoding]::new($false))
+    $eventsBeforeLoop = @(Get-Content -LiteralPath $logPath).Count
+    foreach ($index in 1..20) { [void](Invoke-NotificationHook -SessionId 'twenty-completed-session' -TurnId "turn-$index" -AdditionalInput @{ is_main_session = $true }) }
+    [IO.File]::WriteAllText($tokenSettingsPath, $tokenSettingsBeforeLoop, [Text.UTF8Encoding]::new($false))
+    if (@(Get-Content -LiteralPath $logPath).Count -ne $eventsBeforeLoop + 20) { throw '20 個連續 main-session Completed lifecycle events 未產生恰好 20 個 delivery 結果。' }
+
+    Remove-Item Env:\CODEX_SETTINGS_NOTIFICATION_TEST_MODE
+    $env:CODEX_SETTINGS_NATIVE_TOAST_TEST_RESULT = 'shown'
+    $env:CODEX_SETTINGS_FALLBACK_TEST_RESULT = 'failed'
+    [void](Invoke-NotificationHook -SessionId 'native-success' -TurnId 'turn-native-success' -Type PermissionRequired)
+    $nativeSuccess = Get-Content -LiteralPath (Join-Path $diagnosticRoot 'native-success.log') -Raw | ConvertFrom-Json
+    if ($nativeSuccess.resultReason -ne 'shown-native' -or -not $nativeSuccess.nativeToastShown -or $nativeSuccess.fallbackAttempted -or $nativeSuccess.cleanupScheduled) { throw 'Native Show 成功後 cleanup 未排程時不應 fallback 或反轉 shown。' }
+
+    $env:CODEX_SETTINGS_NATIVE_TOAST_TEST_RESULT = 'failed'
+    $env:CODEX_SETTINGS_FALLBACK_TEST_RESULT = 'shown'
+    [void](Invoke-NotificationHook -SessionId 'fallback-success' -TurnId 'turn-fallback-success' -Type PermissionRequired)
+    $fallbackSuccess = Get-Content -LiteralPath (Join-Path $diagnosticRoot 'fallback-success.log') -Raw | ConvertFrom-Json
+    if ($fallbackSuccess.resultReason -ne 'shown-fallback' -or -not $fallbackSuccess.fallbackShown -or $fallbackSuccess.nativeToastError -notmatch 'native toast test failure') { throw 'Native Show 失敗時未恰好 fallback 一次並保留錯誤。' }
+
+    $env:CODEX_SETTINGS_FALLBACK_TEST_RESULT = 'failed'
+    [void](Invoke-NotificationHook -SessionId 'delivery-failure' -TurnId 'turn-delivery-failure' -Type PermissionRequired)
+    $deliveryFailure = Get-Content -LiteralPath (Join-Path $diagnosticRoot 'delivery-failure.log') -Raw | ConvertFrom-Json
+    if ($deliveryFailure.resultReason -ne 'fallback-failed' -or $deliveryFailure.claimState -ne 'failed' -or $deliveryFailure.nativeToastError -notmatch 'native toast test failure' -or $deliveryFailure.fallbackError -notmatch 'fallback test failure') { throw 'Native + fallback 失敗時未保留兩個錯誤與 failed claim。' }
+    $env:CODEX_SETTINGS_NOTIFICATION_TEST_MODE = '1'
+    Remove-Item Env:\CODEX_SETTINGS_NATIVE_TOAST_TEST_RESULT, Env:\CODEX_SETTINGS_FALLBACK_TEST_RESULT
+
     $sessionRealtime = '019fd65b-39b0-7d60-99fc-deb094690001'
     Set-Snapshot -SessionId $sessionRealtime -InputTokens 999000 -CachedInputTokens 888000 -CacheWriteTokens 777000 -OutputTokens 666000 -TotalTokens 3330000 -CostUsd 9.99
     [void](Invoke-NotificationHook -SessionId $sessionRealtime -TurnId 'turn-realtime' -AdditionalInput @{
@@ -121,10 +183,11 @@ Get-Content -LiteralPath $env:CODEX_SETTINGS_CCSESSIONS_SNAPSHOT -Raw
     $realtimeStateValue = Get-Content -LiteralPath $realtimeState.FullName -Raw | ConvertFrom-Json
     if ($realtimeStateValue.schemaVersion -ne 2 -or $null -eq $realtimeStateValue.ccsessionsBaseline -or $realtimeStateValue.ccsessionsBaseline.inputTokens -ne 999000 -or $realtimeStateValue.ccsessionsBaseline.reasoningTokens -ne 0 -or $realtimeStateValue.ccsessionsBaseline.cacheTokens -ne 888000 -or $realtimeStateValue.ccsessionsBaseline.time -ne '08-07 03:43 PM') { throw 'ccsessions 累積基準未依新快照格式保存。' }
     $realtimeDiagnostic = Get-Content -LiteralPath (Join-Path $diagnosticRoot ($sessionRealtime + '.log')) -Raw | ConvertFrom-Json
-    foreach ($field in @('timestamp', 'hookSource', 'hookCommand', 'processId', 'parentProcessId', 'startTime', 'endTime', 'elapsedMs', 'exitCode', 'handlerId', 'claimState', 'nativeToastAttempted', 'nativeToastShown', 'fallbackAttempted', 'fallbackShown', 'cleanupScheduled', 'stopKind', 'invocationSource', 'GlobalStopHookCount', 'EffectiveStopHookCount', 'NotificationInvocationCount', 'CrlfInvocationCount', 'ccsessionsQueryCount', 'ccsessionsRetryCount', 'ccsessionsAttemptDurationsMs', 'ccsessionsRetrySleepMs', 'ccsessionsResolveMs', 'ccsessionsRunMs', 'resultAcceptedAtAttempt', 'resultReason', 'fallbackReason', 'foregroundElapsedMs')) {
+    foreach ($field in @('timestamp', 'hookInvoked', 'payloadParsed', 'settingsEnabled', 'mainSessionResult', 'mainSessionEvidence', 'dedupeResult', 'usageRequested', 'usageResult', 'resultReason', 'hookSource', 'hookCommand', 'processId', 'parentProcessId', 'startTime', 'endTime', 'elapsedMs', 'exitCode', 'handlerId', 'claimState', 'nativeToastAttempted', 'nativeToastShown', 'nativeToastError', 'fallbackAttempted', 'fallbackShown', 'fallbackError', 'cleanupScheduled', 'stopKind', 'invocationSource', 'GlobalStopHookCount', 'EffectiveStopHookCount', 'NotificationInvocationCount', 'CrlfInvocationCount', 'ccsessionsQueryCount', 'ccsessionsRetryCount', 'ccsessionsAttemptDurationsMs', 'ccsessionsRetrySleepMs', 'ccsessionsResolveMs', 'ccsessionsRunMs', 'resultAcceptedAtAttempt', 'usageResultReason', 'fallbackReason', 'foregroundElapsedMs')) {
         if ($realtimeDiagnostic.PSObject.Properties.Name -notcontains $field) { throw "通知診斷缺少欄位：$field" }
     }
-    if ($realtimeDiagnostic.ccsessionsQueryCount -ne 1 -or $realtimeDiagnostic.ccsessionsRetryCount -ne 0 -or @($realtimeDiagnostic.ccsessionsAttemptDurationsMs).Count -ne 1 -or $realtimeDiagnostic.ccsessionsRetrySleepMs -ne 0 -or $realtimeDiagnostic.resultAcceptedAtAttempt -ne 1 -or $realtimeDiagnostic.resultReason -ne 'no-baseline' -or $realtimeDiagnostic.fallbackReason -ne '' -or $realtimeDiagnostic.foregroundElapsedMs -ge 3000) { throw '無基準且首次查詢成功時未立即接受結果。' }
+    if ($realtimeDiagnostic.ccsessionsQueryCount -ne 1 -or $realtimeDiagnostic.ccsessionsRetryCount -ne 0 -or @($realtimeDiagnostic.ccsessionsAttemptDurationsMs).Count -ne 1 -or $realtimeDiagnostic.ccsessionsRetrySleepMs -ne 0 -or $realtimeDiagnostic.resultAcceptedAtAttempt -ne 1 -or $realtimeDiagnostic.usageResultReason -ne 'no-baseline' -or $realtimeDiagnostic.fallbackReason -ne '' -or $realtimeDiagnostic.foregroundElapsedMs -ge 3000) { throw '無基準且首次查詢成功時未立即接受結果。' }
+    if (-not $realtimeDiagnostic.hookInvoked -or -not $realtimeDiagnostic.payloadParsed -or $realtimeDiagnostic.mainSessionResult -ne 'Unknown' -or $realtimeDiagnostic.resultReason -ne 'shown-test') { throw 'Lifecycle 診斷未記錄 invocation、payload、main-session 三態或 delivery 結果。' }
     if ($realtimeDiagnostic.handler -ne 'windows-notification' -or $realtimeDiagnostic.result -ne 'success' -or $realtimeDiagnostic.details -notmatch 'source=ccsessions-total' -or $realtimeDiagnostic.details -notmatch 'realtimeAvailable=true;ccsessionsAvailable=true;baselineFound=false;ccsessionsRetryCount=0;tokenSource=ccsessions-total;modelSource=ccsessions;costSource=ccsessions;showAsTurnDelta=false;model=gpt-5\.6-sol;input=999K;output=666K;think=0;cache=888K;total=3\.33M;cost=\$9\.99;time=08-07 03:43 PM;missingFields=\[\]' -or $realtimeDiagnostic.hookSource -ne 'global' -or $realtimeDiagnostic.NotificationInvocationCount -ne 1 -or $realtimeDiagnostic.CrlfInvocationCount -ne 0) {
         throw 'ccsessions 累積資料或完成通知診斷紀錄錯誤。'
     }
@@ -138,7 +201,7 @@ Get-Content -LiteralPath $env:CODEX_SETTINGS_CCSESSIONS_SNAPSHOT -Raw
         if (-not $fallbackNotification.message.Contains($expected)) { throw "realtime fallback 未正確顯示對應欄位：$expected" }
     }
     $fallbackDiagnostic = Get-Content -LiteralPath (Join-Path $diagnosticRoot ($sessionRealtime + '.log')) | Select-Object -Last 1 | ConvertFrom-Json
-    if ($fallbackDiagnostic.details -notmatch 'source=realtime-fallback;.*baselineFound=true;.*ccsessionsRetryCount=2;.*tokenSource=realtime-fallback;.*costSource=ccsessions-metadata' -or $fallbackDiagnostic.ccsessionsQueryCount -ne 3 -or $fallbackDiagnostic.resultAcceptedAtAttempt -ne 0 -or $fallbackDiagnostic.resultReason -ne 'stale-baseline' -or $fallbackDiagnostic.fallbackReason -ne 'stale-baseline' -or $fallbackDiagnostic.foregroundElapsedMs -ge 3000) { throw 'ccsessions 尚未落盤時未在前景預算內重試並正確記錄 realtime fallback。' }
+    if ($fallbackDiagnostic.details -notmatch 'source=realtime-fallback;.*baselineFound=true;.*ccsessionsRetryCount=2;.*tokenSource=realtime-fallback;.*costSource=ccsessions-metadata' -or $fallbackDiagnostic.ccsessionsQueryCount -ne 3 -or $fallbackDiagnostic.resultAcceptedAtAttempt -ne 0 -or $fallbackDiagnostic.usageResultReason -ne 'stale-baseline' -or $fallbackDiagnostic.fallbackReason -ne 'stale-baseline' -or $fallbackDiagnostic.foregroundElapsedMs -ge 3000) { throw 'ccsessions 尚未落盤時未在前景預算內重試並正確記錄 realtime fallback。' }
 
     $tokenStateCountBeforeQuestion = @(Get-ChildItem -LiteralPath $tokenRoot -Filter '*.json' | Where-Object Name -ne 'settings.json').Count
     [void](Invoke-NotificationHook -SessionId '019fd65b-39b0-7d60-99fc-deb094690010' -TurnId 'turn-question' -LastMessage '請確認是否繼續？')
@@ -149,7 +212,8 @@ Get-Content -LiteralPath $env:CODEX_SETTINGS_CCSESSIONS_SNAPSHOT -Raw
     [void](Invoke-NotificationHook -SessionId 'session-permission' -TurnId 'turn-permission' -Type PermissionRequired)
     [void](Invoke-NotificationHook -SessionId 'session-error' -TurnId 'turn-error' -Type Error)
     $events = @(Get-Content -LiteralPath $logPath | ForEach-Object { $_ | ConvertFrom-Json })
-    if (@($events | Where-Object type -eq PermissionRequired).Count -ne 1 -or @($events | Where-Object type -eq Error).Count -ne 1) { throw '權限與錯誤通知未使用固定內容。' }
+    $permissionEvents = @($events | Where-Object type -eq PermissionRequired)
+    if ($permissionEvents.Count -lt 1 -or @($permissionEvents | Where-Object { $_.title -ne 'Codex 等待權限核准' -or $_.message -ne '需要你的核准才能繼續執行' }).Count -gt 0 -or @($events | Where-Object type -eq Error).Count -ne 1) { throw '權限與錯誤通知未使用固定內容。' }
     if (@($events | Where-Object { $_.PSObject.Properties.Name -contains 'project' }).Count -ne 0) { throw '通知不應包含專案名稱欄位。' }
 
     $eventCountBeforeDuplicate = $events.Count
@@ -218,7 +282,7 @@ Get-Content -LiteralPath $env:CODEX_SETTINGS_CCSESSIONS_SNAPSHOT -Raw
     if (-not (Test-Path -LiteralPath $retryMarkerPath) -or -not (Get-LastNotification).message.Contains('Input          8.77K')) { throw 'ccsessions 資料延遲時未重試一次。' }
     $retryDiagnostic = Get-Content -LiteralPath (Join-Path $diagnosticRoot ($sessionRetry + '.log')) -Raw | ConvertFrom-Json
     if ($retryDiagnostic.details -notmatch 'source=ccsessions-total;.*ccsessionsRetryCount=1;tokenSource=ccsessions-total;modelSource=ccsessions;costSource=ccsessions;showAsTurnDelta=false;.*missingFields=\[\]') { throw 'ccsessions 重試次數或來源診斷錯誤。' }
-    if ($retryDiagnostic.ccsessionsQueryCount -ne 2 -or $retryDiagnostic.resultAcceptedAtAttempt -ne 2 -or $retryDiagnostic.resultReason -ne 'no-baseline') { throw '第二次查詢成功時未立即接受結果。' }
+    if ($retryDiagnostic.ccsessionsQueryCount -ne 2 -or $retryDiagnostic.resultAcceptedAtAttempt -ne 2 -or $retryDiagnostic.usageResultReason -ne 'no-baseline') { throw '第二次查詢成功時未立即接受結果。' }
 
     $sessionThirdAttempt = '019fd65b-39b0-7d60-99fc-deb094690013'
     Set-Snapshot -SessionId $sessionThirdAttempt -InputTokens 13579 -CachedInputTokens 2468 -CacheWriteTokens 0 -OutputTokens 987 -TotalTokens 17034 -CostUsd 0.03
@@ -229,7 +293,7 @@ Get-Content -LiteralPath $env:CODEX_SETTINGS_CCSESSIONS_SNAPSHOT -Raw
     Remove-Item Env:\CODEX_SETTINGS_CCSESSIONS_RETRY_MARKER
     Remove-Item Env:\CODEX_SETTINGS_CCSESSIONS_RETRY_FAILURE_COUNT
     $thirdAttemptDiagnostic = Get-Content -LiteralPath (Join-Path $diagnosticRoot ($sessionThirdAttempt + '.log')) -Raw | ConvertFrom-Json
-    if ($thirdAttemptDiagnostic.ccsessionsQueryCount -ne 3 -or $thirdAttemptDiagnostic.ccsessionsRetryCount -ne 2 -or $thirdAttemptDiagnostic.resultAcceptedAtAttempt -ne 3 -or $thirdAttemptDiagnostic.resultReason -ne 'no-baseline' -or $thirdAttemptDiagnostic.foregroundElapsedMs -ge 3000) { throw '第三次查詢成功時未在前景預算內立即接受結果。' }
+    if ($thirdAttemptDiagnostic.ccsessionsQueryCount -ne 3 -or $thirdAttemptDiagnostic.ccsessionsRetryCount -ne 2 -or $thirdAttemptDiagnostic.resultAcceptedAtAttempt -ne 3 -or $thirdAttemptDiagnostic.usageResultReason -ne 'no-baseline' -or $thirdAttemptDiagnostic.foregroundElapsedMs -ge 3000) { throw '第三次查詢成功時未在前景預算內立即接受結果。' }
 
     $sessionMissing = '019fd65b-39b0-7d60-99fc-deb094690006'
     Set-Snapshot -SessionId $sessionMissing -InputTokens 20 -CachedInputTokens 4 -CacheWriteTokens 0 -OutputTokens 5 -TotalTokens 29 -CostUsd 0.02 -WithoutCacheWrite
@@ -269,7 +333,7 @@ Get-Content -LiteralPath $env:CODEX_SETTINGS_CCSESSIONS_SNAPSHOT -Raw
     [void](Invoke-NotificationHook -SessionId $sessionZero -TurnId 'turn-zero')
     if ((Get-LastNotification).message -notmatch 'Cache      0' -or (Get-LastNotification).message -notmatch 'Cost       \$0') { throw '真正的零值不應被視為缺欄位。' }
     $sessionStates = @(Get-ChildItem -LiteralPath $tokenRoot -Filter '*.json' | Where-Object Name -ne 'settings.json')
-    if ($sessionStates.Count -ne 11) { throw "多 Session 狀態檔數量錯誤：$($sessionStates.Count)" }
+    if ($sessionStates.Count -ne 12) { throw "多 Session 狀態檔數量錯誤：$($sessionStates.Count)" }
 
     $stateA = @($sessionStates | Where-Object { (Get-Content -LiteralPath $_.FullName -Raw | ConvertFrom-Json).sessionId -eq $sessionA })[0]
     [IO.File]::WriteAllText($stateA.FullName, '{invalid', [Text.UTF8Encoding]::new($false))
@@ -289,7 +353,7 @@ Get-Content -LiteralPath $env:CODEX_SETTINGS_CCSESSIONS_SNAPSHOT -Raw
     [void](Invoke-NotificationHook -SessionId 'session-nonretryable' -TurnId 'turn-nonretryable')
     Remove-Item Env:\CODEX_SETTINGS_CCSESSIONS_NONRETRYABLE
     $nonretryableDiagnostic = Get-Content -LiteralPath (Join-Path $diagnosticRoot 'session-nonretryable.log') -Raw | ConvertFrom-Json
-    if ($nonretryableDiagnostic.ccsessionsQueryCount -ne 1 -or $nonretryableDiagnostic.ccsessionsRetryCount -ne 0 -or $nonretryableDiagnostic.resultReason -ne 'non-retryable-error' -or $nonretryableDiagnostic.fallbackReason -ne 'non-retryable-error') { throw '非暫時性 ccsessions 錯誤不應重試。' }
+    if ($nonretryableDiagnostic.ccsessionsQueryCount -ne 1 -or $nonretryableDiagnostic.ccsessionsRetryCount -ne 0 -or $nonretryableDiagnostic.usageResultReason -ne 'non-retryable-error' -or $nonretryableDiagnostic.fallbackReason -ne 'non-retryable-error') { throw '非暫時性 ccsessions 錯誤不應重試。' }
 
     $env:CODEX_SETTINGS_CCSESSIONS_HANG = '1'
     $env:CODEX_SETTINGS_CCSESSIONS_HANG_MARKER = $hangMarkerPath
@@ -298,7 +362,7 @@ Get-Content -LiteralPath $env:CODEX_SETTINGS_CCSESSIONS_SNAPSHOT -Raw
     Remove-Item Env:\CODEX_SETTINGS_CCSESSIONS_HANG_MARKER
     $hungDiagnostic = Get-Content -LiteralPath (Join-Path $diagnosticRoot 'session-hung.log') -Raw | ConvertFrom-Json
     $hungProcessId = [int](Get-Content -LiteralPath $hangMarkerPath -Raw)
-    if ($hungDiagnostic.ccsessionsQueryCount -ne 1 -or $hungDiagnostic.ccsessionsRetryCount -ne 0 -or $hungDiagnostic.resultReason -ne 'query-timeout' -or $hungDiagnostic.fallbackReason -ne 'query-timeout' -or $hungDiagnostic.foregroundElapsedMs -ge 3000 -or $null -ne (Get-Process -Id $hungProcessId -ErrorAction SilentlyContinue)) { throw '卡住的 ccsessions 後端未在單次 timeout 後終止行程樹並降級。' }
+    if ($hungDiagnostic.ccsessionsQueryCount -ne 1 -or $hungDiagnostic.ccsessionsRetryCount -ne 0 -or $hungDiagnostic.usageResultReason -ne 'query-timeout' -or $hungDiagnostic.fallbackReason -ne 'query-timeout' -or $hungDiagnostic.foregroundElapsedMs -ge 3000 -or $null -ne (Get-Process -Id $hungProcessId -ErrorAction SilentlyContinue)) { throw '卡住的 ccsessions 後端未在單次 timeout 後終止行程樹並降級。' }
 
     $settingsPath = Join-Path $tokenRoot 'settings.json'
     $tokenSettings = Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json
@@ -308,12 +372,12 @@ Get-Content -LiteralPath $env:CODEX_SETTINGS_CCSESSIONS_SNAPSHOT -Raw
     if ((Get-LastNotification).message -ne '工作已完成') { throw '停用 Token 統計後完成通知未保留一般完成內容。' }
 
     $benchmarkRows = @(
-        [pscustomobject]@{ Case = 'A/D first success'; Queries = $realtimeDiagnostic.ccsessionsQueryCount; Retries = $realtimeDiagnostic.ccsessionsRetryCount; RetrySleepMs = $realtimeDiagnostic.ccsessionsRetrySleepMs; ForegroundMs = $realtimeDiagnostic.foregroundElapsedMs; Reason = $realtimeDiagnostic.resultReason }
-        [pscustomobject]@{ Case = 'B second success'; Queries = $retryDiagnostic.ccsessionsQueryCount; Retries = $retryDiagnostic.ccsessionsRetryCount; RetrySleepMs = $retryDiagnostic.ccsessionsRetrySleepMs; ForegroundMs = $retryDiagnostic.foregroundElapsedMs; Reason = $retryDiagnostic.resultReason }
-        [pscustomobject]@{ Case = 'C third success'; Queries = $thirdAttemptDiagnostic.ccsessionsQueryCount; Retries = $thirdAttemptDiagnostic.ccsessionsRetryCount; RetrySleepMs = $thirdAttemptDiagnostic.ccsessionsRetrySleepMs; ForegroundMs = $thirdAttemptDiagnostic.foregroundElapsedMs; Reason = $thirdAttemptDiagnostic.resultReason }
-        [pscustomobject]@{ Case = 'E stale fallback'; Queries = $fallbackDiagnostic.ccsessionsQueryCount; Retries = $fallbackDiagnostic.ccsessionsRetryCount; RetrySleepMs = $fallbackDiagnostic.ccsessionsRetrySleepMs; ForegroundMs = $fallbackDiagnostic.foregroundElapsedMs; Reason = $fallbackDiagnostic.resultReason }
-        [pscustomobject]@{ Case = 'F hung backend'; Queries = $hungDiagnostic.ccsessionsQueryCount; Retries = $hungDiagnostic.ccsessionsRetryCount; RetrySleepMs = $hungDiagnostic.ccsessionsRetrySleepMs; ForegroundMs = $hungDiagnostic.foregroundElapsedMs; Reason = $hungDiagnostic.resultReason }
-        [pscustomobject]@{ Case = 'G fatal error'; Queries = $nonretryableDiagnostic.ccsessionsQueryCount; Retries = $nonretryableDiagnostic.ccsessionsRetryCount; RetrySleepMs = $nonretryableDiagnostic.ccsessionsRetrySleepMs; ForegroundMs = $nonretryableDiagnostic.foregroundElapsedMs; Reason = $nonretryableDiagnostic.resultReason }
+        [pscustomobject]@{ Case = 'A/D first success'; Queries = $realtimeDiagnostic.ccsessionsQueryCount; Retries = $realtimeDiagnostic.ccsessionsRetryCount; RetrySleepMs = $realtimeDiagnostic.ccsessionsRetrySleepMs; ForegroundMs = $realtimeDiagnostic.foregroundElapsedMs; Reason = $realtimeDiagnostic.usageResultReason }
+        [pscustomobject]@{ Case = 'B second success'; Queries = $retryDiagnostic.ccsessionsQueryCount; Retries = $retryDiagnostic.ccsessionsRetryCount; RetrySleepMs = $retryDiagnostic.ccsessionsRetrySleepMs; ForegroundMs = $retryDiagnostic.foregroundElapsedMs; Reason = $retryDiagnostic.usageResultReason }
+        [pscustomobject]@{ Case = 'C third success'; Queries = $thirdAttemptDiagnostic.ccsessionsQueryCount; Retries = $thirdAttemptDiagnostic.ccsessionsRetryCount; RetrySleepMs = $thirdAttemptDiagnostic.ccsessionsRetrySleepMs; ForegroundMs = $thirdAttemptDiagnostic.foregroundElapsedMs; Reason = $thirdAttemptDiagnostic.usageResultReason }
+        [pscustomobject]@{ Case = 'E stale fallback'; Queries = $fallbackDiagnostic.ccsessionsQueryCount; Retries = $fallbackDiagnostic.ccsessionsRetryCount; RetrySleepMs = $fallbackDiagnostic.ccsessionsRetrySleepMs; ForegroundMs = $fallbackDiagnostic.foregroundElapsedMs; Reason = $fallbackDiagnostic.usageResultReason }
+        [pscustomobject]@{ Case = 'F hung backend'; Queries = $hungDiagnostic.ccsessionsQueryCount; Retries = $hungDiagnostic.ccsessionsRetryCount; RetrySleepMs = $hungDiagnostic.ccsessionsRetrySleepMs; ForegroundMs = $hungDiagnostic.foregroundElapsedMs; Reason = $hungDiagnostic.usageResultReason }
+        [pscustomobject]@{ Case = 'G fatal error'; Queries = $nonretryableDiagnostic.ccsessionsQueryCount; Retries = $nonretryableDiagnostic.ccsessionsRetryCount; RetrySleepMs = $nonretryableDiagnostic.ccsessionsRetrySleepMs; ForegroundMs = $nonretryableDiagnostic.foregroundElapsedMs; Reason = $nonretryableDiagnostic.usageResultReason }
     )
     Write-Host ($benchmarkRows | Format-Table -AutoSize | Out-String)
     Write-Host 'Windows notification and token usage integration tests passed.'
@@ -322,6 +386,8 @@ Get-Content -LiteralPath $env:CODEX_SETTINGS_CCSESSIONS_SNAPSHOT -Raw
     Remove-Item Env:\CODEX_SETTINGS_TOKEN_USAGE_STATE_ROOT -ErrorAction SilentlyContinue
     Remove-Item Env:\CODEX_SETTINGS_NOTIFICATION_TEST_MODE -ErrorAction SilentlyContinue
     Remove-Item Env:\CODEX_SETTINGS_NOTIFICATION_TEST_LOG -ErrorAction SilentlyContinue
+    Remove-Item Env:\CODEX_SETTINGS_NATIVE_TOAST_TEST_RESULT -ErrorAction SilentlyContinue
+    Remove-Item Env:\CODEX_SETTINGS_FALLBACK_TEST_RESULT -ErrorAction SilentlyContinue
     Remove-Item Env:\CODEX_SETTINGS_HOOK_LOG_ROOT -ErrorAction SilentlyContinue
     Remove-Item Env:\CODEX_SETTINGS_HOOK_INVOCATION_STATE_ROOT -ErrorAction SilentlyContinue
     Remove-Item Env:\CODEX_SETTINGS_CCSESSIONS_TEST_COMMAND -ErrorAction SilentlyContinue
