@@ -233,6 +233,7 @@ try {
         Remove-Item -LiteralPath Function:\Read-Host -ErrorAction SilentlyContinue
     }
 
+    . (Get-OptionalInstallationScriptPath -Name Serena)
     $script:capturedSerenaPrompt = ''
     function Read-Host([string]$Prompt) {
         $script:capturedSerenaPrompt = $Prompt

@@ -1,7 +1,3 @@
-$script:CodexOrchestrationMarketplaceSource = 'Cjbuilds/Codex-Orchestration'
-$script:CodexOrchestrationMarketplaceName = 'codex-orchestration'
-$script:CodexOrchestrationPluginId = 'codex-orchestration@codex-orchestration'
-
 function Invoke-CodexOrchestrationCodexCommand {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)][string[]]$Arguments)
@@ -16,14 +12,6 @@ function Invoke-CodexOrchestrationVersionCommand {
 
     $output = & $Command --version 2>&1
     return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = (($output | Out-String).Trim()) }
-}
-
-function Select-OptionalCodexOrchestration {
-    Write-Host ''
-    Write-Host '選用全域功能：Codex-Orchestration'
-    Write-Host '多模型／多角色 Codex 工作流，可設定 Planner、Advisor、Designer、Executor。'
-    Write-Host '預設不安裝；只有明確選擇後才會加入 Codex plugin。'
-    return Read-YesNoChoice -Prompt '要安裝嗎？[y/N]' -Default $false
 }
 
 function Assert-CodexOrchestrationPrerequisites {
@@ -238,25 +226,8 @@ function Invoke-CodexOrchestrationInstallation {
     }
 }
 
-function New-CodexOrchestrationSkippedResult {
-    return [pscustomobject]@{ Managed = $false; PluginPresent = $null; WasInstalledBefore = $false; InstalledNow = $false; UpdatedNow = $false; MarketplaceStatus = 'SkippedByUser'; PluginStatus = 'SkippedByUser'; PluginVersion = ''; WorkflowManaged = $false; WorkflowConfigured = $false; WorkflowEffective = $false; WorkflowStatus = 'SkippedByUser'; WorkflowConfigurationSummary = ''; SetupPrompt = '' }
-}
-
 function Undo-CodexOrchestrationInstallation($Result) {
     if ($null -eq $Result -or -not [bool]$Result.InstalledNow) { return }
     $remove = Invoke-CodexOrchestrationCodexCommand -Arguments @('plugin', 'remove', $script:CodexOrchestrationPluginId)
     if ($remove.ExitCode -ne 0) { throw "Codex-Orchestration rollback failed: $($remove.Output -join [Environment]::NewLine)" }
-}
-
-function Get-CodexOrchestrationInstallationComponents($Result) {
-    $workflowResult = switch ([string]$Result.WorkflowStatus) {
-        'PendingUserSetup' { '請在新的 Codex Task 貼上產生的 setup Prompt' }
-        'Preserved' { '保留既有 workflow，未重新設定' }
-        'NotConfigured' { 'Plugin only / workflow not configured' }
-        default { '未選用' }
-    }
-    return @(
-        [pscustomobject]@{ Name = 'Codex-Orchestration plugin'; Status = [string]$Result.PluginStatus; Result = $script:CodexOrchestrationPluginId }
-        [pscustomobject]@{ Name = 'Codex-Orchestration workflow'; Status = [string]$Result.WorkflowStatus; Result = $workflowResult }
-    )
 }

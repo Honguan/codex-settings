@@ -30,6 +30,7 @@ $expectedFiles = @(
     'installation\installation-state.ps1',
     'installation\prerequisites.ps1',
     'installation\prompts.ps1',
+    'installation\optional-installation.ps1',
     'installation\codex-orchestration.ps1',
     'installation\serena.ps1',
     'installation\target-installer.ps1',
@@ -59,10 +60,10 @@ foreach ($commandName in @(
     'New-FileTransaction',
     'Select-Mode',
     'Test-Prerequisites',
-    'Get-SerenaInstallationState',
-    'Get-CodexOrchestrationInstallationState',
-    'Invoke-CodexOrchestrationInstallation',
-    'Invoke-SerenaInstallation',
+    'Get-OptionalInstallationScriptPath',
+    'New-PonytailSkippedResult',
+    'New-CodexOrchestrationSkippedResult',
+    'New-SerenaSkippedResult',
     'New-InstallerContext',
     'New-InstallationPlan',
     'Set-CodexSettingsHookTrust',
@@ -92,7 +93,13 @@ foreach ($commandName in @(
     }
 }
 
-foreach ($obsoleteCommand in @('Resolve-GlobalTargets', 'Install-Target', 'Set-Context7Key', 'Write-Manifest')) {
+foreach ($optionalImplementation in @('Invoke-PonytailCodexCommand', 'Invoke-CodexOrchestrationCodexCommand', 'Invoke-SerenaCommand')) {
+    if (Get-Command $optionalImplementation -CommandType Function -ErrorAction SilentlyContinue) {
+        throw "安裝模組不應預載選用功能實作：$optionalImplementation"
+    }
+}
+
+foreach ($obsoleteCommand in @('Resolve-GlobalTargets', 'Install-Target', 'Set-Context7Key', 'Write-Manifest', 'New-InstallProgress')) {
     if (Get-Command $obsoleteCommand -CommandType Function -ErrorAction SilentlyContinue) {
         throw "仍載入舊安裝函式：$obsoleteCommand"
     }

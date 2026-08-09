@@ -1,7 +1,3 @@
-$script:PonytailMarketplaceSource = 'DietrichGebert/ponytail'
-$script:PonytailMarketplaceName = 'ponytail'
-$script:PonytailPluginId = 'ponytail@ponytail'
-
 function Invoke-PonytailCodexCommand {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)][string[]]$Arguments)
@@ -104,17 +100,6 @@ function Get-PonytailInstallationState {
         PluginSourcePath = $pluginSourcePath
         Version = if ($null -ne $plugin) { [string]$plugin.version } else { '' }
     }
-}
-
-function Select-OptionalPonytail([bool]$AlreadyInstalled) {
-    Write-Host ''
-    Write-Host '選用全域功能：Ponytail'
-    Write-Host '透過 Codex plugin 安裝 Ponytail，並驗證其 lifecycle hooks。'
-    if ($AlreadyInstalled) {
-        Write-Host '已偵測到既有 Ponytail 安裝，本次會保留並更新。'
-        return Read-YesNoChoice -Prompt '要繼續安裝/更新嗎？[Y/n]' -Default $true
-    }
-    return Read-YesNoChoice -Prompt '要安裝嗎？[Y/n]' -Default $true
 }
 
 function Assert-PonytailPrerequisites {
@@ -344,10 +329,6 @@ function Invoke-PonytailInstallation {
     }
 }
 
-function New-PonytailSkippedResult([bool]$AlreadyInstalled = $false) {
-    return [pscustomobject]@{ Managed = $false; WasInstalledBefore = $AlreadyInstalled; InstalledNow = $false; UpdatedNow = $false; MarketplaceStatus = 'SkippedByUser'; MarketplaceAddedNow = $false; MarketplaceSwitchedNow = $false; MarketplaceRecoveredNow = $false; OriginalMarketplaceSource = ''; MarketplaceSource = ''; PluginStatus = 'SkippedByUser'; PluginVersion = ''; HookCount = 0; TrustedHookCount = 0; HookIdentities = @(); ValidationStatus = 'SkippedByUser'; TrustStatus = 'SkippedByUser'; ValidationError = '' }
-}
-
 function Undo-PonytailInstallation($Result) {
     if ($null -eq $Result) { return }
     if ([bool]$Result.InstalledNow) {
@@ -364,15 +345,6 @@ function Undo-PonytailInstallation($Result) {
         if ($restoreMarketplace.ExitCode -ne 0) { throw "Ponytail marketplace rollback restore failed: $($restoreMarketplace.Output -join [Environment]::NewLine)" }
     }
 }
-function Get-PonytailInstallationComponents($Result) {
-    return @(
-        [pscustomobject]@{ Name = 'Ponytail marketplace'; Status = [string]$Result.MarketplaceStatus; Result = 'DietrichGebert/ponytail' }
-        [pscustomobject]@{ Name = 'Ponytail plugin'; Status = [string]$Result.PluginStatus; Result = $script:PonytailPluginId }
-        [pscustomobject]@{ Name = 'Ponytail hooks'; Status = [string]$Result.ValidationStatus; Result = ([string]$Result.HookCount + ' detected') }
-        [pscustomobject]@{ Name = 'Ponytail hook trust'; Status = [string]$Result.TrustStatus; Result = ([string]$Result.TrustedHookCount + ' trusted') }
-    )
-}
-
 function Select-PonytailMarketplaceAction {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)]$State)

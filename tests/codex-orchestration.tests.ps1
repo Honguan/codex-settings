@@ -2,6 +2,7 @@ $ErrorActionPreference = 'Stop'
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $script:ScriptRoot = Join-Path $repositoryRoot 'src'
 . (Join-Path $script:ScriptRoot 'load-installation.ps1')
+. (Get-OptionalInstallationScriptPath -Name CodexOrchestration)
 
 $script:readHostValues = New-Object 'System.Collections.Generic.Queue[string]'
 function Read-Host {

@@ -128,17 +128,6 @@ function Start-InstallProgress {
     return $progress
 }
 
-function New-InstallProgress {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)][object[]]$Steps,
-        [Parameter(Mandatory = $true)][string]$Root,
-        [hashtable]$Metadata = @{},
-        [ValidateSet('Auto', 'Interactive', 'Line')][string]$RendererMode = 'Auto'
-    )
-    return Start-InstallProgress -Steps $Steps -Root $Root -Metadata $Metadata -RendererMode $RendererMode
-}
-
 function Get-InstallProgressStep($Progress, [string]$StepId) {
     return @($Progress.Steps | Where-Object { [string]$_.Id -eq $StepId } | Select-Object -First 1)[0]
 }
