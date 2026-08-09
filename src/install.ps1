@@ -6,6 +6,8 @@ param(
     [switch]$SkipCcusageInstall,
     [switch]$InstallRequestExecutionOptimizer,
     [switch]$InstallMattPocockSkills,
+    [switch]$InstallPonytail,
+    [switch]$SkipPonytail,
     [switch]$EnableDefaultModeRequestUserInput,
     [switch]$ForceValidation,
     [switch]$ForceNotificationTest,
