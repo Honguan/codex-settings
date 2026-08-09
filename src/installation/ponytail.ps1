@@ -155,3 +155,11 @@ function Undo-PonytailInstallation($Result) {
     $remove = Invoke-PonytailCodexCommand -Arguments @('plugin', 'remove', $script:PonytailPluginId)
     if ($remove.ExitCode -ne 0) { throw "Ponytail rollback failed: $($remove.Output -join [Environment]::NewLine)" }
 }
+function Get-PonytailInstallationComponents($Result) {
+    return @(
+        [pscustomobject]@{ Name = 'Ponytail marketplace'; Status = [string]$Result.MarketplaceStatus; Result = 'DietrichGebert/ponytail' }
+        [pscustomobject]@{ Name = 'Ponytail plugin'; Status = [string]$Result.PluginStatus; Result = $script:PonytailPluginId }
+        [pscustomobject]@{ Name = 'Ponytail hooks'; Status = [string]$Result.ValidationStatus; Result = ([string]$Result.HookCount + '/2 detected') }
+        [pscustomobject]@{ Name = 'Ponytail hook trust'; Status = [string]$Result.TrustStatus; Result = ([string]$Result.TrustedHookCount + '/2 trusted') }
+    )
+}
