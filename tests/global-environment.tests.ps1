@@ -233,6 +233,23 @@ try {
         Remove-Item -LiteralPath Function:\Read-Host -ErrorAction SilentlyContinue
     }
 
+    $script:capturedSerenaPrompt = ''
+    function Read-Host([string]$Prompt) {
+        $script:capturedSerenaPrompt = $Prompt
+        return ''
+    }
+    try {
+        if (-not (Select-OptionalSerena)) { throw 'Blank Serena selection must install or update Serena.' }
+        if ($script:capturedSerenaPrompt -ne '要安裝/更新嗎？[Y/n]') { throw 'Serena prompt must default to [Y/n].' }
+    } finally {
+        Remove-Item -LiteralPath Function:\Read-Host -ErrorAction SilentlyContinue
+    }
+
+    $serenaSource = Get-Content -LiteralPath (Join-Path $script:ScriptRoot 'installation\serena.ps1') -Raw
+    foreach ($requiredCommand in @("uv tool install -p 3.13 serena-agent", "uv tool upgrade serena-agent", "serena setup codex")) {
+        if ($serenaSource -notmatch [regex]::Escape($requiredCommand)) { throw "Serena installer does not use the required official command: $requiredCommand" }
+    }
+    if ($serenaSource -match 'uvx' -or $serenaSource -match 'git\+') { throw 'Serena installer must not configure uvx or Git-based MCP startup.' }
     $script:capturedEnvironmentPrompt = ''
     function Read-Host([string]$Prompt) {
         $script:capturedEnvironmentPrompt = $Prompt
