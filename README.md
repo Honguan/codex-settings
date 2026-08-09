@@ -275,6 +275,6 @@ tools\
 └─ plan-release.ps1
 ```
 
-`install.ps1` 只負責參數解析與啟動 runner；context 集中解析安裝選項與路徑，runner 負責流程與回復，state 負責 Context7 與 manifest。`load-core.ps1`、`load-operations.ps1` 與 `load-installation.ps1` 集中定義模組載入順序；核心檔案不依賴外部套件，安裝層也不直接實作原子寫入與交易回復。
+`install.ps1` 只負責參數解析與啟動 runner；context 集中解析安裝選項與路徑，runner 負責流程與回復，state 負責 Context7 與 manifest。`load-core.ps1`、`load-operations.ps1` 與 `load-installation.ps1` 集中定義模組載入順序；Ponytail、Codex-Orchestration 與 Serena 只在明確選用後載入實作，略過時不執行其 discovery 或 CLI。核心檔案不依賴外部套件，安裝層也不直接實作原子寫入與交易回復。
 
 推送符合 `v主版.次版.修訂版` 的 Git tag 時，GitHub Actions 會建立同名 Release 附件。

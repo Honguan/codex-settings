@@ -1,6 +1,3 @@
-$script:SerenaPackageName = 'serena-agent'
-$script:SerenaMcpSection = 'mcp_servers.serena'
-
 function Invoke-SerenaCommand {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)][string]$Command, [Parameter(Mandatory = $true)][string[]]$Arguments)
@@ -45,20 +42,6 @@ function Get-SerenaInstallationState {
         Version = if ($null -ne $cli -and $cli.ExitCode -eq 0) { Get-SerenaVersion $cli.Output } else { '' }
         Initialized = (Test-Path -LiteralPath (Join-Path (Get-SerenaHome) 'serena_config.yml') -PathType Leaf)
     }
-}
-
-function Select-OptionalSerena {
-    Write-Host ''
-    Write-Host '選用全域功能：Serena'
-    Write-Host '提供語意程式碼搜尋、分析與編輯能力，並透過 MCP 連接 Codex。'
-    Write-Host '預設安裝；如果已安裝則會保留設定並更新。'
-    return Read-YesNoChoice -Prompt '要安裝/更新嗎？[Y/n]' -Default $true
-}
-
-function Select-SerenaUvInstallation {
-    Write-Host '未偵測到 uv。Serena 需要 uv。'
-    Write-Host '會使用官方 Windows 安裝方式：winget install --id astral-sh.uv -e。'
-    return Read-YesNoChoice -Prompt '是否使用官方安裝方式安裝 uv？[Y/n]' -Default $true
 }
 
 function Install-SerenaUv {
@@ -153,18 +136,4 @@ function Invoke-SerenaInstallation {
         CodexMcpStatus = $mcpStatus
         RuntimeStatus = 'RestartRequired'
     }
-}
-
-function New-SerenaSkippedResult {
-    return [pscustomobject]@{ Managed = $false; SelectedByUser = $false; UvAvailable = $false; UvVersion = ''; VersionBefore = ''; VersionAfter = ''; InstalledNow = $false; UpdatedNow = $false; ToolStatus = 'SkippedByUser'; InitializationStatus = 'SkippedByUser'; CodexMcpStatus = 'SkippedByUser'; RuntimeStatus = 'SkippedByUser' }
-}
-
-function Get-SerenaInstallationComponents($Result) {
-    return @(
-        [pscustomobject]@{ Name = 'Serena / uv'; Status = $(if ($Result.UvAvailable) { 'Available' } else { [string]$Result.ToolStatus }); Result = [string]$Result.UvVersion }
-        [pscustomobject]@{ Name = 'Serena CLI'; Status = [string]$Result.ToolStatus; Result = [string]$Result.VersionAfter }
-        [pscustomobject]@{ Name = 'Serena initialization'; Status = [string]$Result.InitializationStatus; Result = $(if ($Result.InitializationStatus -eq 'Existing') { '保留既有設定' } else { '全域設定已初始化' }) }
-        [pscustomobject]@{ Name = 'Serena Codex MCP'; Status = [string]$Result.CodexMcpStatus; Result = 'serena start-mcp-server --context=codex --project-from-cwd' }
-        [pscustomobject]@{ Name = 'Serena MCP runtime'; Status = [string]$Result.RuntimeStatus; Result = '請重新啟動 Codex，並以 /mcp 確認 connected' }
-    )
 }

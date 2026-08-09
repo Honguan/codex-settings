@@ -34,14 +34,23 @@ function Invoke-InteractiveMode {
                 $selectedEnvironment = Select-DevelopmentEnvironment -Default $DevelopmentEnvironment
                 $installRequestExecutionOptimizer = Select-OptionalGlobalSkill
                 $installMattPocockSkills = Select-OptionalMattPocockSkills
-                $ponytailState = Get-PonytailInstallationState -Root $GlobalRoot
-                $installPonytail = Select-OptionalPonytail -AlreadyInstalled:([bool]$ponytailState.PluginPresent)
-                $ponytailMarketplaceAction = if ($installPonytail) { Select-PonytailMarketplaceAction -State $ponytailState } else { 'Auto' }
-                if ($ponytailMarketplaceAction -eq 'Skip') { $installPonytail = $false }
+                $ponytailState = $null
+                $installPonytail = Select-OptionalPonytail
+                $ponytailMarketplaceAction = 'Auto'
+                if ($installPonytail) {
+                    . (Get-OptionalInstallationScriptPath -Name Ponytail)
+                    $ponytailState = Get-PonytailInstallationState -Root $GlobalRoot
+                    $ponytailMarketplaceAction = Select-PonytailMarketplaceAction -State $ponytailState
+                    if ($ponytailMarketplaceAction -eq 'Skip') { $installPonytail = $false }
+                }
                 $installCodexOrchestration = Select-OptionalCodexOrchestration
+                if ($installCodexOrchestration) { . (Get-OptionalInstallationScriptPath -Name CodexOrchestration) }
                 $installSerena = Select-OptionalSerena
                 $installSerenaUv = $false
-                if ($installSerena -and -not (Test-SerenaUvAvailable)) { $installSerenaUv = Select-SerenaUvInstallation }
+                if ($installSerena) {
+                    . (Get-OptionalInstallationScriptPath -Name Serena)
+                    if (-not (Test-SerenaUvAvailable)) { $installSerenaUv = Select-SerenaUvInstallation }
+                }
                 $enableDefaultModeRequestUserInput = Select-OptionalDefaultModeRequestUserInput
                 $installWindowsNotifications = Select-OptionalWindowsNotifications -AlreadyInstalled:(Test-WindowsNotificationsInstalled -Root $GlobalRoot)
                 Invoke-Installer -Mode Global -InstallStyle $style -DevelopmentEnvironment $selectedEnvironment -InstallRequestExecutionOptimizer:$installRequestExecutionOptimizer -InstallMattPocockSkills:$installMattPocockSkills -InstallPonytail:$installPonytail -PonytailState $ponytailState -PonytailMarketplaceAction $ponytailMarketplaceAction -InstallCodexOrchestration:$installCodexOrchestration -ConfigureCodexOrchestration:$installCodexOrchestration -InstallSerena:$installSerena -InstallSerenaUv:$installSerenaUv -EnableDefaultModeRequestUserInput:$enableDefaultModeRequestUserInput -InstallWindowsNotifications:$installWindowsNotifications -SourceRoot $SourceRoot
@@ -458,6 +467,9 @@ function Invoke-Installer {
     if ($InstallCodexOrchestration -and $SkipCodexOrchestration) { throw 'InstallCodexOrchestration 與 SkipCodexOrchestration 不可同時指定。' }
     if ($ConfigureCodexOrchestration -and -not $InstallCodexOrchestration) { throw 'ConfigureCodexOrchestration 必須搭配 InstallCodexOrchestration。' }
     if ($InstallSerena -and $SkipSerena) { throw 'InstallSerena 與 SkipSerena 不可同時指定。' }
+    if ($InstallPonytail) { . (Get-OptionalInstallationScriptPath -Name Ponytail) }
+    if ($InstallCodexOrchestration) { . (Get-OptionalInstallationScriptPath -Name CodexOrchestration) }
+    if ($InstallSerena) { . (Get-OptionalInstallationScriptPath -Name Serena) }
     if ([string]::IsNullOrWhiteSpace($SourceRoot)) { $SourceRoot = [string]$ScriptRoot }
     if ($Mode -in @('Backup', 'Restore', 'Uninstall')) {
         Invoke-ManagementMode -Mode $Mode -SourceRoot $SourceRoot

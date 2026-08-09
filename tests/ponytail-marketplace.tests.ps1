@@ -2,6 +2,7 @@ $ErrorActionPreference = 'Stop'
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $script:ScriptRoot = Join-Path $repositoryRoot 'src'
 . (Join-Path $script:ScriptRoot 'load-installation.ps1')
+. (Get-OptionalInstallationScriptPath -Name Ponytail)
 
 $script:commands = New-Object 'System.Collections.Generic.List[string]'
 $script:allowMarketplaceMutation = $false
