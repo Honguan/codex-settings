@@ -36,13 +36,15 @@ function Invoke-InteractiveMode {
                 $installMattPocockSkills = Select-OptionalMattPocockSkills
                 $ponytailState = Get-PonytailInstallationState
                 $installPonytail = Select-OptionalPonytail -AlreadyInstalled:([bool]$ponytailState.PluginPresent)
+                $ponytailMarketplaceAction = if ($installPonytail) { Select-PonytailMarketplaceAction -State $ponytailState } else { 'Auto' }
+                if ($ponytailMarketplaceAction -eq 'Skip') { $installPonytail = $false }
                 $installCodexOrchestration = Select-OptionalCodexOrchestration
                 $installSerena = Select-OptionalSerena
                 $installSerenaUv = $false
                 if ($installSerena -and -not (Test-SerenaUvAvailable)) { $installSerenaUv = Select-SerenaUvInstallation }
                 $enableDefaultModeRequestUserInput = Select-OptionalDefaultModeRequestUserInput
                 $installWindowsNotifications = Select-OptionalWindowsNotifications -AlreadyInstalled:(Test-WindowsNotificationsInstalled -Root $GlobalRoot)
-                Invoke-Installer -Mode Global -InstallStyle $style -DevelopmentEnvironment $selectedEnvironment -InstallRequestExecutionOptimizer:$installRequestExecutionOptimizer -InstallMattPocockSkills:$installMattPocockSkills -InstallPonytail:$installPonytail -InstallCodexOrchestration:$installCodexOrchestration -ConfigureCodexOrchestration:$installCodexOrchestration -InstallSerena:$installSerena -InstallSerenaUv:$installSerenaUv -EnableDefaultModeRequestUserInput:$enableDefaultModeRequestUserInput -InstallWindowsNotifications:$installWindowsNotifications -SourceRoot $SourceRoot
+                Invoke-Installer -Mode Global -InstallStyle $style -DevelopmentEnvironment $selectedEnvironment -InstallRequestExecutionOptimizer:$installRequestExecutionOptimizer -InstallMattPocockSkills:$installMattPocockSkills -InstallPonytail:$installPonytail -PonytailState $ponytailState -PonytailMarketplaceAction $ponytailMarketplaceAction -InstallCodexOrchestration:$installCodexOrchestration -ConfigureCodexOrchestration:$installCodexOrchestration -InstallSerena:$installSerena -InstallSerenaUv:$installSerenaUv -EnableDefaultModeRequestUserInput:$enableDefaultModeRequestUserInput -InstallWindowsNotifications:$installWindowsNotifications -SourceRoot $SourceRoot
                 return
             }
 
@@ -56,7 +58,7 @@ function Invoke-InteractiveMode {
     }
 }
 
-function Invoke-InstallationRollback($Transaction, $CcusageBefore, $ContextState, $CodexOrchestration, [string]$Reason) {
+function Invoke-InstallationRollback($Transaction, $CcusageBefore, $ContextState, $Ponytail, $CodexOrchestration, [string]$Reason) {
     $rollbackErrors = New-Object 'System.Collections.Generic.List[string]'
     if ($null -ne $Transaction) {
         try { Undo-FileTransaction $Transaction | Out-Null } catch { [void]$rollbackErrors.Add("File rollback failed: $($_.Exception.Message)") }
@@ -69,6 +71,9 @@ function Invoke-InstallationRollback($Transaction, $CcusageBefore, $ContextState
             [Environment]::SetEnvironmentVariable('CONTEXT7_API_KEY', $ContextState.UserBefore, 'User')
             [Environment]::SetEnvironmentVariable('CONTEXT7_API_KEY', $ContextState.ProcessBefore, 'Process')
         } catch { [void]$rollbackErrors.Add("Context7 rollback failed: $($_.Exception.Message)") }
+    }
+    if ($null -ne $Ponytail -and ([bool]$Ponytail.InstalledNow -or [bool]$Ponytail.MarketplaceAddedNow -or [bool]$Ponytail.MarketplaceSwitchedNow)) {
+        try { Undo-PonytailInstallation -Result $Ponytail } catch { [void]$rollbackErrors.Add("Ponytail rollback failed: $($_.Exception.Message)") }
     }
     if ($null -ne $CodexOrchestration -and [bool]$CodexOrchestration.InstalledNow) {
         try { Undo-CodexOrchestrationInstallation -Result $CodexOrchestration } catch { [void]$rollbackErrors.Add("Codex-Orchestration rollback failed: $($_.Exception.Message)") }
@@ -148,6 +153,8 @@ function Invoke-GlobalInstallation {
         [switch]$InstallMattPocockSkills,
         [switch]$InstallPonytail,
         [switch]$SkipPonytail,
+        $PonytailState,
+        [ValidateSet('Auto', 'Preserve', 'Switch', 'Skip')][string]$PonytailMarketplaceAction = 'Auto',
         [switch]$InstallCodexOrchestration,
         [switch]$SkipCodexOrchestration,
         [switch]$ConfigureCodexOrchestration,
@@ -163,6 +170,7 @@ function Invoke-GlobalInstallation {
     if (-not $InstallMattPocockSkills -and (Test-MattPocockSkillsInstalled)) {
         $InstallMattPocockSkills = $true
     }
+    if ($InstallPonytail -and $null -eq $PonytailState) { $PonytailState = Get-PonytailInstallationState }
     $targets = @(New-InstallationPlan -DevelopmentEnvironment $Context.DevelopmentEnvironment -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput -InstallWindowsNotifications $Context.InstallWindowsNotifications -SourceRoot $Context.ScriptRoot -IncludeExistingSkills $Context.ExistingSkillsInstalled)
     $steps = New-InstallationProgressSteps -TargetCount $targets.Count -IncludeContext7:(-not $SkipContext7Key) -IncludeSkills:$InstallMattPocockSkills -IncludePonytail:$InstallPonytail -IncludeCodexOrchestration:$InstallCodexOrchestration -IncludeSerena:$InstallSerena -IncludeNotifications:$Context.InstallWindowsNotifications
     $progress = Start-InstallProgress -Steps $steps -Root $Context.GlobalRoot -Metadata @{
@@ -306,7 +314,7 @@ function Invoke-GlobalInstallation {
 
             if ($InstallPonytail) {
                 Set-InstallProgress -Progress $progress -StepId 'Ponytail' -Detail '更新 marketplace、同步 plugin 並驗證 2 個 lifecycle hooks'
-                $ponytail = Invoke-PonytailInstallation -State (Get-PonytailInstallationState) -Root $Context.GlobalRoot
+                $ponytail = Invoke-PonytailInstallation -State $PonytailState -Root $Context.GlobalRoot -MarketplaceAction $PonytailMarketplaceAction
                 Write-InstallLog -Progress $progress -Message ('PONYTAIL plugin=' + $ponytail.PluginStatus + '; hooks=' + $ponytail.HookCount + '/2; trust=' + $ponytail.TrustStatus)
                 Complete-InstallStep -Progress $progress -Result ($ponytail.PluginStatus + '; hooks ' + $ponytail.HookCount + '/2')
             }
@@ -350,7 +358,7 @@ function Invoke-GlobalInstallation {
                     CurrentVersion = [string]$ccusage.PackageAfter.Version
                     PackageInstalledNow = [bool]$ccusage.PackageInstalledNow
                 }
-                Ponytail = [ordered]@{ Managed = [bool]$ponytail.Managed; Marketplace = $script:PonytailMarketplaceSource; Plugin = $script:PonytailPluginId; WasInstalledBefore = [bool]$ponytail.WasInstalledBefore; InstalledNow = [bool]$ponytail.InstalledNow; UpdatedNow = [bool]$ponytail.UpdatedNow; HookCount = [int]$ponytail.HookCount; TrustedHookCount = [int]$ponytail.TrustedHookCount; HookIdentities = @($ponytail.HookIdentities); ValidationStatus = [string]$ponytail.ValidationStatus; TrustStatus = [string]$ponytail.TrustStatus }
+                Ponytail = [ordered]@{ Managed = [bool]$ponytail.Managed; Marketplace = $script:PonytailMarketplaceSource; MarketplaceSource = [string]$ponytail.MarketplaceSource; MarketplaceStatus = [string]$ponytail.MarketplaceStatus; MarketplaceAddedNow = [bool]$ponytail.MarketplaceAddedNow; MarketplaceSwitchedNow = [bool]$ponytail.MarketplaceSwitchedNow; Plugin = $script:PonytailPluginId; WasInstalledBefore = [bool]$ponytail.WasInstalledBefore; InstalledNow = [bool]$ponytail.InstalledNow; UpdatedNow = [bool]$ponytail.UpdatedNow; HookCount = [int]$ponytail.HookCount; TrustedHookCount = [int]$ponytail.TrustedHookCount; HookIdentities = @($ponytail.HookIdentities); ValidationStatus = [string]$ponytail.ValidationStatus; TrustStatus = [string]$ponytail.TrustStatus }
                 CodexOrchestration = [ordered]@{ pluginManaged = [bool]$codexOrchestration.Managed; pluginPresent = $codexOrchestration.PluginPresent; pluginUpdatedThisRun = [bool]$codexOrchestration.UpdatedNow; marketplace = $script:CodexOrchestrationMarketplaceSource; plugin = $script:CodexOrchestrationPluginId; workflowManaged = [bool]$codexOrchestration.WorkflowManaged; workflowConfigured = [bool]$codexOrchestration.WorkflowConfigured; workflowEffective = [bool]$codexOrchestration.WorkflowEffective; workflowStatus = [string]$codexOrchestration.WorkflowStatus; workflowConfigurationSummary = [string]$codexOrchestration.WorkflowConfigurationSummary; setupPrompt = [string]$codexOrchestration.SetupPrompt }
                 Serena = [ordered]@{ Managed = [bool]$serena.Managed; SelectedByUser = [bool]$serena.SelectedByUser; UvAvailable = [bool]$serena.UvAvailable; UvVersion = [string]$serena.UvVersion; VersionBefore = [string]$serena.VersionBefore; VersionAfter = [string]$serena.VersionAfter; InstalledNow = [bool]$serena.InstalledNow; UpdatedNow = [bool]$serena.UpdatedNow; InitializationStatus = [string]$serena.InitializationStatus; CodexMcpConfigured = ([string]$serena.CodexMcpStatus -eq 'Configured'); RuntimeVerified = $false }
                 Context7 = [ordered]@{
@@ -387,7 +395,7 @@ function Invoke-GlobalInstallation {
             $reason = $_.Exception.Message
             Write-InstallErrorRecord -Progress $progress -ErrorRecord $_ -CurrentSubOperation $currentSubOperation
             Fail-InstallStep -Progress $progress -Reason $reason
-            $rollbackErrors = @(Invoke-InstallationRollback -Transaction $transaction -CcusageBefore $ccusageBefore -ContextState $contextState -CodexOrchestration $codexOrchestration -Reason $reason)
+            $rollbackErrors = @(Invoke-InstallationRollback -Transaction $transaction -CcusageBefore $ccusageBefore -ContextState $contextState -Ponytail $ponytail -CodexOrchestration $codexOrchestration -Reason $reason)
             $message = "Installation failed and rollback was attempted.`nReason: $reason"
             if ($rollbackErrors.Count -gt 0) { $message += "`nRollback errors:`n- " + ($rollbackErrors -join "`n- ") }
             $rollbackStatus = if ($rollbackErrors.Count -eq 0) { 'SUCCESS' } else { 'FAILED' }
@@ -401,7 +409,7 @@ function Invoke-GlobalInstallation {
             $reason = $_.Exception.Message
             Write-InstallErrorRecord -Progress $progress -ErrorRecord $_ -CurrentSubOperation $currentSubOperation
             Fail-InstallStep -Progress $progress -Reason $reason
-            $rollbackErrors = @(Invoke-InstallationRollback -Transaction $transaction -CcusageBefore $ccusageBefore -ContextState $contextState -CodexOrchestration $codexOrchestration -Reason $reason)
+            $rollbackErrors = @(Invoke-InstallationRollback -Transaction $transaction -CcusageBefore $ccusageBefore -ContextState $contextState -Ponytail $ponytail -CodexOrchestration $codexOrchestration -Reason $reason)
             $failureSummary = Get-InstallResultSummary -Results $results.ToArray()
             $failureSummary.Rollback = if ($rollbackErrors.Count -eq 0) { 'SUCCESS' } else { 'FAILED' }
             Write-InstallResult -Progress $progress -Status FAILED -Summary $failureSummary -Results $results.ToArray()
@@ -424,6 +432,8 @@ function Invoke-Installer {
         [switch]$InstallMattPocockSkills,
         [switch]$InstallPonytail,
         [switch]$SkipPonytail,
+        $PonytailState,
+        [ValidateSet('Auto', 'Preserve', 'Switch', 'Skip')][string]$PonytailMarketplaceAction = 'Auto',
         [switch]$InstallCodexOrchestration,
         [switch]$SkipCodexOrchestration,
         [switch]$ConfigureCodexOrchestration,
@@ -459,5 +469,6 @@ function Invoke-Installer {
         return
     }
 
-    Invoke-GlobalInstallation -Context $context -SkipContext7Key:$SkipContext7Key -SkipCcusageInstall:$SkipCcusageInstall -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -InstallMattPocockSkills:$InstallMattPocockSkills -InstallPonytail:$InstallPonytail -SkipPonytail:$SkipPonytail -InstallCodexOrchestration:$InstallCodexOrchestration -SkipCodexOrchestration:$SkipCodexOrchestration -ConfigureCodexOrchestration:$ConfigureCodexOrchestration -InstallSerena:$InstallSerena -SkipSerena:$SkipSerena -InstallSerenaUv:$InstallSerenaUv -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput -ForceValidation:$ForceValidation -ForceNotificationTest:$ForceNotificationTest -RendererMode $(if ($NoPause) { 'Line' } else { 'Auto' })
+    if ($InstallPonytail -and $null -eq $PonytailState) { $PonytailState = Get-PonytailInstallationState }
+    Invoke-GlobalInstallation -Context $context -SkipContext7Key:$SkipContext7Key -SkipCcusageInstall:$SkipCcusageInstall -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -InstallMattPocockSkills:$InstallMattPocockSkills -InstallPonytail:$InstallPonytail -SkipPonytail:$SkipPonytail -PonytailState $PonytailState -PonytailMarketplaceAction $PonytailMarketplaceAction -InstallCodexOrchestration:$InstallCodexOrchestration -SkipCodexOrchestration:$SkipCodexOrchestration -ConfigureCodexOrchestration:$ConfigureCodexOrchestration -InstallSerena:$InstallSerena -SkipSerena:$SkipSerena -InstallSerenaUv:$InstallSerenaUv -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput -ForceValidation:$ForceValidation -ForceNotificationTest:$ForceNotificationTest -RendererMode $(if ($NoPause) { 'Line' } else { 'Auto' })
 }
