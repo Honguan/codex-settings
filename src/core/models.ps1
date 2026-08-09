@@ -167,6 +167,7 @@ function New-InstallTarget {
         [AllowEmptyString()][string]$DevelopmentEnvironment = '',
         [AllowEmptyString()][string]$Cwd = '',
         [bool]$InstallWindowsNotifications = $false,
+        [bool]$ManageWindowsNotifications = $true,
         [bool]$EnableDefaultModeRequestUserInput = $false,
         [AllowEmptyString()][string]$SourceRoot = ''
     )
@@ -181,6 +182,7 @@ function New-InstallTarget {
         developmentEnvironment = if ([string]::IsNullOrWhiteSpace($DevelopmentEnvironment)) { $null } else { $DevelopmentEnvironment }
         cwd = if ([string]::IsNullOrWhiteSpace($Cwd)) { $null } else { $Cwd }
         installWindowsNotifications = [bool]$InstallWindowsNotifications
+        manageWindowsNotifications = [bool]$ManageWindowsNotifications
         enableDefaultModeRequestUserInput = [bool]$EnableDefaultModeRequestUserInput
         sourceRoot = if ([string]::IsNullOrWhiteSpace($SourceRoot)) { $null } else { $SourceRoot }
     }

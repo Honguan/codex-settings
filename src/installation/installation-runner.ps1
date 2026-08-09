@@ -32,7 +32,18 @@ function Invoke-InteractiveMode {
             if ($selection -eq 'Global') {
                 $style = Select-InstallStyle
                 $selectedEnvironment = Select-DevelopmentEnvironment -Default $DevelopmentEnvironment
+                Write-Host ''
+                Write-Host ('=' * 60)
+                Write-Host '個人 Codex Settings'
+                Write-Host ('=' * 60)
+                Write-Host '核心設定                         自動安裝／更新'
                 $installRequestExecutionOptimizer = Select-OptionalGlobalSkill
+                $enableDefaultModeRequestUserInput = Select-OptionalDefaultModeRequestUserInput
+                Write-Host ''
+                Write-Host ('=' * 60)
+                Write-Host '社區／開源元件'
+                Write-Host ('=' * 60)
+                $installWindowsNotifications = Select-OptionalWindowsNotifications -AlreadyInstalled:(Test-WindowsNotificationsInstalled -Root $GlobalRoot)
                 $installMattPocockSkills = Select-OptionalMattPocockSkills
                 $ponytailState = $null
                 $installPonytail = Select-OptionalPonytail
@@ -51,8 +62,6 @@ function Invoke-InteractiveMode {
                     . (Get-OptionalInstallationScriptPath -Name Serena)
                     if (-not (Test-SerenaUvAvailable)) { $installSerenaUv = Select-SerenaUvInstallation }
                 }
-                $enableDefaultModeRequestUserInput = Select-OptionalDefaultModeRequestUserInput
-                $installWindowsNotifications = Select-OptionalWindowsNotifications -AlreadyInstalled:(Test-WindowsNotificationsInstalled -Root $GlobalRoot)
                 Invoke-Installer -Mode Global -InstallStyle $style -DevelopmentEnvironment $selectedEnvironment -InstallRequestExecutionOptimizer:$installRequestExecutionOptimizer -InstallMattPocockSkills:$installMattPocockSkills -InstallPonytail:$installPonytail -PonytailState $ponytailState -PonytailMarketplaceAction $ponytailMarketplaceAction -InstallCodexOrchestration:$installCodexOrchestration -ConfigureCodexOrchestration:$installCodexOrchestration -InstallSerena:$installSerena -InstallSerenaUv:$installSerenaUv -EnableDefaultModeRequestUserInput:$enableDefaultModeRequestUserInput -InstallWindowsNotifications:$installWindowsNotifications -SourceRoot $SourceRoot
                 return
             }
@@ -100,6 +109,99 @@ function Invoke-InstallationRollback($Transaction, $CcusageBefore, $ContextState
     return $rollbackErrors.ToArray()
 }
 
+function Invoke-IsolatedCommunityComponent {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][ValidateSet('WindowsUsageNotifications', 'MattPocockSkills', 'Ponytail', 'CodexOrchestration', 'Serena')][string]$Name,
+        [Parameter(Mandatory = $true)][string]$BackupRoot,
+        [Parameter(Mandatory = $true)][scriptblock]$Operation,
+        [scriptblock]$Validate,
+        [scriptblock]$Commit,
+        [scriptblock]$RollbackExternal
+    )
+
+    $transactionRoot = Join-Path $BackupRoot ((Get-Date -Format 'yyyyMMdd-HHmmss-fffffff') + '-' + $Name)
+    $transaction = New-FileTransaction -Root $transactionRoot -Mode ($Name + 'Transaction')
+    $componentResult = $null
+    try {
+        $componentResult = & $Operation $transaction
+        if ($null -ne $Validate) { & $Validate $componentResult }
+        if ($null -ne $Commit) { & $Commit $transaction $componentResult }
+        Complete-FileTransaction -Transaction $transaction
+        return [pscustomobject]@{ Name = $Name; Status = 'SUCCESS'; Result = $componentResult; Error = $null; TransactionRoot = $transactionRoot; Rollback = 'N/A' }
+    } catch {
+        $reason = $_.Exception.Message
+        $rollbackErrors = New-Object 'System.Collections.Generic.List[string]'
+        try { Undo-FileTransaction -Transaction $transaction } catch { [void]$rollbackErrors.Add($_.Exception.Message) }
+        if ($null -ne $RollbackExternal) {
+            try { & $RollbackExternal $componentResult } catch { [void]$rollbackErrors.Add($_.Exception.Message) }
+        }
+        try { Save-TransactionMetadata -Transaction $transaction -Metadata @{ Status = 'RolledBack'; RolledBackAt = (Get-Date).ToString('o'); FailureReason = $reason; RollbackErrors = $rollbackErrors.ToArray() } } catch { [void]$rollbackErrors.Add($_.Exception.Message) }
+        return [pscustomobject]@{ Name = $Name; Status = 'FAILED'; Result = $componentResult; Error = $reason; TransactionRoot = $transactionRoot; Rollback = $(if ($rollbackErrors.Count -eq 0) { 'SUCCESS' } else { 'FAILED' }); RollbackErrors = $rollbackErrors.ToArray() }
+    }
+}
+
+function Invoke-WindowsUsageNotificationFiles {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][string]$SourceRoot,
+        [Parameter(Mandatory = $true)]$Transaction,
+        [switch]$Remove
+    )
+
+    $manifest = Get-Manifest -Root $Root
+    $fingerprints = @(Get-ManifestManagedHookFingerprints -Manifest $manifest -Kind Notification)
+    $hooksPath = Join-Path $Root 'hooks.json'
+    $scriptPath = Join-Path $Root 'hooks\show-codex-notification.ps1'
+    $hooksState = Get-TextFileState -Path $hooksPath
+    $changed = $false
+    $unownedBefore = Remove-ManagedNotificationHooksJson -Content $hooksState.Content -ManagedHookFingerprints $fingerprints
+    $desiredHooks = $unownedBefore
+    if (-not $Remove) {
+        $template = [IO.File]::ReadAllText((Join-Path $SourceRoot 'templates\core\hooks.json'))
+        $desiredHooks = Merge-HooksJson -ExistingContent $unownedBefore -TemplateContent $template
+    }
+    $desiredHooks = [regex]::Replace($desiredHooks, "`r`n|`r|`n", $hooksState.NewLine)
+    if ($desiredHooks -ne $hooksState.Content) {
+        Save-TransactionFile -Transaction $Transaction -Path $hooksPath
+        Write-TextFileState -Path $hooksPath -Content $desiredHooks -Encoding $hooksState.Encoding
+        $changed = $true
+    }
+
+    if ($Remove) {
+        if (Test-Path -LiteralPath $scriptPath -PathType Leaf) {
+            Save-TransactionFile -Transaction $Transaction -Path $scriptPath
+            Remove-Item -LiteralPath $scriptPath -Force
+            $changed = $true
+        }
+    } else {
+        $scriptState = Get-TextFileState -Path $scriptPath
+        $scriptContent = [IO.File]::ReadAllText((Join-Path $SourceRoot 'templates\core\hooks\show-codex-notification.ps1'))
+        $scriptContent = [regex]::Replace($scriptContent, "`r`n|`r|`n", $scriptState.NewLine)
+        if (-not $scriptState.Exists -or $scriptState.Content -ne $scriptContent) {
+            Save-TransactionFile -Transaction $Transaction -Path $scriptPath
+            $encoding = if ($scriptState.Exists) { $scriptState.Encoding } else { [Text.UTF8Encoding]::new($true, $true) }
+            Write-TextFileState -Path $scriptPath -Content $scriptContent -Encoding $encoding
+            $changed = $true
+        }
+    }
+
+    $hooksAfter = (Get-TextFileState -Path $hooksPath).Content
+    $unownedAfter = Remove-ManagedNotificationHooksJson -Content $hooksAfter
+    $getUnownedFingerprints = {
+        param([string]$Content)
+        if ([string]::IsNullOrWhiteSpace($Content)) { return @() }
+        $object = $Content | ConvertFrom-Json
+        return @($object.hooks.PSObject.Properties | ForEach-Object { foreach ($group in @($_.Value)) { foreach ($entry in @(Get-HookHandlerEntries $group)) { Get-HookEntryFingerprint $entry } } } | Sort-Object)
+    }
+    $unownedFingerprintsBefore = @(& $getUnownedFingerprints $unownedBefore) -join "`n"
+    $unownedFingerprintsAfter = @(& $getUnownedFingerprints $unownedAfter) -join "`n"
+    if ($unownedFingerprintsBefore -ne $unownedFingerprintsAfter) { throw 'WindowsUsageNotifications 嘗試修改非自身擁有的 Hook。' }
+
+    return [pscustomobject]@{ Managed = -not $Remove; HookCount = $(if ($Remove) { 0 } else { 3 }); ScriptPath = $scriptPath; Removed = [bool]$Remove; Changed = $changed }
+}
+
 function Write-InstallationSummary {
     param(
         [string]$InstallStyle,
@@ -121,35 +223,47 @@ function Write-InstallationSummary {
         [int]$SkillsCount = 0,
         $Ponytail,
         $CodexOrchestration,
-        $Serena
+        $Serena,
+        [object[]]$CommunityResults = @(),
+        [ValidateSet('SUCCESS', 'PARTIAL SUCCESS')][string]$OverallStatus = 'SUCCESS'
     )
 
     if ($null -ne $Progress) {
         $fileSummary = Get-InstallResultSummary -Results $Results
         $fileSummary.Skipped = [int]$fileSummary.Skipped + $SkippedCount
         $fileSummary.Footer = '請完全關閉並重新啟動 VS Code、Codex 與 PowerShell；既有 Session 不會載入新安裝的 Hook。'
-        $ccusageStatus = if ([bool]$Ccusage.PackageInstalledNow) { 'Installed' } elseif ([bool]$CcusageBefore.Installed) { 'Existing' } else { 'SkippedByUser' }
-        $commandStatus = if ([bool]$Ccusage.CommandsUpdated) { 'Updated' } else { 'Unchanged' }
         $context7Status = if ($SkipContext7Key) { 'SkippedByUser' } elseif ($null -ne $ContextState -and [bool]$ContextState.CreatedNow) { 'Installed' } elseif ($null -ne $ContextState -and [bool]$ContextState.CreatedByInstaller) { 'Existing' } else { 'Unchanged' }
-        $hookStatus = if ([bool]$HookTrust.Skipped) { 'SkippedUnchanged' } elseif ([int]$HookTrust.UpdatedCount -gt 0) { 'Updated' } else { 'Validated' }
         $notificationComponentStatus = if (-not $InstallWindowsNotifications) { 'SkippedByUser' } elseif ($NotificationStatus -match '略過|未變更') { 'SkippedUnchanged' } else { 'Updated' }
+        $failedNames = @($CommunityResults | Where-Object Status -eq 'FAILED' | ForEach-Object Name)
         $components = @(
-            [pscustomobject]@{ Name = 'Codex'; Status = 'Validated'; Result = "Environment=$DevelopmentEnvironment" }
-            [pscustomobject]@{ Name = 'MCP / Context7'; Status = $context7Status; Result = $(if ($SkipContext7Key) { '使用者略過' } else { '環境設定已處理' }) }
-            [pscustomobject]@{ Name = 'ccusage'; Status = $ccusageStatus; Result = [string]$Ccusage.PackageAfter.Version }
-            [pscustomobject]@{ Name = 'ccsessions'; Status = $commandStatus; Result = $(if ($Ccusage.CommandsUpdated) { 'Profile 已更新' } else { 'Profile 未變更' }) }
-            [pscustomobject]@{ Name = 'cdaily'; Status = $commandStatus; Result = $(if ($Ccusage.CommandsUpdated) { 'Profile 已更新' } else { 'Profile 未變更' }) }
-            [pscustomobject]@{ Name = 'request-execution-optimizer'; Status = $(if ($InstallRequestExecutionOptimizer) { 'Enabled' } else { 'SkippedByUser' }); Result = $(if ($InstallRequestExecutionOptimizer) { '已選用' } else { '未選用' }) }
-            [pscustomobject]@{ Name = 'mattpocock/skills'; Status = $(if ($InstallMattPocockSkills) { 'Updated' } else { 'SkippedByUser' }); Result = $(if ($InstallMattPocockSkills) { "已處理 $SkillsCount 個" } else { '未選用' }) }
-            [pscustomobject]@{ Name = 'request_user_input feature'; Status = $(if ($EnableDefaultModeRequestUserInput) { 'Enabled' } else { 'SkippedByUser' }); Result = $(if ($EnableDefaultModeRequestUserInput) { '已啟用' } else { '未啟用' }) }
-            [pscustomobject]@{ Name = 'Windows 開發狀態與使用量通知'; Status = $notificationComponentStatus; Result = $(if ($InstallWindowsNotifications) { $NotificationStatus + '（開發狀態 + Token / Cost 使用量）' } else { '未安裝' }) }
-            [pscustomobject]@{ Name = 'Hook trust'; Status = $hookStatus; Result = $(if ($HookTrust.Skipped) { '未變更，略過重新 trust' } else { "已驗證 $($HookTrust.TrustedCount) 個、更新 $($HookTrust.UpdatedCount) 個" }) }
+            [pscustomobject]@{ Category = 'Personal'; Name = 'Codex Settings'; Status = 'Validated'; Result = "Environment=$DevelopmentEnvironment" }
+            [pscustomobject]@{ Category = 'Personal'; Name = 'MCP / Context7'; Status = $context7Status; Result = $(if ($SkipContext7Key) { '使用者略過' } else { '環境設定已處理' }) }
+            [pscustomobject]@{ Category = 'Personal'; Name = 'request-execution-optimizer'; Status = $(if ($InstallRequestExecutionOptimizer) { 'Enabled' } else { 'SkippedByUser' }); Result = $(if ($InstallRequestExecutionOptimizer) { '已選用' } else { '未選用' }) }
+            [pscustomobject]@{ Category = 'Personal'; Name = 'request_user_input feature'; Status = $(if ($EnableDefaultModeRequestUserInput) { 'Enabled' } else { 'SkippedByUser' }); Result = $(if ($EnableDefaultModeRequestUserInput) { '已啟用' } else { '未啟用' }) }
+            [pscustomobject]@{ Category = 'Community'; Name = 'Windows 開發狀態與使用量通知'; Status = $(if ($failedNames -contains 'WindowsUsageNotifications') { 'Failed' } else { $notificationComponentStatus }); Result = $(if ($InstallWindowsNotifications) { $NotificationStatus + '（ccusage / ccsessions / cdaily）' } else { '未安裝' }) }
+            [pscustomobject]@{ Category = 'Community'; Name = 'mattpocock/skills'; Status = $(if ($failedNames -contains 'MattPocockSkills') { 'Failed' } elseif ($InstallMattPocockSkills) { 'Updated' } else { 'SkippedByUser' }); Result = $(if ($InstallMattPocockSkills) { "已處理 $SkillsCount 個" } else { '未選用' }) }
         )
-        $components += @(Get-PonytailInstallationComponents -Result $Ponytail)
-        $components += @(Get-CodexOrchestrationInstallationComponents -Result $CodexOrchestration)
-        $components += @(Get-SerenaInstallationComponents -Result $Serena)
+        $components += @(Get-PonytailInstallationComponents -Result $Ponytail | ForEach-Object { $_ | Add-Member -NotePropertyName Category -NotePropertyValue Community -PassThru })
+        $components += @(Get-CodexOrchestrationInstallationComponents -Result $CodexOrchestration | ForEach-Object { $_ | Add-Member -NotePropertyName Category -NotePropertyValue Community -PassThru })
+        $components += @(Get-SerenaInstallationComponents -Result $Serena | ForEach-Object { $_ | Add-Member -NotePropertyName Category -NotePropertyValue Community -PassThru })
+        foreach ($component in $components) {
+            if (($failedNames -contains 'Ponytail') -and $component.Name -match 'Ponytail') { $component.Status = 'Failed' }
+            if (($failedNames -contains 'CodexOrchestration') -and $component.Name -match 'Codex-Orchestration') { $component.Status = 'Failed' }
+            if (($failedNames -contains 'Serena') -and $component.Name -match 'Serena') { $component.Status = 'Failed' }
+        }
+        $fileSummary.PersonalResult = 'SUCCESS'
+        $fileSummary.CommunityResult = if ($OverallStatus -eq 'SUCCESS') { 'SUCCESS' } else { 'PARTIAL SUCCESS' }
+        $fileSummary.OverallResult = $OverallStatus
+        $fileSummary.PersonalStats = [ordered]@{ Installed = $fileSummary.Installed; Updated = $fileSummary.Updated; Unchanged = $fileSummary.Unchanged; Skipped = $fileSummary.Skipped; Failed = $fileSummary.Failed }
+        $communityStats = [ordered]@{ Installed = 0; Updated = 0; Unchanged = 0; Skipped = 0; Failed = 0 }
+        foreach ($name in @('WindowsUsageNotifications', 'MattPocockSkills', 'Ponytail', 'CodexOrchestration', 'Serena')) {
+            $result = @($CommunityResults | Where-Object Name -eq $name | Select-Object -Last 1)[0]
+            if ($null -eq $result) { $communityStats.Skipped++; continue }
+            if ($result.Status -eq 'FAILED') { $communityStats.Failed++ } else { $communityStats.Updated++ }
+        }
+        $fileSummary.CommunityStats = $communityStats
         Write-InstallLog -Progress $Progress -Message ("SUMMARY transaction={0}; components={1}; files={2}" -f $TransactionRoot, $components.Count, @($Results.Files).Count)
-        Write-InstallResult -Progress $Progress -Status SUCCESS -Summary $fileSummary -Results $Results -Components $components
+        Write-InstallResult -Progress $Progress -Status $OverallStatus -Summary $fileSummary -Results $Results -Components $components
     }
 }
 
@@ -180,7 +294,7 @@ function Invoke-GlobalInstallation {
         $InstallMattPocockSkills = $true
     }
     if ($InstallPonytail -and $null -eq $PonytailState) { $PonytailState = Get-PonytailInstallationState -Root $Context.GlobalRoot }
-    $targets = @(New-InstallationPlan -DevelopmentEnvironment $Context.DevelopmentEnvironment -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput -InstallWindowsNotifications $Context.InstallWindowsNotifications -SourceRoot $Context.ScriptRoot -IncludeExistingSkills $Context.ExistingSkillsInstalled)
+    $targets = @(New-InstallationPlan -DevelopmentEnvironment $Context.DevelopmentEnvironment -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput -InstallWindowsNotifications $false -ManageWindowsNotifications $false -SourceRoot $Context.ScriptRoot -IncludeExistingSkills $Context.ExistingSkillsInstalled)
     $steps = New-InstallationProgressSteps -TargetCount $targets.Count -IncludeContext7:(-not $SkipContext7Key) -IncludeSkills:$InstallMattPocockSkills -IncludePonytail:$InstallPonytail -IncludeCodexOrchestration:$InstallCodexOrchestration -IncludeSerena:$InstallSerena -IncludeNotifications:$Context.InstallWindowsNotifications
     $progress = Start-InstallProgress -Steps $steps -Root $Context.GlobalRoot -Metadata @{
         Mode = 'Global'
@@ -202,6 +316,12 @@ function Invoke-GlobalInstallation {
     $ponytail = New-PonytailSkippedResult
     $codexOrchestration = New-CodexOrchestrationSkippedResult
     $serena = New-SerenaSkippedResult
+    $communityResults = New-Object 'System.Collections.Generic.List[object]'
+    $personalCommitted = $false
+    $ownership = New-InstallationOwnershipManifest -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput -InstallWindowsNotifications:([bool]$Context.InstallWindowsNotifications) -InstallMattPocockSkills:$InstallMattPocockSkills -InstallPonytail:$InstallPonytail -InstallCodexOrchestration:$InstallCodexOrchestration -InstallSerena:$InstallSerena
+    foreach ($category in @($ownership.personal, $ownership.community)) {
+        foreach ($component in $category.Values) { $component.Status = if ([bool]$component.Selected) { 'PENDING' } else { 'SKIPPED' } }
+    }
 
     try {
         Set-InstallProgress -Progress $progress -StepId 'Plan' -Detail '整理目標與外部套件狀態'
@@ -212,8 +332,6 @@ function Invoke-GlobalInstallation {
 
         Set-InstallProgress -Progress $progress -StepId 'Prerequisites' -Detail '驗證 PowerShell、Node.js、Codex 與目標目錄'
         Test-Prerequisites 'Global' $Context.GlobalRoot
-        if ($InstallPonytail) { [void](Assert-PonytailPrerequisites) }
-        if ($InstallCodexOrchestration) { [void](Assert-CodexOrchestrationPrerequisites) }
         foreach ($target in $targets) { Test-DirectoryWritable -Path $target.Root }
         Complete-InstallStep -Progress $progress -Result '通過'
 
@@ -225,8 +343,8 @@ function Invoke-GlobalInstallation {
 
         Set-InstallProgress -Progress $progress -StepId 'Backup' -Detail '建立交易目錄與外部狀態快照'
         New-Item -ItemType Directory -Path $Context.BackupRoot -Force | Out-Null
-        $transactionRoot = Join-Path $Context.BackupRoot ((Get-Date -Format 'yyyyMMdd-HHmmss-fff') + '-global-transaction')
-        $transaction = New-FileTransaction -Root $transactionRoot -Mode 'Install-Global'
+        $transactionRoot = Join-Path $Context.BackupRoot ((Get-Date -Format 'yyyyMMdd-HHmmss-fff') + '-personal-transaction')
+        $transaction = New-FileTransaction -Root $transactionRoot -Mode 'PersonalTransaction'
         $context7KeyWasPresent = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable('CONTEXT7_API_KEY', 'User'))
         $context7MayCreate = (-not $SkipContext7Key) -and (-not $context7KeyWasPresent)
 
@@ -262,7 +380,7 @@ function Invoke-GlobalInstallation {
             if ($runHookTrust) {
                 $currentSubOperation = 'HookTrust'
                 Write-InstallLog -Progress $progress -Message "HOOKS subOperation=$currentSubOperation"
-                $hookTrust = Set-CodexSettingsHookTrust -Root $Context.GlobalRoot -Cwd $Context.GlobalRoot
+                $hookTrust = Set-CodexSettingsHookTrust -Root $Context.GlobalRoot -Cwd $Context.GlobalRoot -Kind Personal
             } else {
                 $hookTrust = [pscustomobject]@{ TrustedCount = 0; UpdatedCount = 0; Verified = $true; Skipped = $true }
                 Write-InstallLog -Progress $progress -Message 'HOOK TRUST skipped; no managed Hook changes detected'
@@ -301,53 +419,87 @@ function Invoke-GlobalInstallation {
             }
             if (-not $SkipContext7Key) { Complete-InstallStep -Progress $progress -Result $(if (-not $changePlan.runContext7) { '未變更，略過' } elseif ($contextState.CreatedNow) { '已建立' } elseif ($contextState.CreatedByInstaller) { '已沿用' } else { '未設定' }) }
 
-            Set-InstallProgress -Progress $progress -StepId 'Ccusage' -Detail $(if ($changePlan.usageToolsChanged -or $changePlan.runUsageRuntimeValidation) { '只偵測一次套件狀態，更新必要的 Profile 區塊' } else { 'usage tools 未變更，略過外部程序' })
-            $ccusage = if ($changePlan.usageToolsChanged -or $changePlan.runUsageRuntimeValidation) {
-                & (Join-Path $Context.ScriptRoot 'integrations\install-usage-tools.ps1') -SkipPackageInstall:$SkipCcusageInstall -ForceRuntimeValidation:$ForceValidation -PackageState $ccusageBefore -Transaction $transaction -PassThru -InformationAction Ignore
-            } else {
-                New-CcusageUnchangedResult -PackageState $ccusageBefore
+            Set-InstallProgress -Progress $progress -StepId 'PersonalCheckpoint' -Detail '驗證並提交個人 Codex Settings'
+            foreach ($component in $ownership.personal.Values) { if ([bool]$component.Selected) { $component.Status = 'SUCCESS' } }
+            $personalExternal = [ordered]@{
+                Context7 = [ordered]@{ EnvironmentVariable = 'CONTEXT7_API_KEY'; CreatedByInstaller = [bool]$contextState.CreatedByInstaller; SecretStoredInRepository = $false }
             }
-            Write-InstallLog -Progress $progress -Message ("COMMAND usage-tools packageBeforeInstalled={0}; forceValidation={1}; skipped={2}" -f $ccusageBefore.Installed, $ForceValidation, $ccusage.Skipped)
-            Complete-InstallStep -Progress $progress -Result $(if ($ccusage.CommandsUpdated) { 'Profile 已更新' } else { 'Profile 未變更' })
+            Complete-Installation -Results $resultArray -Transaction $transaction -External $personalExternal -Ownership $ownership -FinalizeTransaction | Out-Null
+            $personalCommitted = $true
+            Complete-InstallStep -Progress $progress -Result 'Personal 已提交；後續社區元件不會回滾此階段'
+
+            $ccusage = New-CcusageUnchangedResult -PackageState $ccusageBefore
+            if ($Context.InstallWindowsNotifications) {
+                Set-InstallProgress -Progress $progress -StepId 'Notifications' -Detail '安裝單一所有權的通知、ccusage、ccsessions 與 cdaily'
+                $component = Invoke-IsolatedCommunityComponent -Name WindowsUsageNotifications -BackupRoot $Context.BackupRoot -Operation {
+                    param($componentTransaction)
+                    $files = Invoke-WindowsUsageNotificationFiles -Root $Context.GlobalRoot -SourceRoot $Context.ScriptRoot -Transaction $componentTransaction
+                    $usage = if ($changePlan.usageToolsChanged -or $changePlan.runUsageRuntimeValidation) {
+                        & (Join-Path $Context.ScriptRoot 'integrations\install-usage-tools.ps1') -SkipPackageInstall:$SkipCcusageInstall -ForceRuntimeValidation:$ForceValidation -PackageState $ccusageBefore -Transaction $componentTransaction -PassThru -InformationAction Ignore
+                    } else { New-CcusageUnchangedResult -PackageState $ccusageBefore }
+                    $trust = Set-CodexSettingsHookTrust -Root $Context.GlobalRoot -Cwd $Context.GlobalRoot -Kind Notification
+                    $status = '腳本、Hook 與使用量工具未變更'
+                    if ($files.Changed -or (Test-CodexWorkflowDecision -Plan $changePlan -Operation NotificationTest)) {
+                        $notificationOutput = & pwsh -NoLogo -NoProfile -NonInteractive -File $files.ScriptPath -Type Completed -Test 2>&1
+                        if ($LASTEXITCODE -ne 0) { throw "Windows 通知測試失敗，結束碼：$LASTEXITCODE" }
+                        $status = '已送出測試通知'
+                    }
+                    [pscustomobject]@{ Files = $files; Ccusage = $usage; HookTrust = $trust; NotificationStatus = $status }
+                } -RollbackExternal { param($ignored) Restore-CcusageState $ccusageBefore | Out-Null }
+                [void]$communityResults.Add($component)
+                $ownership.community.windowsUsageNotifications.Status = $component.Status
+                if ($component.Status -eq 'SUCCESS') {
+                    $ccusage = $component.Result.Ccusage
+                    $notificationStatus = $component.Result.NotificationStatus
+                    Complete-InstallStep -Progress $progress -Result $notificationStatus
+                } else { Fail-InstallStep -Progress $progress -Reason $component.Error -Continue }
+            }
 
             if ($InstallMattPocockSkills) {
                 Set-InstallProgress -Progress $progress -StepId 'Skills' -Detail '只在選用或偵測到既有技能時執行 npx'
-                $mattPocockSkillNames = @(Get-MattPocockSkillNames)
-                $skillsArguments = @(Get-MattPocockSkillsArguments)
-                $skillsOutput = & npx @skillsArguments 2>&1
-                if ($LASTEXITCODE -ne 0) { throw "mattpocock/skills 安裝失敗，結束碼：$LASTEXITCODE" }
-                Write-InstallLog -Progress $progress -Message ("COMMAND npx skills installedOrUpdated={0}" -f $mattPocockSkillNames.Count)
-                Write-InstallLog -Progress $progress -Message ("COMMAND OUTPUT npx skills: {0}" -f (Protect-InstallLogText ($skillsOutput -join [Environment]::NewLine)))
-                Complete-InstallStep -Progress $progress -Result ("已處理 $($mattPocockSkillNames.Count) 個技能")
+                $component = Invoke-IsolatedCommunityComponent -Name MattPocockSkills -BackupRoot $Context.BackupRoot -Operation {
+                    param($componentTransaction)
+                    $names = @(Get-MattPocockSkillNames)
+                    $skillsArguments = @(Get-MattPocockSkillsArguments)
+                    $skillsOutput = & npx @skillsArguments 2>&1
+                    if ($LASTEXITCODE -ne 0) { throw "mattpocock/skills 安裝失敗，結束碼：$LASTEXITCODE" }
+                    [pscustomobject]@{ Names = $names; Output = $skillsOutput }
+                }
+                [void]$communityResults.Add($component)
+                $ownership.community.mattpocockSkills.Status = $component.Status
+                if ($component.Status -eq 'SUCCESS') { $mattPocockSkillNames = @($component.Result.Names); Complete-InstallStep -Progress $progress -Result ("已處理 $($mattPocockSkillNames.Count) 個技能") }
+                else { Fail-InstallStep -Progress $progress -Reason $component.Error -Continue }
             }
 
             if ($InstallPonytail) {
                 Set-InstallProgress -Progress $progress -StepId 'Ponytail' -Detail '更新 marketplace、同步 plugin 並驗證 lifecycle hooks'
-                $ponytail = Invoke-PonytailInstallation -State $PonytailState -Root $Context.GlobalRoot -MarketplaceAction $PonytailMarketplaceAction
-                if ($ponytail.ValidationStatus -ne 'Validated') { throw $(if ($ponytail.ValidationError) { [string]$ponytail.ValidationError } else { 'Ponytail lifecycle hooks 驗證失敗。' }) }
-                Write-InstallLog -Progress $progress -Message ('PONYTAIL plugin=' + $ponytail.PluginStatus + '; hooks=' + $ponytail.HookCount + '; trust=' + $ponytail.TrustStatus)
-                Complete-InstallStep -Progress $progress -Result ($ponytail.PluginStatus + '; hooks ' + $ponytail.HookCount)
+                $component = Invoke-IsolatedCommunityComponent -Name Ponytail -BackupRoot $Context.BackupRoot -Operation {
+                    param($componentTransaction)
+                    [void](Assert-PonytailPrerequisites)
+                    Invoke-PonytailInstallation -State $PonytailState -Root $Context.GlobalRoot -MarketplaceAction $PonytailMarketplaceAction
+                } -Validate { param($value) if ($value.ValidationStatus -ne 'Validated') { throw $(if ($value.ValidationError) { [string]$value.ValidationError } else { 'Ponytail lifecycle hooks 驗證失敗。' }) } } -RollbackExternal { param($value) if ($null -ne $value) { Undo-PonytailInstallation -Result $value } }
+                [void]$communityResults.Add($component)
+                $ownership.community.ponytail.Status = $component.Status
+                if ($component.Status -eq 'SUCCESS') { $ponytail = $component.Result; Complete-InstallStep -Progress $progress -Result ($ponytail.PluginStatus + '; hooks ' + $ponytail.HookCount) }
+                else { Fail-InstallStep -Progress $progress -Reason $component.Error -Continue }
             }
 
             if ($InstallCodexOrchestration) {
                 Set-InstallProgress -Progress $progress -StepId 'CodexOrchestration' -Detail '檢查 Python、安裝/更新 plugin、處理 workflow 設定'
-                $codexOrchestration = Invoke-CodexOrchestrationInstallation -InteractiveWorkflow:$ConfigureCodexOrchestration
-                Write-InstallLog -Progress $progress -Message ('CODEX ORCHESTRATION plugin=' + $codexOrchestration.PluginStatus + '; workflow=' + $codexOrchestration.WorkflowStatus)
-                if (-not [string]::IsNullOrWhiteSpace($codexOrchestration.SetupPrompt)) {
-                    Write-Host ''
-                    Write-Host '[!] Workflow Pending user setup'
-                    Write-Host '請在新的 Codex Task 執行：'
-                    Write-Host $codexOrchestration.SetupPrompt
-                    Write-Host '$codex-orchestration:codex-orchestration status --require-effective'
-                }
-                Complete-InstallStep -Progress $progress -Result ($codexOrchestration.PluginStatus + '; workflow ' + $codexOrchestration.WorkflowStatus)
+                $component = Invoke-IsolatedCommunityComponent -Name CodexOrchestration -BackupRoot $Context.BackupRoot -Operation { param($componentTransaction) [void](Assert-CodexOrchestrationPrerequisites); Invoke-CodexOrchestrationInstallation -InteractiveWorkflow:$ConfigureCodexOrchestration } -RollbackExternal { param($value) if ($null -ne $value) { Undo-CodexOrchestrationInstallation -Result $value } }
+                [void]$communityResults.Add($component)
+                $ownership.community.codexOrchestration.Status = $component.Status
+                if ($component.Status -eq 'SUCCESS') { $codexOrchestration = $component.Result; Complete-InstallStep -Progress $progress -Result ($codexOrchestration.PluginStatus + '; workflow ' + $codexOrchestration.WorkflowStatus) }
+                else { Fail-InstallStep -Progress $progress -Reason $component.Error -Continue }
             }
 
             if ($InstallSerena) {
                 Set-InstallProgress -Progress $progress -StepId 'Serena' -Detail '檢查 uv、安裝或更新 Serena、初始化並安全設定 Codex MCP'
-                $serena = Invoke-SerenaInstallation -Root $Context.GlobalRoot -Transaction $transaction -InstallUv:$InstallSerenaUv
-                Write-InstallLog -Progress $progress -Message ('SERENA cli=' + $serena.ToolStatus + '; init=' + $serena.InitializationStatus + '; mcp=' + $serena.CodexMcpStatus)
-                Complete-InstallStep -Progress $progress -Result ($serena.ToolStatus + '; ' + $serena.CodexMcpStatus)
+                $component = Invoke-IsolatedCommunityComponent -Name Serena -BackupRoot $Context.BackupRoot -Operation { param($componentTransaction) Invoke-SerenaInstallation -Root $Context.GlobalRoot -Transaction $componentTransaction -InstallUv:$InstallSerenaUv }
+                [void]$communityResults.Add($component)
+                $ownership.community.serena.Status = $component.Status
+                if ($component.Status -eq 'SUCCESS') { $serena = $component.Result; Complete-InstallStep -Progress $progress -Result ($serena.ToolStatus + '; ' + $serena.CodexMcpStatus) }
+                else { Fail-InstallStep -Progress $progress -Reason $component.Error -Continue }
             }
 
             $original = $ccusageBefore
@@ -378,39 +530,36 @@ function Invoke-GlobalInstallation {
                 }
             }
 
-            Complete-Installation -Results $resultArray -Transaction $transaction -External $external | Out-Null
-
-            if ($Context.InstallWindowsNotifications) {
-                Set-InstallProgress -Progress $progress -StepId 'Notifications' -Detail '驗證開發狀態與 Token / Cost 使用量通知'
-                if (Test-CodexWorkflowDecision -Plan $changePlan -Operation NotificationTest) {
-                    $notificationScript = Join-Path $Context.GlobalRoot 'hooks\show-codex-notification.ps1'
-                    $notificationOutput = & pwsh -NoLogo -NoProfile -NonInteractive -File $notificationScript -Type Completed -Test 2>&1
-                    if ($LASTEXITCODE -ne 0) { throw "Windows 通知測試失敗，結束碼：$LASTEXITCODE" }
-                    $notificationStatus = '已送出測試通知'
-                    Write-InstallLog -Progress $progress -Message 'COMMAND notification test completed'
-                    Write-InstallLog -Progress $progress -Message ("COMMAND OUTPUT notification test: {0}" -f (Protect-InstallLogText ($notificationOutput -join [Environment]::NewLine)))
-                    Complete-InstallStep -Progress $progress -Result $notificationStatus
-                } else {
-                    $notificationStatus = '腳本與 Hook 未變更，略過測試'
-                    $skippedCount++
-                    Complete-InstallStep -Progress $progress -Result $notificationStatus
-                }
-            }
+            $windowsOwner = $ownership.community.windowsUsageNotifications
+            $previousWindowsOwner = if ($null -ne $global.Previous -and $null -ne $global.Previous.Community) { $global.Previous.Community.windowsUsageNotifications } else { $null }
+            $windowsOwner.installedBefore = $null -ne $previousWindowsOwner -and [bool]$previousWindowsOwner.managedByInstaller
+            $windowsOwner.installedNow = $windowsOwner.Status -eq 'SUCCESS' -and -not $windowsOwner.installedBefore
+            $windowsOwner.updatedNow = $windowsOwner.Status -eq 'SUCCESS' -and $windowsOwner.installedBefore
+            $windowsOwner.managedByInstaller = $windowsOwner.Status -eq 'SUCCESS' -or ($windowsOwner.Status -eq 'SKIPPED' -and $windowsOwner.installedBefore)
+            $windowsOwner.ccusageStatus = $(if ($windowsOwner.Status -eq 'SUCCESS') { if ($ccusage.PackageInstalledNow) { 'Installed' } else { 'Current' } } elseif ($windowsOwner.managedByInstaller) { [string]$previousWindowsOwner.ccusageStatus } else { $windowsOwner.Status })
+            $windowsOwner.ccsessionsStatus = $(if ($windowsOwner.Status -eq 'SUCCESS') { if ($ccusage.CommandsUpdated) { 'Updated' } else { 'Current' } } elseif ($windowsOwner.managedByInstaller) { [string]$previousWindowsOwner.ccsessionsStatus } else { $windowsOwner.Status })
+            $windowsOwner.cdailyStatus = $windowsOwner.ccsessionsStatus
+            $windowsOwner.hookCount = $(if ($windowsOwner.Status -eq 'SUCCESS') { 3 } elseif ($windowsOwner.managedByInstaller) { [int]$previousWindowsOwner.hookCount } else { 0 })
+            $windowsOwner.hookValidation = $(if ($windowsOwner.Status -eq 'SUCCESS') { 'Validated' } elseif ($windowsOwner.managedByInstaller) { [string]$previousWindowsOwner.hookValidation } else { $windowsOwner.Status })
+            $windowsOwner.lastVerified = $(if ($windowsOwner.Status -eq 'SUCCESS') { (Get-Date).ToString('o') } elseif ($windowsOwner.managedByInstaller) { [string]$previousWindowsOwner.lastVerified } else { $null })
+            $windowsOwner.rollbackCapability = 'ComponentScoped'
 
             Set-InstallProgress -Progress $progress -StepId 'Final' -Detail '寫入 Manifest 並完成交易驗證'
-            Complete-Installation -Results $resultArray -Transaction $transaction -External $external -FinalizeTransaction | Out-Null
+            $finalTransaction = New-FileTransaction -Root (Join-Path $Context.BackupRoot ((Get-Date -Format 'yyyyMMdd-HHmmss-fffffff') + '-manifest')) -Mode 'ManifestTransaction'
+            Complete-Installation -Results $resultArray -Transaction $finalTransaction -External $external -Ownership $ownership -FinalizeTransaction | Out-Null
             Complete-InstallStep -Progress $progress -Result 'Manifest 與交易驗證通過'
-            Write-InstallationSummary -InstallStyle $Context.InstallStyle -DevelopmentEnvironment $Context.DevelopmentEnvironment -Results $resultArray -Ccusage $ccusage -CcusageBefore $ccusageBefore -HookTrust $hookTrust -TransactionRoot $transactionRoot -InstallWindowsNotifications $Context.InstallWindowsNotifications -Progress $progress -NotificationStatus $notificationStatus -SkippedCount $skippedCount -SkipContext7Key:$SkipContext7Key -InstallMattPocockSkills:$InstallMattPocockSkills -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput -ContextState $contextState -SkillsCount $mattPocockSkillNames.Count -Ponytail $ponytail -CodexOrchestration $codexOrchestration -Serena $serena
+            $overallStatus = if (@($communityResults | Where-Object Status -eq 'FAILED').Count -gt 0) { 'PARTIAL SUCCESS' } else { 'SUCCESS' }
+            Write-InstallationSummary -InstallStyle $Context.InstallStyle -DevelopmentEnvironment $Context.DevelopmentEnvironment -Results $resultArray -Ccusage $ccusage -CcusageBefore $ccusageBefore -HookTrust $hookTrust -TransactionRoot $transactionRoot -InstallWindowsNotifications $Context.InstallWindowsNotifications -Progress $progress -NotificationStatus $notificationStatus -SkippedCount $skippedCount -SkipContext7Key:$SkipContext7Key -InstallMattPocockSkills:$InstallMattPocockSkills -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput -ContextState $contextState -SkillsCount $mattPocockSkillNames.Count -Ponytail $ponytail -CodexOrchestration $codexOrchestration -Serena $serena -CommunityResults $communityResults.ToArray() -OverallStatus $overallStatus
         } catch {
             $reason = $_.Exception.Message
             Write-InstallErrorRecord -Progress $progress -ErrorRecord $_ -CurrentSubOperation $currentSubOperation
             Fail-InstallStep -Progress $progress -Reason $reason
-            $rollbackErrors = @(Invoke-InstallationRollback -Transaction $transaction -CcusageBefore $ccusageBefore -ContextState $contextState -Ponytail $ponytail -CodexOrchestration $codexOrchestration -Reason $reason)
+            $rollbackErrors = if ($personalCommitted) { @() } else { @(Invoke-InstallationRollback -Transaction $transaction -CcusageBefore $null -ContextState $contextState -Ponytail $null -CodexOrchestration $null -Reason $reason) }
             $message = "Installation failed and rollback was attempted.`nReason: $reason"
             if ($rollbackErrors.Count -gt 0) { $message += "`nRollback errors:`n- " + ($rollbackErrors -join "`n- ") }
             $rollbackStatus = if ($rollbackErrors.Count -eq 0) { 'SUCCESS' } else { 'FAILED' }
             $failureSummary = Get-InstallResultSummary -Results $results.ToArray()
-            $failureSummary.Rollback = $rollbackStatus
+            $failureSummary.Rollback = if ($personalCommitted) { 'NOT REQUIRED (Personal retained)' } else { $rollbackStatus }
             Write-InstallResult -Progress $progress -Status FAILED -Summary $failureSummary -Results $results.ToArray()
             throw $message
         }
@@ -419,9 +568,9 @@ function Invoke-GlobalInstallation {
             $reason = $_.Exception.Message
             Write-InstallErrorRecord -Progress $progress -ErrorRecord $_ -CurrentSubOperation $currentSubOperation
             Fail-InstallStep -Progress $progress -Reason $reason
-            $rollbackErrors = @(Invoke-InstallationRollback -Transaction $transaction -CcusageBefore $ccusageBefore -ContextState $contextState -Ponytail $ponytail -CodexOrchestration $codexOrchestration -Reason $reason)
+            $rollbackErrors = if ($personalCommitted) { @() } else { @(Invoke-InstallationRollback -Transaction $transaction -CcusageBefore $null -ContextState $contextState -Ponytail $null -CodexOrchestration $null -Reason $reason) }
             $failureSummary = Get-InstallResultSummary -Results $results.ToArray()
-            $failureSummary.Rollback = if ($rollbackErrors.Count -eq 0) { 'SUCCESS' } else { 'FAILED' }
+            $failureSummary.Rollback = if ($personalCommitted) { 'NOT REQUIRED (Personal retained)' } elseif ($rollbackErrors.Count -eq 0) { 'SUCCESS' } else { 'FAILED' }
             Write-InstallResult -Progress $progress -Status FAILED -Summary $failureSummary -Results $results.ToArray()
             throw
         }

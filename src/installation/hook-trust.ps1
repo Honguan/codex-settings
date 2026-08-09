@@ -19,7 +19,7 @@ function Read-CodexAppServerResponse($Process, [int]$RequestId, [int]$TimeoutMil
     throw "Codex app-server request $RequestId timed out."
 }
 
-function Set-CodexSettingsHookTrust([string]$Root, [string]$Cwd = (Get-Location).Path) {
+function Set-CodexSettingsHookTrust([string]$Root, [string]$Cwd = (Get-Location).Path, [ValidateSet('All', 'Personal', 'Notification')][string]$Kind = 'All') {
     $hooksPath = [IO.Path]::GetFullPath((Join-Path $Root 'hooks.json'))
     if (-not (Test-Path -LiteralPath $hooksPath -PathType Leaf)) { throw "找不到 Hook 設定：$hooksPath" }
 
@@ -82,7 +82,7 @@ function Set-CodexSettingsHookTrust([string]$Root, [string]$Cwd = (Get-Location)
         $managedHooks = @(@($cwdResult.hooks) | Where-Object {
             -not [string]::IsNullOrWhiteSpace([string]$_.sourcePath) -and
             [string]::Equals([IO.Path]::GetFullPath([string]$_.sourcePath), $hooksPath, [StringComparison]::OrdinalIgnoreCase) -and
-            ((Test-ManagedGlobalHookEntry $_) -or (Test-ManagedLineEndingHookEntry $_))
+            $(if ($Kind -eq 'Personal') { Test-ManagedLineEndingHookEntry $_ } elseif ($Kind -eq 'Notification') { Test-ManagedNotificationHookEntry $_ } else { (Test-ManagedGlobalHookEntry $_) -or (Test-ManagedLineEndingHookEntry $_) })
         })
         if ($managedHooks.Count -eq 0) {
             return [pscustomobject]@{ TrustedCount = 0; UpdatedCount = 0; Verified = $true }
@@ -118,7 +118,7 @@ function Set-CodexSettingsHookTrust([string]$Root, [string]$Cwd = (Get-Location)
         $verifiedHooks = @(@($verifiedCwd.hooks) | Where-Object {
             -not [string]::IsNullOrWhiteSpace([string]$_.sourcePath) -and
             [string]::Equals([IO.Path]::GetFullPath([string]$_.sourcePath), $hooksPath, [StringComparison]::OrdinalIgnoreCase) -and
-            ((Test-ManagedGlobalHookEntry $_) -or (Test-ManagedLineEndingHookEntry $_))
+            $(if ($Kind -eq 'Personal') { Test-ManagedLineEndingHookEntry $_ } elseif ($Kind -eq 'Notification') { Test-ManagedNotificationHookEntry $_ } else { (Test-ManagedGlobalHookEntry $_) -or (Test-ManagedLineEndingHookEntry $_) })
         })
         if ($verifiedHooks.Count -ne $managedHooks.Count -or @($verifiedHooks | Where-Object { [string]$_.trustStatus -ne 'trusted' }).Count -gt 0) {
             throw 'Codex Settings Hook trust verification failed.'

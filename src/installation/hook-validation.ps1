@@ -164,7 +164,7 @@ function Normalize-ManagedProjectLineEndingHooksJson([string]$Content) {
     return ($object | ConvertTo-Json -Depth 30)
 }
 
-function Remove-ManagedProjectHooks([string]$StartPath, $Transaction, [switch]$KeepCvsLineEndingHooks, [string[]]$ManagedHookFingerprints = @()) {
+function Remove-ManagedProjectHooks([string]$StartPath, $Transaction, [switch]$KeepCvsLineEndingHooks, [switch]$PreserveNotifications, [string[]]$ManagedHookFingerprints = @()) {
     $projectRoot = Find-CvsProjectRoot -StartPath $StartPath
     if ([string]::IsNullOrWhiteSpace($projectRoot)) { return $null }
 
@@ -173,8 +173,8 @@ function Remove-ManagedProjectHooks([string]$StartPath, $Transaction, [switch]$K
     $changed = $false
     if (Test-Path -LiteralPath $hooksPath -PathType Leaf) {
         $state = Get-TextFileState $hooksPath
-        $referencedScripts = @(Get-ManagedHookScriptPaths -Content $state.Content -Root $codexRoot -ManagedHookFingerprints $ManagedHookFingerprints)
-        $cleaned = Remove-ManagedGlobalHooksJson -Content $state.Content -ManagedHookFingerprints $ManagedHookFingerprints
+        $referencedScripts = if ($PreserveNotifications) { @() } else { @(Get-ManagedHookScriptPaths -Content $state.Content -Root $codexRoot -ManagedHookFingerprints $ManagedHookFingerprints) }
+        $cleaned = if ($PreserveNotifications) { $state.Content } else { Remove-ManagedGlobalHooksJson -Content $state.Content -ManagedHookFingerprints $ManagedHookFingerprints }
         $cleaned = if ($KeepCvsLineEndingHooks) { Normalize-ManagedProjectLineEndingHooksJson -Content $cleaned } else { Remove-ManagedLineEndingHooksJson -Content $cleaned }
         if ($cleaned -ne $state.Content) {
             Save-TransactionFile -Transaction $Transaction -Path $hooksPath
@@ -193,7 +193,7 @@ function Remove-ManagedProjectHooks([string]$StartPath, $Transaction, [switch]$K
             $changed = $true
         }
     }
-    $removedNotificationScripts = Remove-ManagedHookScripts -Root $codexRoot -Transaction $Transaction -ReferencedPaths $referencedScripts
+    $removedNotificationScripts = if ($PreserveNotifications) { 0 } else { Remove-ManagedHookScripts -Root $codexRoot -Transaction $Transaction -ReferencedPaths $referencedScripts }
     if ($removedNotificationScripts -gt 0) { $removedScripts += $removedNotificationScripts; $changed = $true }
 
     $hooksRoot = Join-Path $codexRoot 'hooks'

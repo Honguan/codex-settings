@@ -58,6 +58,8 @@ function Uninstall-ManagedTarget {
     $updatedCount = 0
     $skippedCount = 0
     $remainingEntries = New-Object 'System.Collections.Generic.List[object]'
+    $ownsWindowsNotifications = $null -ne $manifest.Community -and $null -ne $manifest.Community.windowsUsageNotifications -and ([bool]$manifest.Community.windowsUsageNotifications.Selected -or [bool]$manifest.Community.windowsUsageNotifications.managedByInstaller)
+    $notificationFingerprints = if ($ownsWindowsNotifications) { @(Get-ManifestManagedHookFingerprints -Manifest $manifest -Kind Notification) } else { @() }
 
     try {
         Save-TransactionFile -Transaction $transaction -Path $manifestPath
@@ -88,6 +90,7 @@ function Uninstall-ManagedTarget {
                 $state = Get-TextFileState -Path $managedPath
                 try {
                     $newContent = Remove-ManagedLineEndingHooksJson -Content $state.Content
+                    if ($ownsWindowsNotifications) { $newContent = Remove-ManagedNotificationHooksJson -Content $newContent -ManagedHookFingerprints $notificationFingerprints }
                     $object = if ([string]::IsNullOrWhiteSpace($newContent)) { $null } else { $newContent | ConvertFrom-Json }
                     $hookCount = 0
                     if ($null -ne $object -and $null -ne $object.hooks) {
@@ -125,6 +128,16 @@ function Uninstall-ManagedTarget {
 
             Remove-Item -LiteralPath $managedPath -Force
             $removedCount++
+        }
+
+        if ($ownsWindowsNotifications) {
+            foreach ($relativePath in @($manifest.Community.windowsUsageNotifications.ManagedPaths)) {
+                $managedPath = Join-Path $TargetRoot ([string]$relativePath)
+                if (-not (Test-Path -LiteralPath $managedPath -PathType Leaf)) { continue }
+                Save-TransactionFile -Transaction $transaction -Path $managedPath
+                Remove-Item -LiteralPath $managedPath -Force
+                $removedCount++
+            }
         }
 
         if ($manifest.PSObject.Properties.Name -contains 'External' -and $null -ne $manifest.External) {

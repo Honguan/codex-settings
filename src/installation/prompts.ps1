@@ -146,10 +146,12 @@ function Test-WindowsNotificationsInstalled([string]$Root = (Join-Path $HOME '.c
 
 function Select-OptionalWindowsNotifications([bool]$AlreadyInstalled = (Test-WindowsNotificationsInstalled)) {
     Write-Host ''
-    Write-Host '選用全域功能：Windows 開發狀態與使用量通知'
-    Write-Host '啟用後會套用到所有 Codex 專案，包含：'
-    Write-Host '- 開發狀態：任務完成、等待權限、等待回答等狀態提醒'
-    Write-Host '- 使用量：每輪完成後顯示 Session、Model、Input、Output、Think、Cache、Total、Cost、Time'
+    Write-Host '選用社區功能：Windows 開發狀態與使用量通知'
+    Write-Host '此功能會安裝／管理：'
+    Write-Host '- 任務完成、等待權限、等待回答等 Codex 狀態提醒'
+    Write-Host '- 每輪完成後的 Token / Cost 使用量通知'
+    Write-Host '- ccusage、ccsessions、cdaily'
+    Write-Host '使用量顯示：Session、Model、Input、Output、Think、Cache、Total、Cost、Time'
     if ($AlreadyInstalled) {
         Write-Host '已偵測到既有受管理通知；本次會保留並更新。'
         return Read-YesNoChoice -Prompt '要繼續安裝/更新嗎？[Y/n]' -Default $true

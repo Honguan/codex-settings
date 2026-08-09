@@ -76,7 +76,7 @@ try {
     )
 
     & $installPath -Mode Global -DevelopmentEnvironment Git -InstallStyle Merge -InstallWindowsNotifications $true -SkipContext7Key -SkipCcusageInstall -NoPause
-    Assert-LogContains -Log (Get-LatestInstallLog) -Markers @('STEP END Hooks: 已驗證 3 個', 'STEP END Final: Manifest 與交易驗證通過')
+    Assert-LogContains -Log (Get-LatestInstallLog) -Markers @('STEP END Hooks: Hook 未變更，略過重新 trust', 'STEP END Notifications: 腳本、Hook 與使用量工具未變更', 'STEP END Final: Manifest 與交易驗證通過')
 
     $manifestPath = Join-Path $HOME '.codex\.codex-settings-manifest.json'
     $legacyManifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
@@ -86,10 +86,10 @@ try {
 
     & $installPath -Mode Global -DevelopmentEnvironment Git -InstallStyle Merge -InstallWindowsNotifications $true -SkipContext7Key -SkipCcusageInstall -NoPause
     $legacyUpgradeLog = Get-LatestInstallLog
-    Assert-LogContains -Log $legacyUpgradeLog -Markers @('STEP END Hooks: 已驗證 3 個', 'STEP END Final: Manifest 與交易驗證通過')
+    Assert-LogContains -Log $legacyUpgradeLog -Markers @('STEP END Notifications:', 'STEP END Final: Manifest 與交易驗證通過')
 
     & $installPath -Mode Global -DevelopmentEnvironment CVS -InstallStyle Merge -InstallWindowsNotifications $true -SkipContext7Key -SkipCcusageInstall -NoPause
-    Assert-LogContains -Log (Get-LatestInstallLog) -Markers @('HOOKS subOperation=HookTrust', 'STEP END Hooks: 已驗證 6 個')
+    Assert-LogContains -Log (Get-LatestInstallLog) -Markers @('HOOKS subOperation=HookTrust', 'STEP END Hooks: 已驗證 3 個', 'STEP END Notifications:')
 
     & $installPath -Mode Global -DevelopmentEnvironment CVS -InstallStyle Replace -InstallWindowsNotifications $true -SkipContext7Key -SkipCcusageInstall -NoPause
     Assert-LogContains -Log (Get-LatestInstallLog) -Markers @('HOOKS subOperation=HookTrust', 'STEP END Final: Manifest 與交易驗證通過')
@@ -108,6 +108,7 @@ try {
     if ($failureMessage -notmatch 'intentional Hook trust failure') { throw "Unexpected failure: $failureMessage" }
     if ((Get-ManagedStateHashes) -ne $beforeFailureHashes) { throw 'Hook trust failure did not restore the managed installation state.' }
     $failedLog = Get-LatestInstallLog
+    if ($failedLog -match 'STEP START Notifications:') { throw 'Personal 失敗後仍啟動 Community component。' }
     Assert-LogContains -Log $failedLog -Markers @(
         'ERROR CurrentStepId=Hooks; CurrentSubOperation=HookTrust',
         'ExceptionType=',
