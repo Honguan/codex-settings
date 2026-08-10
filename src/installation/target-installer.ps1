@@ -39,7 +39,7 @@ function Invoke-TargetInstallation($Target, $Transaction, [switch]$Force, $Previ
         $owned = $state.Exists -and $null -ne $previousEntry -and -not [string]::IsNullOrWhiteSpace([string]$previousEntry.Sha256) -and (($metadataMatches -and [string]$previousEntry.Sha256 -eq $beforeHash) -or [string]$previousEntry.Sha256 -eq [string]$beforeHash)
         if ($template.Length -gt 0 -and $template[0] -eq [char]0xFEFF -and $state.Encoding.GetPreamble().Length -gt 0) { $template = $template.Substring(1) }
         $template = [regex]::Replace($template, "`r`n|`r|`n", $state.NewLine)
-        $isOptionalFeatureConfig = $Target.Mode -eq 'Global' -and $relative -eq 'config.toml' -and [bool]$Target.EnableDefaultModeRequestUserInput
+        $isOptionalFeatureConfig = $Target.Mode -eq 'Global' -and $relative -eq 'config.toml' -and (Test-OptionalComponentKeepAction $Target.RequestUserInputAction)
         if ($isOptionalFeatureConfig) { $template = Add-DefaultModeRequestUserInputFeature -Content $template -NewLine $state.NewLine }
 
         $desiredContent = $null
@@ -76,6 +76,7 @@ function Invoke-TargetInstallation($Target, $Transaction, [switch]$Force, $Previ
                 }
             }
             if ($isOptionalFeatureConfig) { $desiredContent = Add-DefaultModeRequestUserInputFeature -Content $desiredContent -NewLine $state.NewLine }
+            elseif ($Target.Mode -eq 'Global' -and $relative -eq 'config.toml' -and $Target.RequestUserInputAction -eq 'Uninstall') { $desiredContent = Remove-DefaultModeRequestUserInputFeature -Content $desiredContent }
         }
         if ($Target.Mode -eq 'Global' -and $relative.Replace('\', '/') -eq 'config.toml') {
             if ([bool]$Target.ManageWindowsNotifications) {
@@ -87,8 +88,10 @@ function Invoke-TargetInstallation($Target, $Transaction, [switch]$Force, $Previ
         if ($Target.Mode -eq 'Global' -and $relative.Replace('\', '/') -eq 'AGENTS.md') {
             $policyTemplate = Get-LongRunningAsyncWaitPolicyTemplate -SourceRoot $Target.SourceRoot
             $policyState = Get-LongRunningAsyncWaitPolicyState -Content $state.Content -ManagedContent $policyTemplate
-            if ($Target.LongRunningAsyncWaitAction -in @('Install', 'Remove')) {
-                $desiredContent = Set-LongRunningAsyncWaitPolicy -Content $desiredContent -ManagedContent $policyTemplate -Action $Target.LongRunningAsyncWaitAction -NewLine $state.NewLine
+            if (Test-OptionalComponentKeepAction $Target.LongRunningAsyncWaitAction) {
+                $desiredContent = Set-LongRunningAsyncWaitPolicy -Content $desiredContent -ManagedContent $policyTemplate -Action Install -NewLine $state.NewLine
+            } elseif ($Target.LongRunningAsyncWaitAction -eq 'Uninstall') {
+                $desiredContent = Set-LongRunningAsyncWaitPolicy -Content $desiredContent -ManagedContent $policyTemplate -Action Remove -NewLine $state.NewLine
             } elseif ($policyState.ManagedBlockPresent) {
                 $desiredContent = Set-LongRunningAsyncWaitPolicy -Content $desiredContent -ManagedContent $policyState.Content -Action Install -NewLine $state.NewLine
             } elseif ($policyState.Status -eq 'Conflict' -and $Force) {

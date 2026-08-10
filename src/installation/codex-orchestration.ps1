@@ -236,3 +236,16 @@ function Undo-CodexOrchestrationInstallation($Result) {
     $remove = Invoke-CodexOrchestrationCodexCommand -Arguments @('plugin', 'remove', $script:CodexOrchestrationPluginId)
     if ($remove.ExitCode -ne 0) { throw "Codex-Orchestration rollback failed: $($remove.Output -join [Environment]::NewLine)" }
 }
+
+function Invoke-CodexOrchestrationUninstall {
+    $before = Get-CodexOrchestrationInstallationState
+    if (-not $before.PluginPresent) { return (New-CodexOrchestrationSkippedResult | Add-Member -NotePropertyName Status -NotePropertyValue 'Unchanged' -PassThru) }
+    $remove = Invoke-CodexOrchestrationCodexCommand -Arguments @('plugin', 'remove', $script:CodexOrchestrationPluginId)
+    if ($remove.ExitCode -ne 0) { throw "Codex-Orchestration 解除安裝失敗：$($remove.Output -join [Environment]::NewLine)" }
+    $result = New-CodexOrchestrationSkippedResult
+    $result.PluginPresent = $false
+    $result.PluginStatus = 'Uninstalled'
+    $result.WorkflowStatus = 'Uninstalled'
+    $result | Add-Member -NotePropertyName Status -NotePropertyValue 'Uninstalled'
+    return $result
+}

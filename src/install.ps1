@@ -14,8 +14,8 @@ param(
     [switch]$SkipSerena,
     [switch]$InstallSerenaUv,
     [switch]$EnableDefaultModeRequestUserInput,
-    [ValidateSet('Install', 'Remove', 'Skip')]
-    [string]$LongRunningAsyncWaitAction = 'Install',
+    [ValidateSet('Auto', 'Install', 'KeepCurrent', 'Update', 'Repair', 'Uninstall', 'SkipNotInstalled', 'LeaveUnchanged', 'Blocked')]
+    [string]$LongRunningAsyncWaitAction = 'Auto',
     [switch]$ForceValidation,
     [switch]$ForceNotificationTest,
     [switch]$NoPause,

@@ -72,10 +72,30 @@ function Select-DevelopmentEnvironment([ValidateSet('Git', 'CVS')][string]$Defau
 }
 
 function Select-OptionalGlobalSkill {
+    param([bool]$AlreadyInstalled = (Test-Path -LiteralPath (Join-Path $HOME '.codex\skills\request-execution-optimizer') -PathType Container))
     Write-Host ''
     Write-Host '選用全域技能：request-execution-optimizer'
-    Write-Host '預設不安裝；已受管理時會在後續更新中保留。'
-    return Read-YesNoChoice -Prompt '要安裝嗎？[y/N]' -Default $false
+    return Select-OptionalComponentAction -Name 'request-execution-optimizer' -State (Get-OptionalComponentState -Installed $AlreadyInstalled)
+}
+
+function Select-OptionalContext7 {
+    $installed = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable('CONTEXT7_API_KEY', 'User'))
+    Write-Host ''
+    Write-Host '選用 MCP：Context7'
+    return Select-OptionalComponentAction -Name 'Context7' -State (Get-OptionalComponentState -Installed $installed)
+}
+
+function Select-OptionalComponentAction([string]$Name, [string]$State) {
+    if ($State -in @('Conflict', 'Unknown')) { throw "$Name 的安裝狀態無法安全判定，請先排除衝突。" }
+    if ($State -eq 'NotInstalled') {
+        Write-Host "$Name 尚未安裝。"
+        $selection = if (Read-YesNoChoice -Prompt '要安裝嗎？[Y/n]' -Default $true) { 'Yes' } else { 'No' }
+    } else {
+        Write-Host "$Name 已安裝。"
+        Write-Host '選擇 No 會解除安裝此元件；只移除安裝器管理的內容。'
+        $selection = if (Read-YesNoChoice -Prompt '要保留並檢查更新嗎？[Y/n]' -Default $true) { 'Yes' } else { 'No' }
+    }
+    return Resolve-OptionalComponentAction -State $State -Selection $selection
 }
 
 function Get-MattPocockSkillNames {
@@ -116,19 +136,14 @@ function Select-OptionalMattPocockSkills([bool]$AlreadyInstalled = (Test-MattPoc
     Write-Host ''
     Write-Host '選用全域技能：mattpocock/skills'
     Write-Host "預設技能（10 個）：$((Get-MattPocockSkillNames) -join '、')"
-    if ($AlreadyInstalled) {
-        Write-Host '已偵測到既有安裝，本次會自動更新以上技能。'
-        return $true
-    }
-    Write-Host '尚未安裝；選擇安裝後會加入 Codex 使用者層級。'
-    return Read-YesNoChoice -Prompt '要安裝嗎？[y/N]' -Default $false
+    return Select-OptionalComponentAction -Name 'mattpocock/skills' -State (Get-OptionalComponentState -Installed $AlreadyInstalled)
 }
 
-function Select-OptionalDefaultModeRequestUserInput {
+function Select-OptionalDefaultModeRequestUserInput([bool]$AlreadyInstalled = $false) {
     Write-Host ''
     Write-Host '選用功能：預設啟用 request_user_input'
     Write-Host '會在 config.toml 的 [features] 加入 default_mode_request_user_input = true。'
-    return Read-YesNoChoice -Prompt '要啟用嗎？[y/N]' -Default $false
+    return Select-OptionalComponentAction -Name 'request_user_input' -State (Get-OptionalComponentState -Installed $AlreadyInstalled)
 }
 
 function Select-LongRunningAsyncWaitPolicy([string]$Root, [string]$SourceRoot) {
@@ -143,23 +158,14 @@ function Select-LongRunningAsyncWaitPolicy([string]$Root, [string]$SourceRoot) {
     $state = Get-LongRunningAsyncWaitPolicyState -Content $content -ManagedContent $template
     if ($state.Status -eq 'NotInstalled') {
         Write-Host '尚未安裝。'
-        return $(if (Read-YesNoChoice -Prompt '要安裝嗎？[Y/n]' -Default $true) { 'Install' } else { 'Skip' })
+        return Select-OptionalComponentAction -Name 'Long-running async wait policy' -State 'NotInstalled'
     }
     if ($state.Status -eq 'Conflict') {
         Write-Host '偵測到不完整或重複的 managed block；本次不修改。'
-        return 'Skip'
+        return 'Blocked'
     }
-    Write-Host $(if ($state.Status -eq 'InstalledCurrent') { '已安裝目前版本。' } else { '已安裝舊版，可更新。' })
-    Write-Host '[1] 保留／更新至目前版本（建議）'
-    Write-Host '[2] 移除此設定'
-    Write-Host '[3] 本次不變更'
-    switch (Read-Host '請選擇 [1]') {
-        '' { return 'Install' }
-        '1' { return 'Install' }
-        '2' { return 'Remove' }
-        '3' { return 'Skip' }
-        default { throw 'Long-running async wait 設定選項無效。' }
-    }
+    $lifecycleState = if ($state.Status -eq 'InstalledCurrent') { 'InstalledCurrent' } else { 'InstalledUpdateAvailable' }
+    return Select-OptionalComponentAction -Name 'Long-running async wait policy' -State $lifecycleState
 }
 
 function Test-WindowsNotificationsInstalled([string]$Root = (Join-Path $HOME '.codex')) {
@@ -184,10 +190,10 @@ function Select-OptionalWindowsNotifications([bool]$AlreadyInstalled = (Test-Win
     Write-Host '- 每輪完成後的 Token / Cost 使用量通知'
     Write-Host '- ccusage、ccsessions、cdaily'
     Write-Host '使用量顯示：Session、Model、Input、Output、Think、Cache、Total、Cost、Time'
-    if ($AlreadyInstalled) {
-        Write-Host '已偵測到既有受管理通知；本次會保留並更新。'
-        return Read-YesNoChoice -Prompt '要繼續安裝/更新嗎？[Y/n]' -Default $true
-    }
-    Write-Host '尚未安裝。'
-    return Read-YesNoChoice -Prompt '要安裝嗎？[y/N]' -Default $false
+    return Select-OptionalComponentAction -Name 'Windows 開發狀態與使用量通知' -State (Get-OptionalComponentState -Installed $AlreadyInstalled)
+}
+
+function Test-DefaultModeRequestUserInputInstalled([string]$Root = (Join-Path $HOME '.codex')) {
+    $path = Join-Path $Root 'config.toml'
+    return (Test-Path -LiteralPath $path -PathType Leaf) -and ([IO.File]::ReadAllText($path) -match '(?m)^\s*default_mode_request_user_input\s*=\s*true\s*(?:#.*)?$')
 }

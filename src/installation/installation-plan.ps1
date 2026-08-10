@@ -1,7 +1,7 @@
-function New-InstallationPlan([ValidateSet('Git', 'CVS')][string]$DevelopmentEnvironment, [switch]$InstallRequestExecutionOptimizer, [switch]$EnableDefaultModeRequestUserInput, [ValidateSet('Install', 'Remove', 'Skip')][string]$LongRunningAsyncWaitAction = 'Skip', [bool]$InstallWindowsNotifications, [bool]$ManageWindowsNotifications = $true, [string]$Cwd = (Get-Location).Path, [string]$SourceRoot = '', [bool]$IncludeExistingSkills = $false) {
+function New-InstallationPlan([ValidateSet('Git', 'CVS')][string]$DevelopmentEnvironment, [switch]$InstallRequestExecutionOptimizer, [switch]$EnableDefaultModeRequestUserInput, [ValidateSet('Install', 'KeepCurrent', 'Update', 'Repair', 'Uninstall', 'SkipNotInstalled', 'LeaveUnchanged', 'Blocked')][string]$RequestUserInputAction = 'LeaveUnchanged', [ValidateSet('Install', 'KeepCurrent', 'Update', 'Repair', 'Uninstall', 'SkipNotInstalled', 'LeaveUnchanged', 'Blocked')][string]$LongRunningAsyncWaitAction = 'LeaveUnchanged', [bool]$InstallWindowsNotifications, [bool]$ManageWindowsNotifications = $true, [string]$Cwd = (Get-Location).Path, [string]$SourceRoot = '', [bool]$IncludeExistingSkills = $false) {
     if ([string]::IsNullOrWhiteSpace($SourceRoot)) { $SourceRoot = [string]$ScriptRoot }
     $targets = New-Object 'System.Collections.Generic.List[object]'
-    [void]$targets.Add((New-InstallTarget -Id 'global' -Mode 'Global' -TemplateRoot (Join-Path $SourceRoot 'templates\core') -EnvironmentTemplateRoot (Join-Path $SourceRoot ("templates\environments\{0}" -f $DevelopmentEnvironment.ToLowerInvariant())) -DevelopmentEnvironment $DevelopmentEnvironment -Root (Join-Path $HOME '.codex') -Cwd $Cwd -EnableDefaultModeRequestUserInput ([bool]$EnableDefaultModeRequestUserInput) -LongRunningAsyncWaitAction $LongRunningAsyncWaitAction -InstallWindowsNotifications $InstallWindowsNotifications -ManageWindowsNotifications $ManageWindowsNotifications -SourceRoot $SourceRoot))
+    [void]$targets.Add((New-InstallTarget -Id 'global' -Mode 'Global' -TemplateRoot (Join-Path $SourceRoot 'templates\core') -EnvironmentTemplateRoot (Join-Path $SourceRoot ("templates\environments\{0}" -f $DevelopmentEnvironment.ToLowerInvariant())) -DevelopmentEnvironment $DevelopmentEnvironment -Root (Join-Path $HOME '.codex') -Cwd $Cwd -EnableDefaultModeRequestUserInput ([bool]$EnableDefaultModeRequestUserInput) -RequestUserInputAction $RequestUserInputAction -LongRunningAsyncWaitAction $LongRunningAsyncWaitAction -InstallWindowsNotifications $InstallWindowsNotifications -ManageWindowsNotifications $ManageWindowsNotifications -SourceRoot $SourceRoot))
     $skillsRoot = Join-Path $HOME '.codex\skills'
     if ($InstallRequestExecutionOptimizer -or $IncludeExistingSkills) {
         [void]$targets.Add((New-InstallTarget -Id 'global-skills' -Mode 'GlobalSkills' -TemplateRoot (Join-Path $SourceRoot 'templates\skills') -Root $skillsRoot -Cwd $Cwd -SourceRoot $SourceRoot))
@@ -119,4 +119,8 @@ function Add-DefaultModeRequestUserInputFeature([string]$Content, [string]$NewLi
         return ($lines -join $NewLine)
     }
     return $Content.TrimEnd() + $NewLine + $NewLine + '[features]' + $NewLine + 'default_mode_request_user_input = true'
+}
+
+function Remove-DefaultModeRequestUserInputFeature([string]$Content) {
+    return [regex]::Replace($Content, '(?m)^\s*default_mode_request_user_input\s*=.*(?:\r?\n|$)', '')
 }

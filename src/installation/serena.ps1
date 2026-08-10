@@ -258,3 +258,24 @@ function Invoke-SerenaInstallation {
         RuntimeStatus = 'RestartRequired'
     }
 }
+
+function Invoke-SerenaUninstall([string]$Root, $Transaction) {
+    $configPath = Join-Path $Root 'config.toml'
+    if (Test-Path -LiteralPath $configPath -PathType Leaf) {
+        $state = Get-TextFileState -Path $configPath
+        $content = [regex]::Replace($state.Content, $script:SerenaMcpSectionPattern, '').TrimEnd()
+        if ($content -ne $state.Content.TrimEnd()) {
+            Save-TransactionFile -Transaction $Transaction -Path $configPath
+            Write-TextFileState -Path $configPath -Content $(if ($content) { $content + $state.NewLine } else { '' }) -Encoding $state.Encoding
+        }
+    }
+    $before = Get-SerenaInstallationState
+    if ($before.ToolPresent) {
+        $remove = Invoke-SerenaCommand -Command 'uv' -Arguments @('tool', 'uninstall', $script:SerenaPackageName)
+        if ($remove.ExitCode -ne 0) { throw "Serena 解除安裝失敗：$($remove.Output -join [Environment]::NewLine)" }
+    }
+    $result = New-SerenaSkippedResult
+    $result.ToolStatus = $(if ($before.ToolPresent) { 'Uninstalled' } else { 'Unchanged' })
+    $result.CodexMcpStatus = 'Uninstalled'
+    return $result
+}
