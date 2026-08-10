@@ -3,6 +3,7 @@ function New-InstallationOwnershipManifest {
     param(
         [switch]$InstallRequestExecutionOptimizer,
         [switch]$EnableDefaultModeRequestUserInput,
+        [ValidateSet('Install', 'Remove', 'Skip')][string]$LongRunningAsyncWaitAction = 'Install',
         [switch]$InstallWindowsNotifications,
         [switch]$InstallMattPocockSkills,
         [switch]$InstallPonytail,
@@ -15,6 +16,9 @@ function New-InstallationOwnershipManifest {
             codexSettings = [ordered]@{ Owner = 'CodexSettings'; Category = 'Personal'; Selected = $true; ManagedPaths = @('AGENTS.md', 'config.toml', 'hooks.json', 'hooks/runtime-core.ps1', 'rules/default.rules'); ManagedConfigSections = @('CODEX-SETTINGS:Global:CONFIG'); ManagedHooks = @('line-ending'); ManagedExternalState = @('CONTEXT7_API_KEY'); RollbackScope = 'PersonalTransaction' }
             requestExecutionOptimizer = [ordered]@{ Owner = 'CodexSettings'; Category = 'Personal'; Selected = [bool]$InstallRequestExecutionOptimizer; ManagedPaths = @('skills/request-execution-optimizer'); ManagedConfigSections = @(); ManagedHooks = @(); ManagedExternalState = @(); RollbackScope = 'PersonalTransaction' }
             requestUserInput = [ordered]@{ Owner = 'CodexSettings'; Category = 'Personal'; Selected = [bool]$EnableDefaultModeRequestUserInput; ManagedPaths = @(); ManagedConfigSections = @('features.default_mode_request_user_input'); ManagedHooks = @(); ManagedExternalState = @(); RollbackScope = 'PersonalTransaction' }
+        }
+        otherSettings = [ordered]@{
+            longRunningAsyncWait = [ordered]@{ Owner = 'CodexSettings'; Category = 'Other Settings'; Selected = $LongRunningAsyncWaitAction -eq 'Install'; Action = $LongRunningAsyncWaitAction; Version = $script:LongRunningAsyncWaitPolicyVersion; ManagedPaths = @('AGENTS.md'); ManagedConfigSections = @('CODEX-SETTINGS:OTHER:LONG-RUNNING-ASYNC-WAIT:v1'); ManagedHooks = @(); ManagedExternalState = @(); RollbackScope = 'PersonalTransaction'; managedBlockPresent = $false }
         }
         community = [ordered]@{
             windowsUsageNotifications = [ordered]@{ Owner = 'WindowsUsageNotifications'; Category = 'Community'; Selected = [bool]$InstallWindowsNotifications; ManagedPaths = @('hooks/show-codex-notification.ps1'); ManagedConfigSections = @('notify'); ManagedHooks = @('PreToolUse/request_user_input', 'PermissionRequest', 'notify/agent-turn-complete'); ManagedExternalState = @('ccusage', 'ccsessions', 'cdaily', 'PowerShellProfiles'); RollbackScope = 'WindowsUsageNotificationTransaction'; scriptPresent = $false; hookConfigured = $false; hookTrusted = $false; hookEffective = $false; directToastShown = $false; lastInvocation = $null; lastResult = 'not-tested' }
@@ -33,7 +37,7 @@ function Save-InstallationManifest {
     $path = Join-Path $Result.Root '.codex-settings-manifest.json'
     Save-TransactionFile $Transaction $path
     $manifest = [ordered]@{
-        Version = 6
+        Version = 7
         SchemaVersion = 2
         Mode = $Result.Mode
         DevelopmentEnvironment = $Result.DevelopmentEnvironment
@@ -44,6 +48,7 @@ function Save-InstallationManifest {
     }
     if ($null -eq $Ownership) { $Ownership = New-InstallationOwnershipManifest }
     $manifest.Personal = $Ownership.personal
+    $manifest.OtherSettings = $Ownership.otherSettings
     $manifest.Community = $Ownership.community
     if ($Result.Mode -eq 'Global') { $manifest.ManagedHooks = Get-ManagedHooksManifest -Root $Result.Root }
     if ($null -ne $External) { $manifest.External = $External }
