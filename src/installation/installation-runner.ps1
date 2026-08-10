@@ -250,7 +250,7 @@ function Write-InstallationSummary {
         if ($null -eq $Ownership) { $Ownership = New-InstallationOwnershipManifest -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput -InstallWindowsNotifications:$InstallWindowsNotifications -InstallMattPocockSkills:$InstallMattPocockSkills }
         $fileSummary = Get-InstallResultSummary -Results $Results
         $fileSummary.Skipped = [int]$fileSummary.Skipped + $SkippedCount
-        $fileSummary.Footer = '請完全關閉並重新啟動 VS Code、Codex 與 PowerShell；既有 Session 不會載入新安裝的 Hook。'
+        $fileSummary.Footer = '請完全關閉並重新啟動 VS Code、Codex 與 PowerShell；config.toml／MCP 與 Hook 可能由既有程序快取，在舊 App 中建立新對話仍可能沿用修復前設定。'
         $context7Status = if ($null -ne $ContextState -and $ContextState.Status -eq 'Uninstalled') { 'Uninstalled' } elseif ($SkipContext7Key) { 'SkippedNotInstalled' } elseif ($null -ne $ContextState -and [bool]$ContextState.CreatedNow) { 'Installed' } elseif ($null -ne $ContextState -and [bool]$ContextState.CreatedByInstaller) { 'Current' } else { 'Unchanged' }
         $notificationComponentStatus = if ($NotificationStatus -eq 'Uninstalled') { 'Uninstalled' } elseif (-not $InstallWindowsNotifications) { 'SkippedNotInstalled' } elseif ($NotificationStatus -match '略過|未變更') { 'Current' } else { 'Updated' }
         $failedNames = @($CommunityResults | Where-Object Status -eq 'FAILED' | ForEach-Object Name)
