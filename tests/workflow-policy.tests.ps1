@@ -53,6 +53,10 @@ try {
     $changedPlan = New-InstallationChangePlan -Discovery $discovery -Results @($changedResult) -CcusageBefore ([pscustomobject]@{ Installed = $true; Version = '1.0.0' })
     if ($changedPlan.validationLevel -ne 'ChangedOnly' -or -not $changedPlan.runHookTrust -or -not $changedPlan.runNotificationTest) { throw 'Hook-only change did not select the changed-only workflow.' }
 
+    $changedConfig = New-InstallFileResult -Path 'config.toml' -RelativePath 'config.toml' -Changed $true -Updated $true -Status Updated
+    $configPlan = New-InstallationChangePlan -Discovery $discovery -Results @((New-InstallationResult -Mode Global -Root $root -Files @($changedConfig) -Previous ([pscustomobject]@{ Version = 5 }) -HookChanged $false)) -CcusageBefore ([pscustomobject]@{ Installed = $true; Version = '1.0.0' })
+    if (-not $configPlan.runConfigValidation -or -not $configPlan.runHookTrust) { throw 'Changed config.toml did not select real Codex app-server semantic validation.' }
+
     $firstPlan = New-InstallationChangePlan -Discovery $discovery -Results @([pscustomobject]@{ Mode = 'Global'; Previous = $null; HookChanged = $false; Files = @(); Summary = [pscustomobject]@{ Created = 0; Updated = 0 } }) -CcusageBefore ([pscustomobject]@{ Installed = $true; Version = '1.0.0' })
     if ($firstPlan.validationLevel -ne 'Full' -or -not $firstPlan.runHookValidation) { throw 'First install did not select full validation.' }
 } finally {

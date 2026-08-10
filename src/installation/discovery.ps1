@@ -21,6 +21,8 @@ function Get-InstallationDiscovery {
 
     $usageTemplatePath = Join-Path $Context.ScriptRoot 'templates\profile\usage-commands.ps1'
     $profileCurrent = Test-CcusageProfileCurrent -TemplatePath $usageTemplatePath
+    $context7ConfigPath = Join-Path $Context.GlobalRoot 'config.toml'
+    $context7Mcp = Get-Context7McpTransportState -Content $(if (Test-Path -LiteralPath $context7ConfigPath -PathType Leaf) { [IO.File]::ReadAllText($context7ConfigPath) } else { '' })
 
     return [pscustomobject][ordered]@{
         schemaVersion = 1
@@ -37,6 +39,7 @@ function Get-InstallationDiscovery {
         }
         windowsUsageNotifications = Get-WindowsNotificationLifecycleState -Root $Context.GlobalRoot
         context7UserPresent = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable('CONTEXT7_API_KEY', 'User'))
+        context7Mcp = $context7Mcp
         serenaDashboard = $SerenaDashboard
     }
 }
