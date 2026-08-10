@@ -20,6 +20,7 @@ function Invoke-InteractiveMode {
     param(
         [ValidateSet('Git', 'CVS')]
         [string]$DevelopmentEnvironment,
+        [string]$TargetUserProfile,
         [string]$GlobalRoot,
         [string]$SourceRoot
     )
@@ -65,7 +66,7 @@ function Invoke-InteractiveMode {
                     if (-not (Test-SerenaUvAvailable)) { $installSerenaUv = Select-SerenaUvInstallation }
                 }
                 $actions = @{ context7 = $context7Action; requestExecutionOptimizer = $requestExecutionOptimizerAction; requestUserInput = $requestUserInputAction; longRunningAsyncWait = $longRunningAsyncWaitAction; windowsUsageNotifications = $windowsNotificationsAction; mattpocockSkills = $mattPocockSkillsAction; ponytail = $ponytailAction; codexOrchestration = $codexOrchestrationAction; serena = $serenaAction }
-                Invoke-Installer -Mode Global -InstallStyle $style -DevelopmentEnvironment $selectedEnvironment -InstallRequestExecutionOptimizer:(Test-OptionalComponentKeepAction $requestExecutionOptimizerAction) -InstallMattPocockSkills:(Test-OptionalComponentKeepAction $mattPocockSkillsAction) -InstallPonytail:(Test-OptionalComponentKeepAction $ponytailAction) -PonytailState $ponytailState -PonytailMarketplaceAction $ponytailMarketplaceAction -InstallCodexOrchestration:(Test-OptionalComponentKeepAction $codexOrchestrationAction) -ConfigureCodexOrchestration:(Test-OptionalComponentKeepAction $codexOrchestrationAction) -InstallSerena:(Test-OptionalComponentKeepAction $serenaAction) -InstallSerenaUv:$installSerenaUv -EnableDefaultModeRequestUserInput:(Test-OptionalComponentKeepAction $requestUserInputAction) -LongRunningAsyncWaitAction $longRunningAsyncWaitAction -InstallWindowsNotifications:(Test-OptionalComponentKeepAction $windowsNotificationsAction) -OptionalComponentActions $actions -SourceRoot $SourceRoot
+                Invoke-Installer -Mode Global -InstallStyle $style -DevelopmentEnvironment $selectedEnvironment -TargetUserProfile $TargetUserProfile -InstallRequestExecutionOptimizer:(Test-OptionalComponentKeepAction $requestExecutionOptimizerAction) -InstallMattPocockSkills:(Test-OptionalComponentKeepAction $mattPocockSkillsAction) -InstallPonytail:(Test-OptionalComponentKeepAction $ponytailAction) -PonytailState $ponytailState -PonytailMarketplaceAction $PonytailMarketplaceAction -InstallCodexOrchestration:(Test-OptionalComponentKeepAction $codexOrchestrationAction) -ConfigureCodexOrchestration:(Test-OptionalComponentKeepAction $codexOrchestrationAction) -InstallSerena:(Test-OptionalComponentKeepAction $serenaAction) -InstallSerenaUv:$installSerenaUv -EnableDefaultModeRequestUserInput:(Test-OptionalComponentKeepAction $requestUserInputAction) -LongRunningAsyncWaitAction $longRunningAsyncWaitAction -InstallWindowsNotifications:(Test-OptionalComponentKeepAction $windowsNotificationsAction) -OptionalComponentActions $actions -SourceRoot $SourceRoot
                 return
             }
 
@@ -141,6 +142,27 @@ function Invoke-IsolatedCommunityComponent {
         }
         try { Save-TransactionMetadata -Transaction $transaction -Metadata @{ Status = 'RolledBack'; RolledBackAt = (Get-Date).ToString('o'); FailureReason = $reason; RollbackErrors = $rollbackErrors.ToArray() } } catch { [void]$rollbackErrors.Add($_.Exception.Message) }
         return [pscustomobject]@{ Name = $Name; Status = 'FAILED'; Result = $componentResult; Error = $reason; TransactionRoot = $transactionRoot; Rollback = $(if ($rollbackErrors.Count -eq 0) { 'SUCCESS' } else { 'FAILED' }); RollbackErrors = $rollbackErrors.ToArray() }
+    }
+}
+
+function Invoke-WithInstallerUserEnvironment {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]$Context,
+        [Parameter(Mandatory = $true)][scriptblock]$Operation
+    )
+
+    $values = [ordered]@{ CODEX_HOME = $Context.GlobalRoot; HOME = $Context.UserProfile; USERPROFILE = $Context.UserProfile; APPDATA = $Context.AppData; LOCALAPPDATA = $Context.LocalAppData }
+    $previous = @{}
+    foreach ($name in $values.Keys) { $previous[$name] = [pscustomobject]@{ Present = Test-Path -LiteralPath "Env:\$name"; Value = [Environment]::GetEnvironmentVariable($name, 'Process') } }
+    try {
+        foreach ($name in $values.Keys) { [Environment]::SetEnvironmentVariable($name, [string]$values[$name], 'Process') }
+        return & $Operation
+    } finally {
+        foreach ($name in $values.Keys) {
+            if ($previous[$name].Present) { [Environment]::SetEnvironmentVariable($name, [string]$previous[$name].Value, 'Process') }
+            else { Remove-Item -LiteralPath "Env:\$name" -ErrorAction SilentlyContinue }
+        }
     }
 }
 
@@ -774,6 +796,7 @@ function Invoke-Installer {
         [Nullable[bool]]$InstallWindowsNotifications,
         [ValidateSet('Git', 'CVS')]
         [string]$DevelopmentEnvironment,
+        [string]$TargetUserProfile,
         [switch]$Force,
         [ValidateSet('Merge', 'Replace')]
         [string]$InstallStyle = 'Merge',
@@ -794,12 +817,14 @@ function Invoke-Installer {
         return
     }
 
-    $context = New-InstallerContext -SourceRoot $SourceRoot -DevelopmentEnvironment $DevelopmentEnvironment -InstallStyle $InstallStyle -Force:$Force -InstallWindowsNotifications $InstallWindowsNotifications
-    if ($Mode -eq 'Interactive') {
-        Invoke-InteractiveMode -DevelopmentEnvironment $context.DevelopmentEnvironment -GlobalRoot $context.GlobalRoot -SourceRoot $context.ScriptRoot
-        return
-    }
+    $context = New-InstallerContext -SourceRoot $SourceRoot -DevelopmentEnvironment $DevelopmentEnvironment -TargetUserProfile $TargetUserProfile -InstallStyle $InstallStyle -Force:$Force -InstallWindowsNotifications $InstallWindowsNotifications
+    Invoke-WithInstallerUserEnvironment -Context $context -Operation {
+        if ($Mode -eq 'Interactive') {
+            Invoke-InteractiveMode -DevelopmentEnvironment $context.DevelopmentEnvironment -TargetUserProfile $context.UserProfile -GlobalRoot $context.GlobalRoot -SourceRoot $context.ScriptRoot
+            return
+        }
 
-    if (($InstallPonytail -or $OptionalComponentActions.ponytail -eq 'Uninstall') -and $null -eq $PonytailState) { $PonytailState = Get-PonytailInstallationState -Root $context.GlobalRoot }
-    Invoke-GlobalInstallation -Context $context -SkipContext7Key:$SkipContext7Key -SkipCcusageInstall:$SkipCcusageInstall -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -InstallMattPocockSkills:$InstallMattPocockSkills -InstallPonytail:$InstallPonytail -SkipPonytail:$SkipPonytail -PonytailState $PonytailState -PonytailMarketplaceAction $PonytailMarketplaceAction -InstallCodexOrchestration:$InstallCodexOrchestration -SkipCodexOrchestration:$SkipCodexOrchestration -ConfigureCodexOrchestration:$ConfigureCodexOrchestration -InstallSerena:$InstallSerena -SkipSerena:$SkipSerena -InstallSerenaUv:$InstallSerenaUv -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput -LongRunningAsyncWaitAction $LongRunningAsyncWaitAction -ForceValidation:$ForceValidation -ForceNotificationTest:$ForceNotificationTest -RendererMode $(if ($NoPause) { 'Line' } else { 'Auto' }) -OptionalComponentActions $OptionalComponentActions
+        if (($InstallPonytail -or $OptionalComponentActions.ponytail -eq 'Uninstall') -and $null -eq $PonytailState) { $PonytailState = Get-PonytailInstallationState -Root $context.GlobalRoot }
+        Invoke-GlobalInstallation -Context $context -SkipContext7Key:$SkipContext7Key -SkipCcusageInstall:$SkipCcusageInstall -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -InstallMattPocockSkills:$InstallMattPocockSkills -InstallPonytail:$InstallPonytail -SkipPonytail:$SkipPonytail -PonytailState $PonytailState -PonytailMarketplaceAction $PonytailMarketplaceAction -InstallCodexOrchestration:$InstallCodexOrchestration -SkipCodexOrchestration:$SkipCodexOrchestration -ConfigureCodexOrchestration:$ConfigureCodexOrchestration -InstallSerena:$InstallSerena -SkipSerena:$SkipSerena -InstallSerenaUv:$InstallSerenaUv -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput -LongRunningAsyncWaitAction $LongRunningAsyncWaitAction -ForceValidation:$ForceValidation -ForceNotificationTest:$ForceNotificationTest -RendererMode $(if ($NoPause) { 'Line' } else { 'Auto' }) -OptionalComponentActions $OptionalComponentActions
+    }
 }

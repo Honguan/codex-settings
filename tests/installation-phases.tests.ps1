@@ -17,6 +17,41 @@ $communitySteps = @($steps | Where-Object Category -eq 'Community')
 $status = Format-InstallProgressStatus -Profile (New-InstallRendererProfile -RendererMode Interactive -OutputEncoding ([Text.UTF8Encoding]::new($false)) -WindowWidth 120) -Step $communitySteps[0] -Total $steps.Count -Percent 50 -Detail '驗證 component ownership' -Elapsed '00:00:02'
 if ($status -notmatch '^Community 1/5') { throw "progress 未顯示 Community component index：$status" }
 
+$installerContextImplementation = (Get-Command New-InstallerContext -CommandType Function).ScriptBlock
+$globalInstallationImplementation = (Get-Command Invoke-GlobalInstallation -CommandType Function).ScriptBlock
+$targetUserProfile = Join-Path ([IO.Path]::GetTempPath()) ('codex-settings-user-' + [guid]::NewGuid().ToString('N'))
+$expectedCodexHome = Join-Path $targetUserProfile '.codex'
+$environmentNames = @('CODEX_HOME', 'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA')
+$previousEnvironment = @{}
+foreach ($name in $environmentNames) { $previousEnvironment[$name] = [pscustomobject]@{ Present = Test-Path -LiteralPath "Env:\$name"; Value = [Environment]::GetEnvironmentVariable($name, 'Process') } }
+try {
+    function New-InstallerContext { [pscustomobject]@{ GlobalRoot = $expectedCodexHome; UserProfile = $targetUserProfile; AppData = (Join-Path $targetUserProfile 'AppData\Roaming'); LocalAppData = (Join-Path $targetUserProfile 'AppData\Local'); DevelopmentEnvironment = 'Git'; ScriptRoot = $script:ScriptRoot } }
+    function Invoke-GlobalInstallation { [pscustomobject]@{ CodexHome = $env:CODEX_HOME; Home = $env:HOME; UserProfile = $env:USERPROFILE; AppData = $env:APPDATA; LocalAppData = $env:LOCALAPPDATA } }
+    $env:CODEX_HOME = 'C:\Users\CodexSandboxOffline\.codex'
+    $observedEnvironment = Invoke-Installer -Mode Global -SourceRoot $script:ScriptRoot -TargetUserProfile $targetUserProfile -NoPause
+    $expectedEnvironment = @{ CodexHome = $expectedCodexHome; Home = $targetUserProfile; UserProfile = $targetUserProfile; AppData = (Join-Path $targetUserProfile 'AppData\Roaming'); LocalAppData = (Join-Path $targetUserProfile 'AppData\Local') }
+    foreach ($name in $expectedEnvironment.Keys) {
+        if ([IO.Path]::GetFullPath($observedEnvironment.$name) -ne [IO.Path]::GetFullPath($expectedEnvironment[$name])) { throw "Global 安裝子程序使用了錯誤的 $name：$($observedEnvironment.$name)" }
+    }
+    if ($env:CODEX_HOME -ne 'C:\Users\CodexSandboxOffline\.codex') { throw 'Global 安裝結束後未還原呼叫端的 CODEX_HOME。' }
+} finally {
+    Set-Item -Path Function:New-InstallerContext -Value $installerContextImplementation
+    Set-Item -Path Function:Invoke-GlobalInstallation -Value $globalInstallationImplementation
+    foreach ($name in $environmentNames) {
+        if ($previousEnvironment[$name].Present) { [Environment]::SetEnvironmentVariable($name, [string]$previousEnvironment[$name].Value, 'Process') }
+        else { Remove-Item -LiteralPath "Env:\$name" -ErrorAction SilentlyContinue }
+    }
+}
+foreach ($name in $environmentNames) {
+    if ((Test-Path -LiteralPath "Env:\$name") -ne $previousEnvironment[$name].Present -or [Environment]::GetEnvironmentVariable($name, 'Process') -ne $previousEnvironment[$name].Value) { throw "測試未還原原本的 $name。" }
+}
+
+$sandboxRejected = $false
+try { [void](New-InstallerContext -SourceRoot $script:ScriptRoot -TargetUserProfile 'C:\Users\CodexSandboxOffline') } catch { $sandboxRejected = $_.Exception.Message -match 'CodexSandboxOffline' -and $_.Exception.Message -match 'TargetUserProfile' }
+if (-not $sandboxRejected) { throw '安裝器未拒絕將使用者設定與套件安裝到 CodexSandboxOffline。' }
+$explicitContext = New-InstallerContext -SourceRoot $script:ScriptRoot -TargetUserProfile $targetUserProfile
+if ([IO.Path]::GetFullPath($explicitContext.GlobalRoot) -ne [IO.Path]::GetFullPath($expectedCodexHome)) { throw '明確的 TargetUserProfile 未成為 GlobalRoot。' }
+
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('codex-settings-ownership-' + [guid]::NewGuid().ToString('N'))
 try {
     $result = New-InstallationResult -Mode Global -Root $testRoot -DevelopmentEnvironment Git

@@ -22,6 +22,7 @@ param(
     [Nullable[bool]]$InstallWindowsNotifications,
     [ValidateSet('Git', 'CVS')]
     [string]$DevelopmentEnvironment,
+    [string]$TargetUserProfile,
     [switch]$Force,
     [ValidateSet('Merge', 'Replace')]
     [string]$InstallStyle = 'Merge'
