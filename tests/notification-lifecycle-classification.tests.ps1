@@ -105,6 +105,7 @@ try {
     Set-NotificationFixture -Config $firstInstallExternalNotify
     $firstInstall = Assert-State NotInstalled
     if (-not $firstInstall.ExternalNotifyCoexistence) { throw 'First-install external notify was not classified for coexistence.' }
+    Assert-GlobalLineEndingHook -DevelopmentEnvironment Git -Root $root -InstallWindowsNotifications:$false -ProjectRoot '' -ValidationPhase PreCommunity -PlannedNotificationAction Install | Out-Null
     $firstInstallTransaction = New-FileTransaction -Root (Join-Path $testRoot 'first-install-coexistence-transaction') -Mode Install
     Invoke-WindowsUsageNotificationFiles -Root $root -SourceRoot $script:ScriptRoot -Transaction $firstInstallTransaction | Out-Null
     Assert-State InstalledCurrent | Out-Null
