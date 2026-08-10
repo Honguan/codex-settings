@@ -1,6 +1,7 @@
 $ErrorActionPreference = 'Stop'
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $script:ScriptRoot = Join-Path $repositoryRoot 'src'
+$expectedCodexRoot = 'C:\Users\ActualUser\.codex'
 . (Join-Path $script:ScriptRoot 'load-installation.ps1')
 . (Get-OptionalInstallationScriptPath -Name CodexOrchestration)
 
@@ -33,14 +34,14 @@ function Invoke-CodexOrchestrationCodexCommand {
     }
     return [pscustomobject]@{ ExitCode = 0; Output = @('installed') }
 }
-$installed = Invoke-CodexOrchestrationInstallation -InteractiveWorkflow:$false
+$installed = Invoke-CodexOrchestrationInstallation -Root $expectedCodexRoot -InteractiveWorkflow:$false
 if (-not $installed.InstalledNow -or $installed.PluginStatus -ne 'Installed' -or $installed.WorkflowStatus -ne 'NotConfigured') { throw '非互動 plugin-only 安裝狀態錯誤。' }
 if ($script:codexCommandIndex -ne 6) { throw "Codex-Orchestration 安裝命令序列錯誤：$script:codexCommandIndex" }
 
 $script:codexCommandIndex = 0
 $script:readHostValues.Clear()
 foreach ($value in @('', '', '', '2', '')) { $script:readHostValues.Enqueue($value) }
-$requested = Invoke-CodexOrchestrationInstallation -InteractiveWorkflow:$true
+$requested = Invoke-CodexOrchestrationInstallation -Root $expectedCodexRoot -InteractiveWorkflow:$true
 if ($requested.PluginStatus -ne 'Installed' -or $requested.WorkflowStatus -ne 'ActionRequired' -or -not $requested.WorkflowRequested -or -not $requested.ActionRequired) { throw '新安裝且要求 workflow 時未分離 plugin 與 ActionRequired 狀態。' }
 
 function Invoke-CodexOrchestrationCodexCommand {
@@ -52,12 +53,12 @@ function Invoke-CodexOrchestrationCodexCommand {
 }
 $script:readHostValues.Clear()
 $script:readHostValues.Enqueue('1')
-$preserved = Invoke-CodexOrchestrationInstallation -InteractiveWorkflow:$true
+$preserved = Invoke-CodexOrchestrationInstallation -Root $expectedCodexRoot -InteractiveWorkflow:$true
 if ($preserved.WorkflowStatus -ne 'Preserved' -or $preserved.WorkflowRequested -or $preserved.SetupPrompt) { throw '既有 plugin 保留 workflow 時不應產生 Setup Prompt。' }
 
 $script:readHostValues.Clear()
 foreach ($value in @('2', '', '', '', '2', '')) { $script:readHostValues.Enqueue($value) }
-$reconfigured = Invoke-CodexOrchestrationInstallation -InteractiveWorkflow:$true
+$reconfigured = Invoke-CodexOrchestrationInstallation -Root $expectedCodexRoot -InteractiveWorkflow:$true
 if ($reconfigured.WorkflowStatus -ne 'ActionRequired' -or -not $reconfigured.SetupPrompt.Contains('executor: GPT-5.6 Luna Extra High')) { throw '既有 plugin 重新設定時未產生完整 Setup Prompt。' }
 
 function Assert-Command { param([string]$Name) }
@@ -80,26 +81,27 @@ if (-not $pythonRejected) { throw 'Python 3.11 以下版本未被清楚拒絕。
 
 $script:readHostValues.Clear()
 foreach ($value in @('', '', '', '2', '')) { $script:readHostValues.Enqueue($value) }
-$minimal = Select-CodexOrchestrationWorkflow
+$minimal = Select-CodexOrchestrationWorkflow -Root $expectedCodexRoot
 if ($minimal.Status -ne 'ActionRequired' -or $minimal.Roles.Planner.Enabled -or $minimal.Roles.Advisor.Enabled -or $minimal.Roles.Designer.Enabled) { throw '精簡模式角色預設錯誤。' }
-if ($minimal.SetupPrompt -ne '$codex-orchestration:codex-orchestration setup executor: GPT-5.6 Luna Extra High') { throw "精簡模式 setup Prompt 錯誤：$($minimal.SetupPrompt)" }
+if (-not $minimal.SetupPrompt.StartsWith('$codex-orchestration:codex-orchestration setup executor: GPT-5.6 Luna Extra High')) { throw "精簡模式 setup Prompt 錯誤：$($minimal.SetupPrompt)" }
 
-$multiRolePrompt = ConvertTo-CodexOrchestrationSetupPrompt -Roles ([pscustomobject]@{
+$multiRolePrompt = ConvertTo-CodexOrchestrationSetupPrompt -Root $expectedCodexRoot -Roles ([pscustomobject]@{
     Planner = [pscustomobject]@{ Enabled = $true; Model = 'Planner Model'; Effort = 'High' }
     Advisor = [pscustomobject]@{ Enabled = $true; Model = 'Advisor Model'; Effort = 'Extra High' }
     Designer = [pscustomobject]@{ Enabled = $true; Model = 'Designer Model'; Effort = 'Medium' }
     Executor = [pscustomobject]@{ Enabled = $true; Model = 'Executor Model'; Effort = 'XHigh' }
 })
-if ($multiRolePrompt -ne '$codex-orchestration:codex-orchestration setup planner: Planner Model High, advisor: Advisor Model Extra High, designer: Designer Model Medium, executor: Executor Model XHigh') { throw '多角色 Setup Prompt 順序或模型／effort 遺失。' }
+if ($multiRolePrompt -notmatch [regex]::Escape('$codex-orchestration:codex-orchestration setup planner: Planner Model High, advisor: Advisor Model Extra High, designer: Designer Model Medium, executor: Executor Model XHigh')) { throw '多角色 Setup Prompt 順序或模型／effort 遺失。' }
+if ($multiRolePrompt -notmatch [regex]::Escape((Join-Path $expectedCodexRoot 'config.toml')) -or $multiRolePrompt -notmatch 'CodexSandboxOffline' -or $multiRolePrompt -notmatch '不得寫入') { throw 'Setup Prompt 未防止 routing policy 寫入錯誤的 SandboxOffline 設定路徑。' }
 
 $script:readHostValues.Clear()
 foreach ($value in @('', '2', '', '', '', '3', 'GPT-5.6 Sol', '3', 'XHigh', '')) { $script:readHostValues.Enqueue($value) }
-$custom = Select-CodexOrchestrationWorkflow
-if ($custom.SetupPrompt -ne '$codex-orchestration:codex-orchestration setup executor: GPT-5.6 Sol XHigh') { throw '自訂模式未保留 Root Planner 與關閉 Advisor / Designer。' }
+$custom = Select-CodexOrchestrationWorkflow -Root $expectedCodexRoot
+if (-not $custom.SetupPrompt.StartsWith('$codex-orchestration:codex-orchestration setup executor: GPT-5.6 Sol XHigh')) { throw '自訂模式未保留 Root Planner 與關閉 Advisor / Designer。' }
 
 $script:readHostValues.Clear()
 $script:readHostValues.Enqueue('n')
-$skippedWorkflow = Select-CodexOrchestrationWorkflow
+$skippedWorkflow = Select-CodexOrchestrationWorkflow -Root $expectedCodexRoot
 if ($skippedWorkflow.Status -ne 'NotConfigured' -or $skippedWorkflow.Requested) { throw '只安裝 plugin 時 workflow 狀態錯誤。' }
 
 $stepsWithout = @(New-InstallationProgressSteps)

@@ -630,7 +630,7 @@ function Invoke-GlobalInstallation {
                 if ($component.Status -eq 'SUCCESS') { $codexOrchestration = $component.Result; Complete-InstallStep -Progress $progress -Result ([string]$codexOrchestration.Status) } else { Fail-InstallStep -Progress $progress -Reason $component.Error -Continue }
             } elseif ($InstallCodexOrchestration) {
                 Set-InstallProgress -Progress $progress -StepId 'CodexOrchestration' -Detail '檢查 Python、安裝/更新 plugin、處理 workflow 設定'
-                $component = Invoke-IsolatedCommunityComponent -Name CodexOrchestration -BackupRoot $Context.BackupRoot -Operation { param($componentTransaction) [void](Assert-CodexOrchestrationPrerequisites); Invoke-CodexOrchestrationInstallation -InteractiveWorkflow:$ConfigureCodexOrchestration } -RollbackExternal { param($value) if ($null -ne $value) { Undo-CodexOrchestrationInstallation -Result $value } }
+                $component = Invoke-IsolatedCommunityComponent -Name CodexOrchestration -BackupRoot $Context.BackupRoot -Operation { param($componentTransaction) [void](Assert-CodexOrchestrationPrerequisites); Invoke-CodexOrchestrationInstallation -Root $Context.GlobalRoot -InteractiveWorkflow:$ConfigureCodexOrchestration } -RollbackExternal { param($value) if ($null -ne $value) { Undo-CodexOrchestrationInstallation -Result $value } }
                 [void]$communityResults.Add($component)
                 $ownership.community.codexOrchestration.Status = $component.Status
                 if ($component.Status -eq 'SUCCESS') {
