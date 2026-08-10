@@ -164,8 +164,8 @@ function Invoke-WindowsUsageNotificationFiles {
     $changed = $false
     $configState = Get-TextFileState -Path $configPath
     $repairableConfig = Remove-RepairableWindowsNotificationCommandConfig -Content $configState.Content -Root $Root
-    $desiredConfig = if ($Remove) { $repairableConfig } else { Merge-WindowsNotificationCommandConfig -Content $repairableConfig -Root $Root -NewLine $configState.NewLine }
-    if (-not [string]::IsNullOrWhiteSpace($desiredConfig)) { $desiredConfig = $desiredConfig.TrimEnd() + $configState.NewLine }
+    $desiredConfig = if ($lifecycle.ExternalNotifyCoexistence) { $configState.Content } elseif ($Remove) { $repairableConfig } else { Merge-WindowsNotificationCommandConfig -Content $repairableConfig -Root $Root -NewLine $configState.NewLine }
+    if (-not $lifecycle.ExternalNotifyCoexistence -and -not [string]::IsNullOrWhiteSpace($desiredConfig)) { $desiredConfig = $desiredConfig.TrimEnd() + $configState.NewLine }
     if ($desiredConfig -ne $configState.Content) {
         Save-TransactionFile -Transaction $Transaction -Path $configPath
         Write-TextFileState -Path $configPath -Content $desiredConfig -Encoding $configState.Encoding

@@ -258,7 +258,7 @@ function Get-WindowsNotificationLifecycleState([string]$Root, [string[]]$Managed
     $scriptPresent = Test-Path -LiteralPath $scriptPath -PathType Leaf
     $managedScriptPresent = $scriptPresent -and (Test-ManagedHookScriptFile -Path $scriptPath)
     try { $counts = Get-HookConfigurationCounts -HooksPath $hooksPath -NotificationFingerprints $ManagedNotificationFingerprints } catch {
-        return [pscustomobject][ordered]@{ State = 'Unknown'; SchemaVersion = $script:ManagedNotificationVersion; LegacyCompletedStopDetected = $false; ManagedNotifyBlockPresent = $managedMarkersPresent; ManagedNotifyCommandCurrent = $false; ConfigState = $configState; QuestionHookCount = 0; PermissionHookCount = 0; CompletedStopHookCount = 0; NotificationScriptCount = [int]$scriptPresent; ManagedMarkersPresent = $managedMarkersPresent; ManagedManifestPresent = $managedManifestPresent; ManagedFingerprintEvidence = $fingerprintEvidence; NotificationScriptPresent = $scriptPresent; UnmanagedNotifyPresent = $configState -eq 'UnmanagedNotifyConflict'; ManagedNotifyPresent = $false; OwnershipClassification = 'Unknown'; ConflictReason = 'hooks.json cannot be parsed safely'; RecommendedAction = 'repair hooks.json syntax before retrying; the installer will not rewrite it' }
+        return [pscustomobject][ordered]@{ State = 'Unknown'; SchemaVersion = $script:ManagedNotificationVersion; LegacyCompletedStopDetected = $false; ManagedNotifyBlockPresent = $managedMarkersPresent; ManagedNotifyCommandCurrent = $false; ConfigState = $configState; QuestionHookCount = 0; PermissionHookCount = 0; CompletedStopHookCount = 0; NotificationScriptCount = [int]$scriptPresent; ManagedMarkersPresent = $managedMarkersPresent; ManagedManifestPresent = $managedManifestPresent; ManagedFingerprintEvidence = $fingerprintEvidence; NotificationScriptPresent = $scriptPresent; UnmanagedNotifyPresent = $configState -eq 'UnmanagedNotifyConflict'; ManagedNotifyPresent = $false; ExternalNotifyCoexistence = $false; OwnershipClassification = 'Unknown'; ConflictReason = 'hooks.json cannot be parsed safely'; RecommendedAction = 'repair hooks.json syntax before retrying; the installer will not rewrite it' }
     }
     $question = [int]$counts.NotificationPreToolUse
     $permission = [int]$counts.NotificationPermissionRequest
@@ -270,10 +270,11 @@ function Get-WindowsNotificationLifecycleState([string]$Root, [string[]]$Managed
     $knownUnmarkedNotify = $unmarkedNotifyPresent -and (Test-KnownWindowsNotificationCommand -Content $unmarkedConfig -Root $Root)
     $managedUnmarkedNotify = $knownUnmarkedNotify -and ($managedManifestPresent -or $fingerprintEvidence -or $managedScriptPresent -or $managedHookCount -gt 0)
     $unmanagedNotifyPresent = ($configState -eq 'UnmanagedNotifyConflict' -or $unmarkedNotifyPresent) -and -not $managedUnmarkedNotify
-    $ownership = if ($managedMarkersPresent) { 'ManagedMarkers' } elseif ($managedUnmarkedNotify) { 'ManagedCorroborated' } elseif ($unmanagedNotifyPresent) { 'Unmanaged' } elseif ($managedManifestPresent -or $fingerprintEvidence -or $managedScriptPresent -or $managedHookCount -gt 0) { 'ManagedArtifacts' } else { 'None' }
+    $externalNotifyCoexistence = $unmanagedNotifyPresent -and $managedManifestPresent -and $fingerprintEvidence -and $managedScriptPresent -and $question -eq 1 -and $permission -eq 1
+    $ownership = if ($managedMarkersPresent) { 'ManagedMarkers' } elseif ($managedUnmarkedNotify) { 'ManagedCorroborated' } elseif ($externalNotifyCoexistence) { 'ManagedWithExternalNotify' } elseif ($unmanagedNotifyPresent) { 'Unmanaged' } elseif ($managedManifestPresent -or $fingerprintEvidence -or $managedScriptPresent -or $managedHookCount -gt 0) { 'ManagedArtifacts' } else { 'None' }
     $state = if ($configState -eq 'MalformedUserContent') {
         'MalformedUserOwnedState'
-    } elseif ($unmanagedNotifyPresent) {
+    } elseif ($unmanagedNotifyPresent -and -not $externalNotifyCoexistence) {
         'TrueUnmanagedConflict'
     } elseif ($managedMarkerCount -gt 1 -or $question -gt 1 -or $permission -gt 1 -or $completed -gt 1) {
         'ManagedDuplicateState'
@@ -283,9 +284,9 @@ function Get-WindowsNotificationLifecycleState([string]$Root, [string[]]$Managed
         'InstalledNeedsMigration'
     } elseif ($question -eq 0 -and $permission -eq 0 -and $completed -eq 0 -and $scriptCount -eq 0 -and $configState -eq 'MissingManagedBlock') {
         'NotInstalled'
-    } elseif ($question -eq 1 -and $permission -eq 1 -and $completed -eq 0 -and $scriptCount -eq 1 -and $configState -eq 'CurrentManagedBlock') {
+    } elseif ($question -eq 1 -and $permission -eq 1 -and $completed -eq 0 -and $scriptCount -eq 1 -and ($configState -eq 'CurrentManagedBlock' -or $externalNotifyCoexistence)) {
         'InstalledCurrent'
-    } elseif ($question -eq 1 -and $permission -eq 1 -and $completed -eq 1 -and $scriptCount -eq 1 -and $configState -in @('MissingManagedBlock', 'OutdatedManagedBlock')) {
+    } elseif ($question -eq 1 -and $permission -eq 1 -and $completed -eq 1 -and $scriptCount -eq 1 -and ($configState -in @('MissingManagedBlock', 'OutdatedManagedBlock') -or $externalNotifyCoexistence)) {
         'InstalledNeedsMigration'
     } elseif ($question -eq 1 -and $permission -eq 1 -and $completed -eq 0 -and $scriptCount -eq 1 -and $configState -eq 'OutdatedManagedBlock') {
         'InstalledUpdateAvailable'
@@ -304,7 +305,7 @@ function Get-WindowsNotificationLifecycleState([string]$Root, [string[]]$Managed
         'MalformedUserOwnedState' { 'repair config.toml syntax before retrying; installer will not rewrite it' }
         default { if ($state -eq 'NotInstalled') { 'install when selected' } elseif ($state -eq 'InstalledCurrent') { 'keep current' } else { 'repair/update the managed notification component' } }
     }
-    return [pscustomobject][ordered]@{ State = $state; SchemaVersion = $script:ManagedNotificationVersion; LegacyCompletedStopDetected = $completed -gt 0; ManagedNotifyBlockPresent = $managedMarkersPresent; ManagedNotifyCommandCurrent = $configState -eq 'CurrentManagedBlock'; ConfigState = $configState; QuestionHookCount = $question; PermissionHookCount = $permission; CompletedStopHookCount = $completed; NotificationScriptCount = $scriptCount; ManagedMarkersPresent = $managedMarkersPresent; ManagedManifestPresent = $managedManifestPresent; ManagedFingerprintEvidence = $fingerprintEvidence; NotificationScriptPresent = $scriptPresent; UnmanagedNotifyPresent = $unmanagedNotifyPresent; ManagedNotifyPresent = $configState -in @('CurrentManagedBlock', 'OutdatedManagedBlock') -or $managedUnmarkedNotify; OwnershipClassification = $ownership; ConflictReason = $conflictReason; RecommendedAction = $recommendedAction }
+    return [pscustomobject][ordered]@{ State = $state; SchemaVersion = $script:ManagedNotificationVersion; LegacyCompletedStopDetected = $completed -gt 0; ManagedNotifyBlockPresent = $managedMarkersPresent; ManagedNotifyCommandCurrent = $configState -eq 'CurrentManagedBlock'; ConfigState = $configState; QuestionHookCount = $question; PermissionHookCount = $permission; CompletedStopHookCount = $completed; NotificationScriptCount = $scriptCount; ManagedMarkersPresent = $managedMarkersPresent; ManagedManifestPresent = $managedManifestPresent; ManagedFingerprintEvidence = $fingerprintEvidence; NotificationScriptPresent = $scriptPresent; UnmanagedNotifyPresent = $unmanagedNotifyPresent; ManagedNotifyPresent = $configState -in @('CurrentManagedBlock', 'OutdatedManagedBlock') -or $managedUnmarkedNotify; ExternalNotifyCoexistence = $externalNotifyCoexistence; OwnershipClassification = $ownership; ConflictReason = $conflictReason; RecommendedAction = $recommendedAction }
 }
 
 function Format-WindowsNotificationLifecycleDiagnostic($Lifecycle) {
@@ -328,9 +329,10 @@ function Assert-GlobalLineEndingHook([ValidateSet('Git', 'CVS')][string]$Develop
     $notificationScriptCount = if (Test-Path -LiteralPath (Join-Path $Root 'hooks\show-codex-notification.ps1') -PathType Leaf) { 1 } else { 0 }
     $expectedNotificationCount = if ($InstallWindowsNotifications) { 1 } else { 0 }
     $notificationLifecycle = Get-WindowsNotificationLifecycleState -Root $Root -ManagedNotificationFingerprints $ManagedNotificationFingerprints
+    $completionNotificationConfigured = $notificationCommandConfigured -or [bool]$notificationLifecycle.ExternalNotifyCoexistence
     $migrationPending = $ValidationPhase -eq 'PreCommunity' -and $PlannedNotificationAction -in @('Update', 'Repair') -and $notificationLifecycle.State -in @('InstalledNeedsMigration', 'InstalledUpdateAvailable', 'InstalledNeedsRepair', 'ManagedPartialState', 'ManagedDuplicateState')
     $transitionPending = $migrationPending -or ($ValidationPhase -eq 'PreCommunity' -and $PlannedNotificationAction -eq 'Uninstall' -and $notificationLifecycle.State -notin @('NotInstalled', 'TrueUnmanagedConflict', 'MalformedUserOwnedState', 'Conflict', 'Unknown'))
-    if (-not $transitionPending -and ($notificationQuestionHookCount -ne $expectedNotificationCount -or $notificationPermissionHookCount -ne $expectedNotificationCount -or $notificationCompletedHookCount -ne 0 -or [int]$notificationCommandConfigured -ne $expectedNotificationCount -or $notificationScriptCount -ne $expectedNotificationCount)) {
+    if (-not $transitionPending -and ($notificationQuestionHookCount -ne $expectedNotificationCount -or $notificationPermissionHookCount -ne $expectedNotificationCount -or $notificationCompletedHookCount -ne 0 -or [int]$completionNotificationConfigured -ne $expectedNotificationCount -or $notificationScriptCount -ne $expectedNotificationCount)) {
         throw "Windows 通知安裝檢查失敗：notificationLifecycleState=$($notificationLifecycle.State) notificationSchemaVersion=$($notificationLifecycle.SchemaVersion) legacyCompletedStopDetected=$($notificationLifecycle.LegacyCompletedStopDetected) managedNotifyBlockPresent=$($notificationLifecycle.ManagedNotifyBlockPresent) managedNotifyCommandCurrent=$($notificationLifecycle.ManagedNotifyCommandCurrent) plannedNotificationAction=$PlannedNotificationAction validationPhase=$ValidationPhase migrationPending=$migrationPending Expected=$expectedNotificationCount QuestionHookCount=$notificationQuestionHookCount PermissionHookCount=$notificationPermissionHookCount CompletedStopHookCount=$notificationCompletedHookCount NotificationCommandConfigured=$notificationCommandConfigured NotificationScriptCount=$notificationScriptCount"
     }
     $projectCounts = [pscustomobject]@{ NotificationStop = 0; LegacyNotificationStop = 0; Token = 0; LineEndingPreToolUse = 0; LineEndingPostToolUse = 0; LineEndingStop = 0; LegacyCrlf = 0 }
@@ -355,7 +357,7 @@ function Assert-GlobalLineEndingHook([ValidateSet('Git', 'CVS')][string]$Develop
     $globalNotificationStopHookCount = $notificationCompletedHookCount
     $legacyTokenHookCount = [int]$globalCounts.Token + $projectLegacyTokenHookCount
     $legacyCompletedNotificationHookCount = [int]$globalCounts.LegacyNotificationStop + [int]$projectCounts.LegacyNotificationStop
-    $effectiveCompletedNotificationHookCount = [int]$notificationCommandConfigured + $notificationCompletedHookCount + $projectNotificationStopHookCount
+    $effectiveCompletedNotificationHookCount = [int]$completionNotificationConfigured + $notificationCompletedHookCount + $projectNotificationStopHookCount
     $legacyCrlfHookCount += $projectLegacyCrlfHookCount
     if ((-not $transitionPending -and $legacyCompletedNotificationHookCount -ne 0) -or ($transitionPending -and [int]$projectCounts.LegacyNotificationStop -ne 0) -or $projectLegacyCrlfHookCount -ne 0 -or $legacyTokenHookCount -ne 0) {
         throw "仍包含受管理的舊 Hook：LegacyCompletedNotification=$legacyCompletedNotificationHookCount LegacyCrlf=$legacyCrlfHookCount LegacyToken=$legacyTokenHookCount"
@@ -383,6 +385,7 @@ function Assert-GlobalLineEndingHook([ValidateSet('Git', 'CVS')][string]$Develop
         ProjectNotificationStopHookCount = $projectNotificationStopHookCount
         GlobalCompletedNotificationHookCount = $notificationCompletedHookCount
         NotificationCommandConfigured = [bool]$notificationCommandConfigured
+        ExternalNotificationCommandPreserved = [bool]$notificationLifecycle.ExternalNotifyCoexistence
         ProjectCompletedNotificationHookCount = $projectNotificationStopHookCount
         LegacyCompletedNotificationHookCount = $legacyCompletedNotificationHookCount
         StandaloneTokenUsageHookCount = $legacyTokenHookCount
