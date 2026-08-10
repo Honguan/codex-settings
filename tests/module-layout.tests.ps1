@@ -35,7 +35,6 @@ $expectedFiles = @(
     'installation\serena.ps1',
     'installation\target-installer.ps1',
     'integrations\ccusage-state.ps1',
-    'integrations\context7.ps1',
     'integrations\external-state-recovery.ps1',
     'integrations\install-usage-tools.ps1'
 )
@@ -84,9 +83,6 @@ foreach ($commandName in @(
     'New-HookHandlerDescriptor',
     'Read-CodexSettingsState',
     'Write-CodexSettingsState',
-    'Set-Context7EnvironmentState',
-    'Get-Context7McpTransportState',
-    'Merge-Context7McpTemplate',
     'Save-InstallationManifest',
     'Invoke-Installer'
 )) {
@@ -101,7 +97,7 @@ foreach ($optionalImplementation in @('Invoke-PonytailCodexCommand', 'Invoke-Cod
     }
 }
 
-foreach ($obsoleteCommand in @('Resolve-GlobalTargets', 'Install-Target', 'Set-Context7Key', 'Write-Manifest', 'New-InstallProgress')) {
+foreach ($obsoleteCommand in @('Resolve-GlobalTargets', 'Install-Target', 'Write-Manifest', 'New-InstallProgress')) {
     if (Get-Command $obsoleteCommand -CommandType Function -ErrorAction SilentlyContinue) {
         throw "仍載入舊安裝函式：$obsoleteCommand"
     }

@@ -9,7 +9,7 @@ Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 - 安裝或更新全域 `AGENTS.md`、`config.toml` 與權限規則。
 - 可選安裝全域 Windows 通知 Hook，提示任務完成、等待權限與等待回答；完成通知整合本輪 Token 用量。
 - 在全域安裝流程選擇 Git 或 CVS，合併對應的全域 AGENTS 與 Rules。
-- 安裝 Context7、Playwright MCP 設定。
+- 安裝 Playwright MCP 設定。
 - 安裝或更新 `ccusage`，並新增或更新 `ccsessions`（Session 用量）與 `cdaily`（每日用量）指令。
 - 選用 `request-execution-optimizer` 與 `mattpocock/skills`。
 - 安全合併既有設定，並提供交易備份、中斷回復、備份、還原及移除。
@@ -70,9 +70,6 @@ Codex-Orchestration 是預設不安裝的選用 plugin。只有選擇安裝後�
 常用參數：
 
 ```powershell
-# 不詢問 Context7 API Key
-.\Install.cmd -Mode Global -SkipContext7Key
-
 # ccusage 已安裝時只更新 ccsessions、cdaily 指令
 .\Install.cmd -Mode Global -SkipCcusageInstall
 
@@ -168,7 +165,7 @@ npx --yes skills@latest add mattpocock/skills -g -a codex -y --skill setup-matt-
 .\Install.cmd -Mode Uninstall
 ```
 
-手動備份預設位於 `%LOCALAPPDATA%\CodexSettingsBackup`。Context7 Key 只記錄是否存在，不會把明文密鑰寫入備份或儲存庫。
+手動備份預設位於 `%LOCALAPPDATA%\CodexSettingsBackup`。
 
 ## ccusage、ccsessions、cdaily
 
@@ -275,6 +272,6 @@ tools\
 └─ plan-release.ps1
 ```
 
-`install.ps1` 只負責參數解析與啟動 runner；context 集中解析安裝選項與路徑，runner 負責流程與回復，state 負責 Context7 與 manifest。`load-core.ps1`、`load-operations.ps1` 與 `load-installation.ps1` 集中定義模組載入順序；Ponytail、Codex-Orchestration 與 Serena 只在明確選用後載入實作，略過時不執行其 discovery 或 CLI。核心檔案不依賴外部套件，安裝層也不直接實作原子寫入與交易回復。
+`install.ps1` 只負責參數解析與啟動 runner；context 集中解析安裝選項與路徑，runner 負責流程與回復，state 負責 manifest。`load-core.ps1`、`load-operations.ps1` 與 `load-installation.ps1` 集中定義模組載入順序；Ponytail、Codex-Orchestration 與 Serena 只在明確選用後載入實作，略過時不執行其 discovery 或 CLI。核心檔案不依賴外部套件，安裝層也不直接實作原子寫入與交易回復。
 
 推送符合 `v主版.次版.修訂版` 的 Git tag 時，GitHub Actions 會建立同名 Release 附件。

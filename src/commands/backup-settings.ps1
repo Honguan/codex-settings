@@ -88,11 +88,6 @@ if ($Mode -eq 'Global') {
             Installed = [bool]$ccusage.Installed
             Version = [string]$ccusage.Version
         }
-        Context7 = [ordered]@{
-            EnvironmentVariable = 'CONTEXT7_API_KEY'
-            KeyPresent = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable('CONTEXT7_API_KEY', 'User'))
-            SecretBackedUp = $false
-        }
     }
 }
 
@@ -102,6 +97,3 @@ Write-JsonFileAtomic -Path (Join-Path $backupRoot 'backup-meta.json') -Value $me
 Write-Host ''
 Write-Host "已備份項目：$itemCount"
 Write-Host "備份位置：$backupRoot"
-if ($null -ne $metadata.Global -and $metadata.Global.Context7.KeyPresent) {
-    Write-Host 'Context7 Key：已偵測到，但手動備份不會複製。'
-}

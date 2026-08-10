@@ -68,7 +68,7 @@ function Invoke-TargetInstallation($Target, $Transaction, [switch]$Force, $Previ
                 }
                 'managed-toml' {
                     $configBase = Remove-ManagedBlock -Content $existing -StartMarker '# >>> CODEX-SETTINGS: >>>' -EndMarker '# <<< CODEX-SETTINGS: <<<'
-                    Merge-Context7McpTemplate $configBase $template $strategy.Start $strategy.End $state.NewLine
+                    Merge-ManagedBlock $configBase $template $strategy.Start $strategy.End $state.NewLine
                 }
                 'managed-hooks' {
                     $withoutLineEndingHooks = Remove-ManagedLineEndingHooksJson -Content $existing

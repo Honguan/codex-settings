@@ -37,11 +37,11 @@ try {
         throw 'Installer completion message did not require restarting existing Codex sessions before testing Hooks.'
     }
     if ($installationSource -notmatch 'config\.toml／MCP 與 Hook 可能由既有程序快取' -or $installationSource -notmatch '在舊 App 中建立新對話仍可能沿用修復前設定') {
-        throw 'Installer completion message did not explain that Context7/MCP repairs require a full process restart.'
+        throw 'Installer completion message did not explain that MCP repairs require a full process restart.'
     }
     $readmeSource = Get-Content -LiteralPath (Join-Path $repositoryRoot 'README.md') -Raw
     if ($readmeSource -notmatch 'config\.toml／MCP 與 Hook 可能由既有程序快取' -or $readmeSource -notmatch '在舊 App 中建立新對話仍可能沿用修復前設定') {
-        throw 'README restart guidance did not cover cached Context7/MCP configuration.'
+        throw 'README restart guidance did not cover cached MCP configuration.'
     }
 
     if ((Get-DefaultDevelopmentEnvironment -Root $globalRoot) -ne 'Git') { throw 'First installation must default to Git.' }

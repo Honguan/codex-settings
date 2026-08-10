@@ -2,7 +2,6 @@ function New-InstallationProgressSteps {
     [CmdletBinding()]
     param(
         [int]$TargetCount = 1,
-        [switch]$IncludeContext7,
         [switch]$IncludeSkills,
         [switch]$IncludePonytail,
         [switch]$IncludeCodexOrchestration,
@@ -22,7 +21,6 @@ function New-InstallationProgressSteps {
     & $addStep 'Targets' '安裝/合併目標檔案' 'Personal' 'CodexSettings'
     $steps[$steps.Count - 1] | Add-Member -NotePropertyName TargetCount -NotePropertyValue $TargetCount
     & $addStep 'Hooks' 'Hook 去重與信任驗證' 'Personal' 'CodexSettings'
-    if ($IncludeContext7) { & $addStep 'Context7' 'Context7 設定' 'Personal' 'CodexSettings' }
     & $addStep 'PersonalCheckpoint' '個人設定 checkpoint' 'Personal' 'CodexSettings'
     if ($IncludeNotifications) { & $addStep 'Notifications' 'Windows 開發狀態與使用量通知' 'Community' 'WindowsUsageNotifications' }
     if ($IncludeSkills) { & $addStep 'Skills' '選用 Skills' 'Community' 'MattPocockSkills' }
@@ -198,7 +196,6 @@ function Protect-InstallLogText {
 
     $text = [string]$Value
     if ([string]::IsNullOrEmpty($text)) { return '' }
-    $text = [regex]::Replace($text, '(?i)(CONTEXT7_API_KEY\s*[=:]\s*)[^\s;]+', '$1<REDACTED>')
     $text = [regex]::Replace($text, '(?i)\b(Bearer\s+)[A-Za-z0-9._~+/=-]+', '$1<REDACTED>')
     $text = [regex]::Replace($text, '(?i)((?:token|credential|api[_ -]?key)\s*[=:]\s*)[^\s;]+', '$1<REDACTED>')
     return ($text -replace '\r?\n', ' | ')
@@ -483,7 +480,6 @@ function Write-InstallationPlan {
         [switch]$EnableDefaultModeRequestUserInput,
         [ValidateSet('Install', 'KeepCurrent', 'Update', 'Repair', 'Uninstall', 'SkipNotInstalled', 'LeaveUnchanged', 'Blocked')][string]$LongRunningAsyncWaitAction = 'Install',
         [hashtable]$OptionalComponentActions = @{},
-        [switch]$SkipContext7Key,
         [AllowNull()]$SerenaDashboard = $null
     )
 
@@ -491,7 +487,7 @@ function Write-InstallationPlan {
     Write-InstallLog -Progress $Progress -Message ("PLAN environment={0}; style={1}; notifications={2}; targets={3}; skills={4}; defaultModeRequestUserInput={5}; longRunningAsyncWait={6}" -f $Context.DevelopmentEnvironment, $Context.InstallStyle, $Context.InstallWindowsNotifications, $Targets.Count, ($InstallRequestExecutionOptimizer -or $InstallMattPocockSkills), $EnableDefaultModeRequestUserInput, $LongRunningAsyncWaitAction)
     Write-InstallLog -Progress $Progress -Message "PLAN Other Settings; Long-running async wait policy=$LongRunningAsyncWaitAction"
     if ($OptionalComponentActions.Count -gt 0) { Write-InstallLog -Progress $Progress -Message ("PLAN optionalLifecycle=" + (@($OptionalComponentActions.Keys | Sort-Object | ForEach-Object { "$_=$($OptionalComponentActions[$_])" }) -join ';')) }
-    Write-InstallLog -Progress $Progress -Message ("PLAN targetRoots={0}; ccusage={1}; context7={2}" -f ((@($Targets | ForEach-Object { $_.Root }) -join ',')), $ccusageStatus, $(if ($SkipContext7Key) { 'skipped-by-user' } else { 'configure-or-existing' }))
+    Write-InstallLog -Progress $Progress -Message ("PLAN targetRoots={0}; ccusage={1}" -f ((@($Targets | ForEach-Object { $_.Root }) -join ',')), $ccusageStatus)
     if ($null -ne $SerenaDashboard -and [bool]$SerenaDashboard.Selected) {
         $dashboardAction = switch ([string]$SerenaDashboard.DashboardConfigStatus) { 'Disabled' { 'Already configured' }; 'Invalid' { 'ConfigurationConflict' }; default { 'Configure: disable viewer' } }
         Write-InstallLog -Progress $Progress -Message "PLAN Serena=selected; Serena Dashboard=$dashboardAction"

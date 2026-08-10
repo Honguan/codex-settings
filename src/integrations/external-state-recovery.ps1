@@ -6,20 +6,6 @@ function Restore-ExternalTransactionState {
         Restore-CcusageState -State $Metadata.CcusageBefore
     }
 
-    if ($Metadata.PSObject.Properties.Name -contains 'Context7Before' -and $null -ne $Metadata.Context7Before) {
-        if ([bool]$Metadata.Context7Before.WasPresent) {
-            $value = Unprotect-LocalSecret -ProtectedValue ([string]$Metadata.Context7Before.ProtectedValue)
-            [Environment]::SetEnvironmentVariable('CONTEXT7_API_KEY', $value, 'User')
-            [Environment]::SetEnvironmentVariable('CONTEXT7_API_KEY', $value, 'Process')
-        } else {
-            [Environment]::SetEnvironmentVariable('CONTEXT7_API_KEY', $null, 'User')
-            [Environment]::SetEnvironmentVariable('CONTEXT7_API_KEY', $null, 'Process')
-        }
-    } elseif (($Metadata.PSObject.Properties.Name -contains 'Context7InstallerMayCreate') -and [bool]$Metadata.Context7InstallerMayCreate -and
-        (-not [bool]$Metadata.Context7KeyWasPresent)) {
-        [Environment]::SetEnvironmentVariable('CONTEXT7_API_KEY', $null, 'User')
-        [Environment]::SetEnvironmentVariable('CONTEXT7_API_KEY', $null, 'Process')
-    }
 }
 
 function Repair-PendingTransactions {

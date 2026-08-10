@@ -116,10 +116,6 @@ try {
         }
 
         if ($null -ne $metadata.Global.Ccusage) { Restore-CcusageState -State $metadata.Global.Ccusage }
-        if ($null -ne $metadata.Global.Context7 -and [bool]$metadata.Global.Context7.KeyPresent -and
-            [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable('CONTEXT7_API_KEY', 'User'))) {
-            [void]$warnings.Add('手動備份偵測到 Context7 Key，但未複製。請手動重新設定 CONTEXT7_API_KEY。')
-        }
     }
 
     Write-Host ''

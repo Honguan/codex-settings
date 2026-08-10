@@ -35,12 +35,12 @@ $root = Join-Path ([IO.Path]::GetTempPath()) ('codex-settings-workflow-policy-' 
 try {
     $unchangedFile = New-InstallFileResult -Path 'config.toml' -RelativePath 'config.toml' -Status Unchanged
     $existingResult = New-InstallationResult -Mode Global -Root $root -Files @($unchangedFile) -Previous ([pscustomobject]@{ Version = 5 }) -HookChanged $false
-    $discovery = [pscustomobject]@{ context7UserPresent = $true; usageTools = [pscustomobject]@{ profileCurrent = $true } }
+    $discovery = [pscustomobject]@{ usageTools = [pscustomobject]@{ profileCurrent = $true } }
     $fastPlan = New-InstallationChangePlan -Discovery $discovery -Results @($existingResult) -CcusageBefore ([pscustomobject]@{ Installed = $true; Version = '1.0.0' })
     if ($fastPlan.validationLevel -ne 'Fast' -or $fastPlan.runHookTrust -or $fastPlan.runNotificationTest -or $fastPlan.usageToolsChanged) { throw 'Unchanged install was not reduced to the fast workflow.' }
     if (Test-CodexWorkflowDecision -Plan $fastPlan -Operation HookTrust) { throw 'Fast workflow incorrectly enabled Hook trust.' }
 
-    $serenaDiscovery = [pscustomobject]@{ context7UserPresent = $true; usageTools = [pscustomobject]@{ profileCurrent = $true }; serenaDashboard = [pscustomobject]@{ Selected = $true; DashboardConfigStatus = 'Enabled'; NeedsChange = $true } }
+    $serenaDiscovery = [pscustomobject]@{ usageTools = [pscustomobject]@{ profileCurrent = $true }; serenaDashboard = [pscustomobject]@{ Selected = $true; DashboardConfigStatus = 'Enabled'; NeedsChange = $true } }
     $serenaPlan = New-InstallationChangePlan -Discovery $serenaDiscovery -Results @($existingResult) -CcusageBefore ([pscustomobject]@{ Installed = $true; Version = '1.0.0' })
     if ($serenaPlan.validationLevel -ne 'ChangedOnly' -or -not $serenaPlan.externalConfigurationChanged -or $serenaPlan.serenaDashboard.action -ne 'ConfigureDoNotAutoOpen') { throw 'Current Serena package did not expose the required Dashboard ChangePlan item.' }
     $serenaDiscovery.serenaDashboard.DashboardConfigStatus = 'Disabled'

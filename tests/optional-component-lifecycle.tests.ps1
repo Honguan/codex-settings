@@ -51,7 +51,7 @@ try {
 } finally { if (Test-Path $testRoot) { Remove-Item -LiteralPath $testRoot -Recurse -Force } }
 
 $manifest = New-InstallationOwnershipManifest
-foreach ($component in @($manifest.personal.context7, $manifest.personal.requestExecutionOptimizer, $manifest.personal.requestUserInput, $manifest.otherSettings.longRunningAsyncWait, $manifest.community.windowsUsageNotifications, $manifest.community.mattpocockSkills, $manifest.community.ponytail, $manifest.community.codexOrchestration, $manifest.community.serena)) {
+foreach ($component in @($manifest.personal.requestExecutionOptimizer, $manifest.personal.requestUserInput, $manifest.otherSettings.longRunningAsyncWait, $manifest.community.windowsUsageNotifications, $manifest.community.mattpocockSkills, $manifest.community.ponytail, $manifest.community.codexOrchestration, $manifest.community.serena)) {
     foreach ($field in @('Action', 'DiscoveredState')) { if (-not $component.Contains($field)) { throw "Manifest component is missing $field." } }
 }
 

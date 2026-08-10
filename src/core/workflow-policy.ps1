@@ -16,7 +16,6 @@ function New-InstallationChangePlan {
         [bool]$ForceValidation = $false,
         [bool]$Force = $false,
         [bool]$ForceNotificationTest = $false,
-        [bool]$SkipContext7Key = $false,
         [bool]$InstallMattPocockSkills = $false,
         [bool]$SkipPackageInstall = $false
     )
@@ -30,7 +29,6 @@ function New-InstallationChangePlan {
     $packageInstalled = $null -ne $CcusageBefore -and [bool]$CcusageBefore.Installed
     $usageToolsChanged = (-not $packageInstalled -and -not $SkipPackageInstall) -or -not $profileCurrent
     $externalPackageChanged = (-not $packageInstalled -and -not $SkipPackageInstall)
-    $context7Present = $null -ne $Discovery -and [bool]$Discovery.context7UserPresent
     $fullValidation = $Force -or $ForceValidation -or $previousMissing
     $validationLevel = if ($fullValidation) { 'Full' } elseif ($changedPaths.Count -eq 0 -and -not $usageToolsChanged) { 'Fast' } else { 'ChangedOnly' }
     $targetChanged = @($Results | Where-Object { $_.Summary.Created -gt 0 -or $_.Summary.Updated -gt 0 }).Count -gt 0
@@ -39,7 +37,6 @@ function New-InstallationChangePlan {
     $runConfigValidation = $fullValidation -or $configChanged
     $runUsageRuntimeValidation = $fullValidation -or $externalPackageChanged
     $runNotificationTest = $ForceNotificationTest -or $hooksChanged
-    $runContext7 = -not $SkipContext7Key -and (-not $context7Present -or $fullValidation)
     $runSkills = [bool]$InstallMattPocockSkills
     $serenaSelected = $null -ne $Discovery -and $null -ne $Discovery.serenaDashboard -and [bool]$Discovery.serenaDashboard.Selected
     $serenaDashboardChanged = $serenaSelected -and [bool]$Discovery.serenaDashboard.NeedsChange
@@ -63,7 +60,6 @@ function New-InstallationChangePlan {
         profileChanged = $usageToolsChanged
         usageToolsChanged = $usageToolsChanged
         notificationsChanged = $hooksChanged
-        environmentChanged = $runContext7
         skillsChanged = $runSkills
         externalPackagesChanged = $externalPackageChanged
         externalConfigurationChanged = $serenaDashboardChanged
@@ -74,7 +70,6 @@ function New-InstallationChangePlan {
         runConfigValidation = $runConfigValidation
         runUsageRuntimeValidation = $runUsageRuntimeValidation
         runNotificationTest = $runNotificationTest
-        runContext7 = $runContext7
         runSkills = $runSkills
         critical = @('ownership-conflict', 'transaction-rollback', 'changed-file-integrity')
         conditional = @('hook-trust', 'hook-validation', 'config-validation', 'usage-runtime-validation', 'notification-test', 'external-package-resolution')
@@ -87,7 +82,7 @@ function Test-CodexWorkflowDecision {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]$Plan,
-        [Parameter(Mandatory = $true)][ValidateSet('HookTrust', 'HookValidation', 'ConfigValidation', 'UsageRuntimeValidation', 'NotificationTest', 'Context7', 'Skills')][string]$Operation
+        [Parameter(Mandatory = $true)][ValidateSet('HookTrust', 'HookValidation', 'ConfigValidation', 'UsageRuntimeValidation', 'NotificationTest', 'Skills')][string]$Operation
     )
 
     $property = switch ($Operation) {
@@ -96,7 +91,6 @@ function Test-CodexWorkflowDecision {
         'ConfigValidation' { 'runConfigValidation' }
         'UsageRuntimeValidation' { 'runUsageRuntimeValidation' }
         'NotificationTest' { 'runNotificationTest' }
-        'Context7' { 'runContext7' }
         'Skills' { 'runSkills' }
     }
     return $null -ne $Plan -and $null -ne $Plan.PSObject.Properties[$property] -and [bool]$Plan.$property
