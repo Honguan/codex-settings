@@ -63,6 +63,13 @@ function Test-CodexVerifiedReadOnlyCommand {
 
     if ($null -eq $InputObject) { return $false }
     $command = ([string]$InputObject.tool_input.command).Trim()
+    $wrappedToolCalls = @([regex]::Matches($command, '(?s)\btools\.(?<name>[A-Za-z0-9_]+)\s*\('))
+    if ($wrappedToolCalls.Count -gt 0) {
+        if ($wrappedToolCalls.Count -ne 1 -or $wrappedToolCalls[0].Groups['name'].Value -ne 'shell_command') { return $false }
+        $wrappedCommand = [regex]::Match($command, '(?s)\btools\.shell_command\s*\(\s*\{.*?\bcommand\s*:\s*(?<json>"(?:\\.|[^"\\])*")')
+        if (-not $wrappedCommand.Success) { return $false }
+        try { $command = ([string]($wrappedCommand.Groups['json'].Value | ConvertFrom-Json -ErrorAction Stop)).Trim() } catch { return $false }
+    }
     if ([string]::IsNullOrWhiteSpace($command) -or $command -match '[\r\n;|&<>`]' -or $command -match '\$[({]' -or $command -match '(?i)(?:--pre\b|Invoke-Expression|Start-Process|powershell(?:\.exe)?|pwsh(?:\.exe)?|cmd(?:\.exe)?|bash|sh)') { return $false }
     return $command -match '^(?:(?:Get-Content|Get-ChildItem|Get-Item|Test-Path|Resolve-Path|Select-String|rg|ripgrep|php\s+-l|cvs\s+(?:status|diff)|git\s+(?:status|diff|log|show|ls-files))(?:\s|$))'
 }
