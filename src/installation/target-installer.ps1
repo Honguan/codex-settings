@@ -136,7 +136,7 @@ function Invoke-TargetInstallation($Target, $Transaction, [switch]$Force, $Previ
 
     if ($Target.Mode -eq 'Global') {
         $notificationsExpected = if ([bool]$Target.ManageWindowsNotifications) { [bool]$Target.InstallWindowsNotifications } else { Test-WindowsNotificationsInstalled -Root $Target.Root }
-        Assert-GlobalLineEndingHook -DevelopmentEnvironment $Target.DevelopmentEnvironment -Root $Target.Root -InstallWindowsNotifications $notificationsExpected -ProjectRoot $projectRoot -ManagedNotificationFingerprints $managedNotificationFingerprints -ManagedTokenFingerprints $managedTokenFingerprints | Out-Null
+        Assert-GlobalLineEndingHook -DevelopmentEnvironment $Target.DevelopmentEnvironment -Root $Target.Root -InstallWindowsNotifications $notificationsExpected -ProjectRoot $projectRoot -ManagedNotificationFingerprints $managedNotificationFingerprints -ManagedTokenFingerprints $managedTokenFingerprints -ValidationPhase PreCommunity -PlannedNotificationAction ([string]$Target.WindowsNotificationAction) | Out-Null
     }
 
     $hookPathsChanged = @($entries | Where-Object { $_.Changed -and ([string]$_.Path -eq 'hooks.json' -or [string]$_.Path -like 'hooks\*') }).Count -gt 0

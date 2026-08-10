@@ -1,10 +1,10 @@
-$script:OptionalComponentStates = @('NotInstalled', 'InstalledCurrent', 'InstalledUpdateAvailable', 'InstalledNeedsRepair', 'Conflict', 'Unknown')
+$script:OptionalComponentStates = @('NotInstalled', 'InstalledCurrent', 'InstalledUpdateAvailable', 'InstalledNeedsMigration', 'InstalledNeedsRepair', 'Conflict', 'Unknown')
 $script:OptionalComponentActions = @('Install', 'CheckUpdate', 'KeepCurrent', 'Update', 'Repair', 'Uninstall', 'SkipNotInstalled', 'LeaveUnchanged', 'Blocked')
 
 function Resolve-OptionalComponentAction {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory = $true)][ValidateSet('NotInstalled', 'InstalledCurrent', 'InstalledUpdateAvailable', 'InstalledNeedsRepair', 'Conflict', 'Unknown')][string]$State,
+        [Parameter(Mandatory = $true)][ValidateSet('NotInstalled', 'InstalledCurrent', 'InstalledUpdateAvailable', 'InstalledNeedsMigration', 'InstalledNeedsRepair', 'Conflict', 'Unknown')][string]$State,
         [ValidateSet('Default', 'Yes', 'No', 'LeaveUnchanged')][string]$Selection = 'Default'
     )
 
@@ -15,6 +15,7 @@ function Resolve-OptionalComponentAction {
         'NotInstalled' { 'Install' }
         'InstalledCurrent' { 'KeepCurrent' }
         'InstalledUpdateAvailable' { 'Update' }
+        'InstalledNeedsMigration' { 'Update' }
         'InstalledNeedsRepair' { 'Repair' }
     })
 }

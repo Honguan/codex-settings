@@ -32,9 +32,26 @@ function Merge-WindowsNotificationCommandConfig([string]$Content, [string]$Root,
 }
 
 function Test-WindowsNotificationCommandConfig([string]$Content, [string]$Root) {
-    if ([string]::IsNullOrWhiteSpace($Content)) { return $false }
-    $expected = Get-WindowsNotificationCommandConfig -Root $Root
-    return $Content.Contains($script:WindowsNotificationConfigStartMarker) -and $Content.Contains($script:WindowsNotificationConfigEndMarker) -and $Content.Contains($expected)
+    return (Get-WindowsNotificationCommandConfigState -Content $Content -Root $Root) -eq 'CurrentManagedBlock'
+}
+
+function Get-WindowsNotificationCommandConfigState([string]$Content, [string]$Root) {
+    $startCount = [regex]::Matches($Content, '(?m)^\s*' + [regex]::Escape($script:WindowsNotificationConfigStartMarker) + '\s*$').Count
+    $endCount = [regex]::Matches($Content, '(?m)^\s*' + [regex]::Escape($script:WindowsNotificationConfigEndMarker) + '\s*$').Count
+    try { $shape = Get-TomlShape -Content $Content } catch { return 'MalformedManagedBlock' }
+    if ($startCount -eq 0 -and $endCount -eq 0) { return $(if ($shape.TopLevelKeys.Contains('notify')) { 'UnmanagedNotifyConflict' } else { 'MissingManagedBlock' }) }
+    if ($startCount -ne 1 -or $endCount -ne 1) { return 'MalformedManagedBlock' }
+    $pattern = '(?ms)^\s*' + [regex]::Escape($script:WindowsNotificationConfigStartMarker) + '\s*\r?\n(?<block>.*?)^\s*' + [regex]::Escape($script:WindowsNotificationConfigEndMarker) + '\s*$'
+    $managed = [regex]::Match($Content, $pattern)
+    if (-not $managed.Success) { return 'MalformedManagedBlock' }
+    try { $baseShape = Get-TomlShape -Content (Remove-WindowsNotificationCommandConfig -Content $Content) } catch { return 'MalformedManagedBlock' }
+    if ($baseShape.TopLevelKeys.Contains('notify')) { return 'UnmanagedNotifyConflict' }
+    $notify = [regex]::Match($managed.Groups['block'].Value, '(?m)^\s*notify\s*=\s*\[(?<items>[^\r\n]*)\]\s*$')
+    if (-not $notify.Success) { return $(if ($managed.Groups['block'].Value -match '(?m)^\s*notify\s*=') { 'MalformedManagedBlock' } else { 'OutdatedManagedBlock' }) }
+    $actual = @([regex]::Matches($notify.Groups['items'].Value, '"(?:\\.|[^"\\])*"') | ForEach-Object Value)
+    $expected = [regex]::Match((Get-WindowsNotificationCommandConfig -Root $Root), '\[(?<items>.*)\]')
+    $expectedItems = @([regex]::Matches($expected.Groups['items'].Value, '"(?:\\.|[^"\\])*"') | ForEach-Object Value)
+    return $(if ($actual.Count -eq $expectedItems.Count -and ($actual -join "`0") -ceq ($expectedItems -join "`0")) { 'CurrentManagedBlock' } else { 'OutdatedManagedBlock' })
 }
 
 function Get-HookEntryText {
