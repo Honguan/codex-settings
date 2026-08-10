@@ -97,6 +97,14 @@ try {
     Assert-Bytes 'mixed.txt' ([Text.Encoding]::ASCII.GetBytes("before`r`nmiddle`r`nend`r`n"))
     Write-TestBytes 'mixed.txt' ([Text.Encoding]::ASCII.GetBytes("before`r`nmiddle`r`nend`n"))
 
+    $wrappedReadOnlySession = 'wrapped-read-only'
+    $wrappedReadOnlyCommand = 'const r = await tools.shell_command({command:"cvs status -- example\\getOmRafflePrizes.php",workdir:"E:\\CVS\\Project"}); text(r);'
+    $wrappedReadOnlyInput = New-HookInput -EventName PreToolUse -SessionId $wrappedReadOnlySession -ToolName exec -Command $wrappedReadOnlyCommand
+    Invoke-Hook -Mode Track -SessionId $wrappedReadOnlySession -InputText $wrappedReadOnlyInput | Out-Null
+    if (Test-Path -LiteralPath (Get-StatePath -SessionId $wrappedReadOnlySession)) { throw 'functions.exec 包裝的只讀命令仍建立換行狀態。' }
+    $wrappedReadOnlyDiagnostic = Get-Content -LiteralPath (Join-Path $diagnosticRoot ($wrappedReadOnlySession + '.log')) -Tail 1 | ConvertFrom-Json
+    if ($wrappedReadOnlyDiagnostic.result -ne 'skipped' -or $wrappedReadOnlyDiagnostic.impactClassification -ne 'ReadOnly' -or $wrappedReadOnlyDiagnostic.stateFileCountChecked -ne 0) { throw 'functions.exec 包裝的只讀命令未走零狀態 I/O fast path。' }
+
     $sessionA = 'session-A'
     $execCommand = 'const patch = getPatch(); text(await tools.apply_patch(patch));'
     $trackInput = New-HookInput -EventName PreToolUse -SessionId $sessionA -ToolName exec -Command $execCommand
