@@ -104,6 +104,20 @@ try {
     Assert-State TrueUnmanagedConflict | Out-Null
 
     Reset-NotificationFixture
+    $coexistenceHooks = Get-TemplateHooks
+    $coexistenceHooks.hooks | Add-Member -NotePropertyName Stop -NotePropertyValue @([pscustomobject]@{ matcher = '*'; hooks = @([pscustomobject]@{ type = 'command'; command = 'pwsh -File "$HOME/.codex/hooks/show-codex-notification.ps1" -Type Completed'; timeout = 15 }) }) -Force
+    $externalNotify = 'notify = ["node.exe", "C:\third-party\notify.cjs"]' + "`n"
+    Set-NotificationFixture -Config $externalNotify -Hooks $coexistenceHooks -Script -Manifest
+    Assert-State InstalledNeedsMigration | Out-Null
+    $coexistenceTransaction = New-FileTransaction -Root (Join-Path $testRoot 'coexistence-transaction') -Mode Repair
+    Invoke-WindowsUsageNotificationFiles -Root $root -SourceRoot $script:ScriptRoot -Transaction $coexistenceTransaction | Out-Null
+    Assert-State InstalledCurrent | Out-Null
+    if ([IO.File]::ReadAllText((Join-Path $root 'config.toml')) -ne $externalNotify) { throw 'External top-level notify was not preserved exactly.' }
+    Assert-GlobalLineEndingHook -DevelopmentEnvironment Git -Root $root -InstallWindowsNotifications $true -ProjectRoot '' | Out-Null
+    $coexistenceSecondTransaction = New-FileTransaction -Root (Join-Path $testRoot 'coexistence-idempotent-transaction') -Mode Repair
+    if ((Invoke-WindowsUsageNotificationFiles -Root $root -SourceRoot $script:ScriptRoot -Transaction $coexistenceSecondTransaction).Changed) { throw 'Repeated coexistence repair was not idempotent.' }
+
+    Reset-NotificationFixture
     Set-NotificationFixture -Config ((Get-CurrentConfig) + "`nnotify = [`"third-party-notifier.exe`"]`n") -Hooks (Get-TemplateHooks) -Script
     Assert-State TrueUnmanagedConflict | Out-Null
 
