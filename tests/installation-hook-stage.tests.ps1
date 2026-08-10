@@ -75,6 +75,42 @@ try {
         'HOOKS subOperation=InstallationResultValidation'
     )
 
+    $globalRoot = Join-Path $HOME '.codex'
+    $configPath = Join-Path $globalRoot 'config.toml'
+    $legacyConfig = [regex]::Replace([IO.File]::ReadAllText($configPath), '(?ms)^# >>> CODEX-SETTINGS:WINDOWS-NOTIFICATIONS:CONFIG >>>.*?^# <<< CODEX-SETTINGS:WINDOWS-NOTIFICATIONS:CONFIG <<<\r?\n?', '').TrimEnd() + "`r`nuser_setting = true`r`n"
+    [IO.File]::WriteAllText($configPath, $legacyConfig, [Text.UTF8Encoding]::new($false))
+    $hooksPath = Join-Path $globalRoot 'hooks.json'
+    $legacyHooks = Get-Content -LiteralPath $hooksPath -Raw | ConvertFrom-Json
+    $legacyHooks.hooks | Add-Member -NotePropertyName Stop -NotePropertyValue @([pscustomobject]@{ matcher = '*'; hooks = @(
+        [pscustomobject]@{ type = 'command'; command = 'pwsh -File "$HOME/.codex/hooks/show-codex-notification.ps1" -Type Completed'; timeout = 15 },
+        [pscustomobject]@{ type = 'command'; command = 'custom-stop.ps1'; timeout = 15 }
+    ) }) -Force
+    [IO.File]::WriteAllText($hooksPath, ($legacyHooks | ConvertTo-Json -Depth 20), [Text.UTF8Encoding]::new($false))
+
+    $script:ScriptRoot = Join-Path $repositoryRoot 'src'
+    . (Join-Path $script:ScriptRoot 'load-installation.ps1')
+    $legacyState = Get-WindowsNotificationLifecycleState -Root $globalRoot
+    if ($legacyState.State -ne 'InstalledNeedsMigration' -or (Resolve-OptionalComponentAction -State $legacyState.State) -ne 'Update' -or (Resolve-OptionalComponentAction -State $legacyState.State -Selection No) -ne 'Uninstall') { throw 'Legacy notification state did not resolve to Update/default and Uninstall/No.' }
+    Assert-GlobalLineEndingHook -DevelopmentEnvironment Git -Root $globalRoot -InstallWindowsNotifications $true -ProjectRoot '' -ValidationPhase PreCommunity -PlannedNotificationAction Update | Out-Null
+    Assert-GlobalLineEndingHook -DevelopmentEnvironment Git -Root $globalRoot -InstallWindowsNotifications $true -ProjectRoot '' -ValidationPhase PreCommunity -PlannedNotificationAction Uninstall | Out-Null
+    $strictFailure = try { Assert-GlobalLineEndingHook -DevelopmentEnvironment Git -Root $globalRoot -InstallWindowsNotifications $true -ProjectRoot '' | Out-Null; '' } catch { $_.Exception.Message }
+    if ($strictFailure -notmatch 'notificationLifecycleState=InstalledNeedsMigration' -or $strictFailure -notmatch 'validationPhase=Final' -or $strictFailure -notmatch 'migrationPending=False') { throw 'Legacy notification state passed final validation or omitted migration diagnostics.' }
+    $migrationTransaction = New-FileTransaction -Root (Join-Path $testRoot 'notification-migration-rollback') -Mode NotificationMigration
+    Invoke-WindowsUsageNotificationFiles -Root $globalRoot -SourceRoot $script:ScriptRoot -Transaction $migrationTransaction | Out-Null
+    if ((Get-WindowsNotificationLifecycleState -Root $globalRoot).State -ne 'InstalledCurrent') { throw 'Notification migration did not reach the current schema.' }
+    Undo-FileTransaction -Transaction $migrationTransaction
+    if ((Get-WindowsNotificationLifecycleState -Root $globalRoot).State -ne 'InstalledNeedsMigration') { throw 'Notification migration rollback did not restore the legacy state.' }
+
+    & $installPath -Mode Global -DevelopmentEnvironment Git -InstallStyle Merge -InstallWindowsNotifications $true -SkipContext7Key -SkipCcusageInstall -NoPause
+    $migratedConfig = [IO.File]::ReadAllText($configPath)
+    $migratedHooks = Get-Content -LiteralPath $hooksPath -Raw | ConvertFrom-Json
+    $migratedHandlers = @($migratedHooks.hooks.PSObject.Properties | ForEach-Object { $_.Value } | ForEach-Object { $_.hooks })
+    if ([regex]::Matches($migratedConfig, '(?m)^# >>> CODEX-SETTINGS:WINDOWS-NOTIFICATIONS:CONFIG >>>\s*$').Count -ne 1 -or $migratedConfig -notmatch '(?m)^user_setting = true\s*$') { throw 'Legacy notification migration did not install one managed notify block or preserve unrelated config.' }
+    if (@($migratedHandlers | Where-Object command -match 'show-codex-notification\.ps1.*-Type Completed').Count -ne 0 -or @($migratedHandlers | Where-Object command -match 'show-codex-notification\.ps1.*-Type QuestionRequired').Count -ne 1 -or @($migratedHandlers | Where-Object command -match 'show-codex-notification\.ps1.*-Type PermissionRequired').Count -ne 1 -or @($migratedHandlers | Where-Object command -eq 'custom-stop.ps1').Count -ne 1) { throw 'Legacy notification migration did not preserve one Question/Permission hook or remove only the managed Completed Stop hook.' }
+    $migrationManifest = Get-Content -LiteralPath (Join-Path $globalRoot '.codex-settings-manifest.json') -Raw | ConvertFrom-Json
+    if ($migrationManifest.Community.windowsUsageNotifications.DiscoveredState -ne 'InstalledNeedsMigration' -or $migrationManifest.Community.windowsUsageNotifications.Action -ne 'Update') { throw 'Legacy notification lifecycle state/action were not persisted.' }
+    Assert-LogContains -Log (Get-LatestInstallLog) -Markers @('notificationLifecycleState=InstalledNeedsMigration', 'plannedNotificationAction=Update', 'validationPhase=PreCommunity', 'migrationPending=True', 'STEP END Notifications:')
+
     & $installPath -Mode Global -DevelopmentEnvironment Git -InstallStyle Merge -InstallWindowsNotifications $true -SkipContext7Key -SkipCcusageInstall -NoPause
     Assert-LogContains -Log (Get-LatestInstallLog) -Markers @('STEP END Hooks: Hook 未變更，略過重新 trust', 'STEP END Notifications: 腳本、Hook 與使用量工具未變更', 'STEP END Final: Manifest 與交易驗證通過')
 

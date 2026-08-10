@@ -35,7 +35,7 @@ try {
     }
 
     $target = New-InstallTarget -Id 'contract-target' -Mode Global -Root $testRoot -TemplateRoot $script:ScriptRoot -DevelopmentEnvironment Git -SourceRoot $script:ScriptRoot
-    foreach ($propertyName in @('schemaVersion', 'id', 'mode', 'root', 'templateRoot', 'environmentTemplateRoot', 'developmentEnvironment', 'cwd', 'installWindowsNotifications', 'enableDefaultModeRequestUserInput', 'longRunningAsyncWaitAction')) {
+    foreach ($propertyName in @('schemaVersion', 'id', 'mode', 'root', 'templateRoot', 'environmentTemplateRoot', 'developmentEnvironment', 'cwd', 'installWindowsNotifications', 'windowsNotificationAction', 'enableDefaultModeRequestUserInput', 'longRunningAsyncWaitAction')) {
         if ($target.PSObject.Properties.Name -notcontains $propertyName) { throw "InstallTarget 缺少欄位：$propertyName" }
     }
     if (-not (Test-CodexSettingsContract -InputObject $target -Kind InstallTarget)) { throw 'InstallTarget contract failed.' }
@@ -56,6 +56,18 @@ try {
     if ($null -ne $hooks.hooks.PSObject.Properties['Stop']) { throw 'Completed notification must not use generic Stop.' }
     $notificationConfig = Merge-WindowsNotificationCommandConfig -Content '' -Root 'C:\Users\fixture\.codex'
     if (-not (Test-WindowsNotificationCommandConfig -Content $notificationConfig -Root 'C:\Users\fixture\.codex') -or $notificationConfig -notmatch 'notify\s*=.*Completed') { throw 'Canonical agent-turn-complete notification config is invalid.' }
+    $formattedNotificationConfig = $notificationConfig.Replace('notify = [', 'notify = [ ').Replace(']`r`n', ' ]`r`n')
+    $notificationConfigStates = @(
+        @('', 'MissingManagedBlock'),
+        @($formattedNotificationConfig, 'CurrentManagedBlock'),
+        @(($notificationConfig -replace '"Completed"', '"OldCompleted"'), 'OutdatedManagedBlock'),
+        @(($notificationConfig -replace [regex]::Escape($script:WindowsNotificationConfigEndMarker), ''), 'MalformedManagedBlock'),
+        @('notify = ["custom.exe"]', 'UnmanagedNotifyConflict')
+    )
+    foreach ($case in $notificationConfigStates) {
+        $actual = Get-WindowsNotificationCommandConfigState -Content $case[0] -Root 'C:\Users\fixture\.codex'
+        if ($actual -ne $case[1]) { throw "Notification config state mismatch: expected=$($case[1]) actual=$actual" }
+    }
 
     $runtimeCore = Get-Content -LiteralPath (Join-Path $script:ScriptRoot 'templates\core\hooks\runtime-core.ps1') -Raw
     $notificationSource = Get-Content -LiteralPath (Join-Path $script:ScriptRoot 'templates\core\hooks\show-codex-notification.ps1') -Raw

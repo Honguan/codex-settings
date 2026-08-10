@@ -182,7 +182,7 @@ function Test-WindowsNotificationsInstalled([string]$Root = (Join-Path $HOME '.c
     return $false
 }
 
-function Select-OptionalWindowsNotifications([bool]$AlreadyInstalled = (Test-WindowsNotificationsInstalled)) {
+function Select-OptionalWindowsNotifications([bool]$AlreadyInstalled = (Test-WindowsNotificationsInstalled), [string]$State = '') {
     Write-Host ''
     Write-Host '選用社區功能：Windows 開發狀態與使用量通知'
     Write-Host '此功能會安裝／管理：'
@@ -190,7 +190,8 @@ function Select-OptionalWindowsNotifications([bool]$AlreadyInstalled = (Test-Win
     Write-Host '- 每輪完成後的 Token / Cost 使用量通知'
     Write-Host '- ccusage、ccsessions、cdaily'
     Write-Host '使用量顯示：Session、Model、Input、Output、Think、Cache、Total、Cost、Time'
-    return Select-OptionalComponentAction -Name 'Windows 開發狀態與使用量通知' -State (Get-OptionalComponentState -Installed $AlreadyInstalled)
+    if ([string]::IsNullOrWhiteSpace($State)) { $State = Get-OptionalComponentState -Installed $AlreadyInstalled }
+    return Select-OptionalComponentAction -Name 'Windows 開發狀態與使用量通知' -State $State
 }
 
 function Test-DefaultModeRequestUserInputInstalled([string]$Root = (Join-Path $HOME '.codex')) {

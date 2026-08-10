@@ -242,7 +242,35 @@ function Get-HookConfigurationCounts([string]$HooksPath, [string[]]$Notification
     return [pscustomobject]$counts
 }
 
-function Assert-GlobalLineEndingHook([ValidateSet('Git', 'CVS')][string]$DevelopmentEnvironment, [string]$Root, [bool]$InstallWindowsNotifications, [string]$ProjectRoot, [string[]]$ManagedNotificationFingerprints = @(), [string[]]$ManagedTokenFingerprints = @()) {
+function Get-WindowsNotificationLifecycleState([string]$Root, [string[]]$ManagedNotificationFingerprints = @()) {
+    $hooksPath = Join-Path $Root 'hooks.json'
+    $configPath = Join-Path $Root 'config.toml'
+    $configContent = if (Test-Path -LiteralPath $configPath -PathType Leaf) { [IO.File]::ReadAllText($configPath) } else { '' }
+    $configState = Get-WindowsNotificationCommandConfigState -Content $configContent -Root $Root
+    try { $counts = Get-HookConfigurationCounts -HooksPath $hooksPath -NotificationFingerprints $ManagedNotificationFingerprints } catch {
+        return [pscustomobject]@{ State = 'Unknown'; SchemaVersion = $script:ManagedNotificationVersion; LegacyCompletedStopDetected = $false; ManagedNotifyBlockPresent = $configState -notin @('MissingManagedBlock', 'UnmanagedNotifyConflict'); ManagedNotifyCommandCurrent = $false; ConfigState = $configState; QuestionHookCount = 0; PermissionHookCount = 0; CompletedStopHookCount = 0; NotificationScriptCount = 0 }
+    }
+    $question = [int]$counts.NotificationPreToolUse
+    $permission = [int]$counts.NotificationPermissionRequest
+    $completed = [int]$counts.NotificationStop
+    $scriptCount = if (Test-Path -LiteralPath (Join-Path $Root 'hooks\show-codex-notification.ps1') -PathType Leaf) { 1 } else { 0 }
+    $state = if ($configState -in @('MalformedManagedBlock', 'UnmanagedNotifyConflict') -or $question -gt 1 -or $permission -gt 1 -or $completed -gt 1) {
+        'Conflict'
+    } elseif ($question -eq 0 -and $permission -eq 0 -and $completed -eq 0 -and $scriptCount -eq 0 -and $configState -eq 'MissingManagedBlock') {
+        'NotInstalled'
+    } elseif ($question -eq 1 -and $permission -eq 1 -and $completed -eq 0 -and $scriptCount -eq 1 -and $configState -eq 'CurrentManagedBlock') {
+        'InstalledCurrent'
+    } elseif ($question -eq 1 -and $permission -eq 1 -and $completed -eq 1 -and $scriptCount -eq 1 -and $configState -in @('MissingManagedBlock', 'OutdatedManagedBlock')) {
+        'InstalledNeedsMigration'
+    } elseif ($question -eq 1 -and $permission -eq 1 -and $completed -eq 0 -and $scriptCount -eq 1 -and $configState -eq 'OutdatedManagedBlock') {
+        'InstalledUpdateAvailable'
+    } else {
+        'InstalledNeedsRepair'
+    }
+    return [pscustomobject]@{ State = $state; SchemaVersion = $script:ManagedNotificationVersion; LegacyCompletedStopDetected = $completed -gt 0; ManagedNotifyBlockPresent = $configState -notin @('MissingManagedBlock', 'UnmanagedNotifyConflict'); ManagedNotifyCommandCurrent = $configState -eq 'CurrentManagedBlock'; ConfigState = $configState; QuestionHookCount = $question; PermissionHookCount = $permission; CompletedStopHookCount = $completed; NotificationScriptCount = $scriptCount }
+}
+
+function Assert-GlobalLineEndingHook([ValidateSet('Git', 'CVS')][string]$DevelopmentEnvironment, [string]$Root, [bool]$InstallWindowsNotifications, [string]$ProjectRoot, [string[]]$ManagedNotificationFingerprints = @(), [string[]]$ManagedTokenFingerprints = @(), [ValidateSet('Final', 'PreCommunity')][string]$ValidationPhase = 'Final', [string]$PlannedNotificationAction = 'LeaveUnchanged') {
     $hooksPath = Join-Path $Root 'hooks.json'
     $configPath = Join-Path $Root 'config.toml'
     $configContent = if (Test-Path -LiteralPath $configPath -PathType Leaf) { [IO.File]::ReadAllText($configPath) } else { '' }
@@ -258,8 +286,11 @@ function Assert-GlobalLineEndingHook([ValidateSet('Git', 'CVS')][string]$Develop
     $preserveScriptCount = if (Test-Path -LiteralPath (Join-Path $Root 'hooks\preserve-line-endings.ps1') -PathType Leaf) { 1 } else { 0 }
     $notificationScriptCount = if (Test-Path -LiteralPath (Join-Path $Root 'hooks\show-codex-notification.ps1') -PathType Leaf) { 1 } else { 0 }
     $expectedNotificationCount = if ($InstallWindowsNotifications) { 1 } else { 0 }
-    if ($notificationQuestionHookCount -ne $expectedNotificationCount -or $notificationPermissionHookCount -ne $expectedNotificationCount -or $notificationCompletedHookCount -ne 0 -or [int]$notificationCommandConfigured -ne $expectedNotificationCount -or $notificationScriptCount -ne $expectedNotificationCount) {
-        throw "Windows 通知安裝檢查失敗：Expected=$expectedNotificationCount QuestionHookCount=$notificationQuestionHookCount PermissionHookCount=$notificationPermissionHookCount CompletedStopHookCount=$notificationCompletedHookCount NotificationCommandConfigured=$notificationCommandConfigured NotificationScriptCount=$notificationScriptCount"
+    $notificationLifecycle = Get-WindowsNotificationLifecycleState -Root $Root -ManagedNotificationFingerprints $ManagedNotificationFingerprints
+    $migrationPending = $ValidationPhase -eq 'PreCommunity' -and $PlannedNotificationAction -in @('Update', 'Repair') -and $notificationLifecycle.State -in @('InstalledNeedsMigration', 'InstalledUpdateAvailable', 'InstalledNeedsRepair')
+    $transitionPending = $migrationPending -or ($ValidationPhase -eq 'PreCommunity' -and $PlannedNotificationAction -eq 'Uninstall' -and $notificationLifecycle.State -notin @('NotInstalled', 'Conflict', 'Unknown'))
+    if (-not $transitionPending -and ($notificationQuestionHookCount -ne $expectedNotificationCount -or $notificationPermissionHookCount -ne $expectedNotificationCount -or $notificationCompletedHookCount -ne 0 -or [int]$notificationCommandConfigured -ne $expectedNotificationCount -or $notificationScriptCount -ne $expectedNotificationCount)) {
+        throw "Windows 通知安裝檢查失敗：notificationLifecycleState=$($notificationLifecycle.State) notificationSchemaVersion=$($notificationLifecycle.SchemaVersion) legacyCompletedStopDetected=$($notificationLifecycle.LegacyCompletedStopDetected) managedNotifyBlockPresent=$($notificationLifecycle.ManagedNotifyBlockPresent) managedNotifyCommandCurrent=$($notificationLifecycle.ManagedNotifyCommandCurrent) plannedNotificationAction=$PlannedNotificationAction validationPhase=$ValidationPhase migrationPending=$migrationPending Expected=$expectedNotificationCount QuestionHookCount=$notificationQuestionHookCount PermissionHookCount=$notificationPermissionHookCount CompletedStopHookCount=$notificationCompletedHookCount NotificationCommandConfigured=$notificationCommandConfigured NotificationScriptCount=$notificationScriptCount"
     }
     $projectCounts = [pscustomobject]@{ NotificationStop = 0; LegacyNotificationStop = 0; Token = 0; LineEndingPreToolUse = 0; LineEndingPostToolUse = 0; LineEndingStop = 0; LegacyCrlf = 0 }
     if (-not [string]::IsNullOrWhiteSpace($ProjectRoot)) {
@@ -285,11 +316,11 @@ function Assert-GlobalLineEndingHook([ValidateSet('Git', 'CVS')][string]$Develop
     $legacyCompletedNotificationHookCount = [int]$globalCounts.LegacyNotificationStop + [int]$projectCounts.LegacyNotificationStop
     $effectiveCompletedNotificationHookCount = [int]$notificationCommandConfigured + $notificationCompletedHookCount + $projectNotificationStopHookCount
     $legacyCrlfHookCount += $projectLegacyCrlfHookCount
-    if ($legacyCompletedNotificationHookCount -ne 0 -or $projectLegacyCrlfHookCount -ne 0 -or $legacyTokenHookCount -ne 0) {
+    if ((-not $transitionPending -and $legacyCompletedNotificationHookCount -ne 0) -or ($transitionPending -and [int]$projectCounts.LegacyNotificationStop -ne 0) -or $projectLegacyCrlfHookCount -ne 0 -or $legacyTokenHookCount -ne 0) {
         throw "仍包含受管理的舊 Hook：LegacyCompletedNotification=$legacyCompletedNotificationHookCount LegacyCrlf=$legacyCrlfHookCount LegacyToken=$legacyTokenHookCount"
     }
     $expectedEffectiveNotificationCount = if ($InstallWindowsNotifications) { 1 } else { 0 }
-    if ($effectiveCompletedNotificationHookCount -ne $expectedEffectiveNotificationCount) {
+    if (-not $transitionPending -and $effectiveCompletedNotificationHookCount -ne $expectedEffectiveNotificationCount) {
         throw "有效 Completed 通知 Hook 數量錯誤：Expected=$expectedEffectiveNotificationCount Global=$notificationCompletedHookCount Project=$projectNotificationStopHookCount Effective=$effectiveCompletedNotificationHookCount"
     }
     $projectHasLineEndingHooks = $projectLineEndingPreToolUseHookCount -eq 1 -and $projectLineEndingPostToolUseHookCount -eq 1 -and $projectLineEndingStopHookCount -in @(0, 1)
