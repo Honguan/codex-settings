@@ -98,6 +98,7 @@ function Get-TomlShape {
 
     $topLevelKeys = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
     $sections = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    $keysBySection = @{}
     $duplicates = New-Object 'System.Collections.Generic.List[string]'
     $currentSection = $null
 
@@ -112,6 +113,13 @@ function Get-TomlShape {
         if ($null -eq $currentSection -and $trimmed -match '^([A-Za-z0-9_.-]+)\s*=') {
             $key = $matches[1]
             if (-not $topLevelKeys.Add($key)) { [void]$duplicates.Add("key:$key") }
+            continue
+        }
+        if ($trimmed -match '^([A-Za-z0-9_.-]+)\s*=') {
+            $key = $matches[1]
+            $scope = $currentSection
+            if (-not $keysBySection.ContainsKey($scope)) { $keysBySection[$scope] = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase) }
+            if (-not $keysBySection[$scope].Add($key)) { [void]$duplicates.Add("key:$scope.$key") }
         }
     }
 
