@@ -22,6 +22,11 @@ function Read-CodexAppServerResponse($Process, [int]$RequestId, [int]$TimeoutMil
 function Set-CodexSettingsHookTrust([string]$Root, [string]$Cwd = (Get-Location).Path, [ValidateSet('All', 'Personal', 'Notification')][string]$Kind = 'All') {
     $hooksPath = [IO.Path]::GetFullPath((Join-Path $Root 'hooks.json'))
     if (-not (Test-Path -LiteralPath $hooksPath -PathType Leaf)) { throw "找不到 Hook 設定：$hooksPath" }
+    $configPath = Join-Path $Root 'config.toml'
+    if (Test-Path -LiteralPath $configPath -PathType Leaf) {
+        $configShape = Get-TomlShape -Content ([IO.File]::ReadAllText($configPath))
+        if (@($configShape.Duplicates).Count -gt 0) { throw "Codex config.toml contains duplicate entries before Hook discovery: $($configShape.Duplicates -join ', ')" }
+    }
 
     $startInfo = [Diagnostics.ProcessStartInfo]::new()
     if (-not [string]::IsNullOrWhiteSpace($env:CODEX_SETTINGS_APP_SERVER_TEST_COMMAND)) {

@@ -94,6 +94,17 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
     }
     Remove-Item Env:\CODEX_SETTINGS_TEST_NO_MANAGED_HOOKS
 
+    $configPath = Join-Path $globalRoot 'config.toml'
+    [IO.File]::WriteAllText($configPath, "[mcp_servers.serena]`r`ncommand = `"serena`"`r`ncommand = `"serena`"`r`n", [Text.UTF8Encoding]::new($false))
+    Remove-Item Env:\CODEX_SETTINGS_TEST_DISCOVERY_ERROR -ErrorAction SilentlyContinue
+    try {
+        Set-CodexSettingsHookTrust -Root $globalRoot -Cwd $repositoryRoot | Out-Null
+        throw 'Duplicate config keys were not rejected before Hook discovery.'
+    } catch {
+        if ($_.Exception.Message -notmatch 'Codex config\.toml contains duplicate entries before Hook discovery:.*mcp_servers\.serena\.command') { throw }
+    }
+    Remove-Item -LiteralPath $configPath -Force
+
     $env:CODEX_SETTINGS_TEST_DISCOVERY_ERROR = '1'
     try {
         Set-CodexSettingsHookTrust -Root $globalRoot -Cwd $repositoryRoot | Out-Null
