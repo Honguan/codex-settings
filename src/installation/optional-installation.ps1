@@ -23,27 +23,21 @@ function Select-OptionalPonytail([bool]$AlreadyInstalled = $false) {
     Write-Host ''
     Write-Host '選用全域功能：Ponytail'
     Write-Host '透過 Codex plugin 安裝 Ponytail，並驗證其 lifecycle hooks。'
-    if ($AlreadyInstalled) {
-        Write-Host '已偵測到既有 Ponytail 安裝，本次會保留並更新。'
-        return Read-YesNoChoice -Prompt '要繼續安裝/更新嗎？[Y/n]' -Default $true
-    }
-    return Read-YesNoChoice -Prompt '要安裝嗎？[Y/n]' -Default $true
+    return Select-OptionalComponentAction -Name 'Ponytail' -State (Get-OptionalComponentState -Installed $AlreadyInstalled)
 }
 
-function Select-OptionalCodexOrchestration {
+function Select-OptionalCodexOrchestration([bool]$AlreadyInstalled = $false) {
     Write-Host ''
     Write-Host '選用全域功能：Codex-Orchestration'
     Write-Host '多模型／多角色 Codex 工作流，可設定 Planner、Advisor、Designer、Executor。'
-    Write-Host '預設不安裝；只有明確選擇後才會加入 Codex plugin。'
-    return Read-YesNoChoice -Prompt '要安裝嗎？[y/N]' -Default $false
+    return Select-OptionalComponentAction -Name 'Codex-Orchestration' -State (Get-OptionalComponentState -Installed $AlreadyInstalled)
 }
 
-function Select-OptionalSerena {
+function Select-OptionalSerena([bool]$AlreadyInstalled = $false) {
     Write-Host ''
     Write-Host '選用全域功能：Serena'
     Write-Host '提供語意程式碼搜尋、分析與編輯能力，並透過 MCP 連接 Codex。'
-    Write-Host '預設安裝；如果已安裝則會保留設定並更新。'
-    return Read-YesNoChoice -Prompt '要安裝/更新嗎？[Y/n]' -Default $true
+    return Select-OptionalComponentAction -Name 'Serena' -State (Get-OptionalComponentState -Installed $AlreadyInstalled)
 }
 
 function Select-SerenaUvInstallation {
@@ -52,16 +46,36 @@ function Select-SerenaUvInstallation {
     return Read-YesNoChoice -Prompt '是否使用官方安裝方式安裝 uv？[Y/n]' -Default $true
 }
 
-function New-PonytailSkippedResult([bool]$AlreadyInstalled = $false) {
-    return [pscustomobject]@{ Managed = $false; WasInstalledBefore = $AlreadyInstalled; InstalledNow = $false; UpdatedNow = $false; MarketplaceStatus = 'SkippedByUser'; MarketplaceAddedNow = $false; MarketplaceSwitchedNow = $false; MarketplaceRecoveredNow = $false; OriginalMarketplaceSource = ''; MarketplaceSource = ''; PluginStatus = 'SkippedByUser'; PluginVersion = ''; HookCount = 0; TrustedHookCount = 0; HookIdentities = @(); ValidationStatus = 'SkippedByUser'; TrustStatus = 'SkippedByUser'; ValidationError = '' }
+function New-PonytailSkippedResult([bool]$AlreadyInstalled = $false, [string]$Status = 'SkippedNotInstalled') {
+    return [pscustomobject]@{ Managed = $false; WasInstalledBefore = $AlreadyInstalled; InstalledNow = $false; UpdatedNow = $false; MarketplaceStatus = $Status; MarketplaceAddedNow = $false; MarketplaceSwitchedNow = $false; MarketplaceRecoveredNow = $false; OriginalMarketplaceSource = ''; MarketplaceSource = ''; PluginStatus = $Status; PluginVersion = ''; HookCount = 0; TrustedHookCount = 0; HookIdentities = @(); ValidationStatus = $Status; TrustStatus = $Status; ValidationError = '' }
 }
 
-function New-CodexOrchestrationSkippedResult {
-    return [pscustomobject]@{ Managed = $false; PluginPresent = $null; WasInstalledBefore = $false; InstalledNow = $false; UpdatedNow = $false; MarketplaceStatus = 'SkippedByUser'; PluginStatus = 'SkippedByUser'; PluginVersion = ''; WorkflowRequested = $false; WorkflowManaged = $false; WorkflowConfigured = $false; WorkflowEffective = $false; WorkflowStatus = 'SkippedByUser'; WorkflowConfigurationSummary = ''; SetupPrompt = ''; ActionRequired = $false; LastVerified = $null }
+function New-CodexOrchestrationSkippedResult([string]$Status = 'SkippedNotInstalled') {
+    return [pscustomobject]@{ Managed = $false; PluginPresent = $null; WasInstalledBefore = $false; InstalledNow = $false; UpdatedNow = $false; MarketplaceStatus = $Status; PluginStatus = $Status; PluginVersion = ''; WorkflowRequested = $false; WorkflowManaged = $false; WorkflowConfigured = $false; WorkflowEffective = $false; WorkflowStatus = $Status; WorkflowConfigurationSummary = ''; SetupPrompt = ''; ActionRequired = $false; LastVerified = $null }
 }
 
-function New-SerenaSkippedResult {
-    return [pscustomobject]@{ Managed = $false; SelectedByUser = $false; UvAvailable = $false; UvVersion = ''; VersionBefore = ''; VersionAfter = ''; InstalledNow = $false; UpdatedNow = $false; ToolStatus = 'SkippedByUser'; InitializationStatus = 'SkippedByUser'; DashboardStatus = 'SkippedByUser'; DashboardAutoOpenStatus = 'SkippedByUser'; DashboardConfigStatus = 'SkippedByUser'; CodexMcpStatus = 'SkippedByUser'; RuntimeStatus = 'SkippedByUser' }
+function New-SerenaSkippedResult([string]$Status = 'SkippedNotInstalled') {
+    return [pscustomobject]@{ Managed = $false; SelectedByUser = $false; UvAvailable = $false; UvVersion = ''; VersionBefore = ''; VersionAfter = ''; InstalledNow = $false; UpdatedNow = $false; ToolStatus = $Status; InitializationStatus = $Status; DashboardStatus = $Status; DashboardAutoOpenStatus = $Status; DashboardConfigStatus = $Status; CodexMcpStatus = $Status; RuntimeStatus = $Status }
+}
+
+function Invoke-MattPocockSkillsUninstall {
+    $names = @(Get-MattPocockSkillNames)
+    if (-not (Test-MattPocockSkillsInstalled)) { return [pscustomobject]@{ Status = 'Unchanged'; Names = @() } }
+    $output = & npx --yes skills@latest remove --global --agent codex --yes @names 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        $removeExitCode = $LASTEXITCODE
+        $restoreArguments = @(Get-MattPocockSkillsArguments)
+        $restore = & npx @restoreArguments 2>&1
+        throw "mattpocock/skills 解除安裝失敗，結束碼：$removeExitCode；復原：$(if ($LASTEXITCODE -eq 0) { '成功' } else { '失敗' })"
+    }
+    return [pscustomobject]@{ Status = 'Uninstalled'; Names = $names; Output = $output }
+}
+
+function Remove-OptionalManagedDirectory([string]$Path, $Transaction) {
+    if (-not (Test-Path -LiteralPath $Path -PathType Container)) { return 'Unchanged' }
+    foreach ($file in @(Get-ChildItem -LiteralPath $Path -File -Recurse)) { Save-TransactionFile -Transaction $Transaction -Path $file.FullName }
+    Remove-Item -LiteralPath $Path -Recurse -Force
+    return 'Uninstalled'
 }
 
 function Get-PonytailInstallationComponents($Result) {

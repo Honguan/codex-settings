@@ -30,7 +30,7 @@ try {
     New-Item -ItemType Directory -Path $globalRoot -Force | Out-Null
     if ((Select-LongRunningAsyncWaitPolicy -Root $globalRoot -SourceRoot $script:ScriptRoot) -ne 'Install') { throw 'Fresh blank prompt did not default to Install.' }
     $script:PromptAnswers.Enqueue('n')
-    if ((Select-LongRunningAsyncWaitPolicy -Root $globalRoot -SourceRoot $script:ScriptRoot) -ne 'Skip') { throw 'Fresh explicit n did not skip installation.' }
+    if ((Select-LongRunningAsyncWaitPolicy -Root $globalRoot -SourceRoot $script:ScriptRoot) -ne 'SkipNotInstalled') { throw 'Fresh explicit n did not skip installation.' }
 
     $agentsPath = Join-Path $globalRoot 'AGENTS.md'
     $userContent = "# User Custom Rules`r`n`r`n- Preserve this line.`r`n`r`n<!-- >>> OTHER-MANAGED >>>`r`nother setting`r`n<!-- <<< OTHER-MANAGED <<< -->`r`n"
@@ -48,12 +48,10 @@ try {
     if ($repeatAgents.Changed -or [IO.File]::ReadAllText($agentsPath) -cne $firstInstall) { throw 'Installed current policy rewrote AGENTS.md.' }
 
     $script:PromptAnswers.Enqueue('')
-    if ((Select-LongRunningAsyncWaitPolicy -Root $globalRoot -SourceRoot $script:ScriptRoot) -ne 'Install') { throw 'Installed blank prompt did not default to keep/update.' }
-    $script:PromptAnswers.Enqueue('3')
-    if ((Select-LongRunningAsyncWaitPolicy -Root $globalRoot -SourceRoot $script:ScriptRoot) -ne 'Skip') { throw 'Installed setting did not offer leave-unchanged.' }
-    $script:PromptAnswers.Enqueue('2')
-    if ((Select-LongRunningAsyncWaitPolicy -Root $globalRoot -SourceRoot $script:ScriptRoot) -ne 'Remove') { throw 'Installed setting did not offer the removal path.' }
-    $removeTarget = $target.PSObject.Copy(); $removeTarget.LongRunningAsyncWaitAction = 'Remove'
+    if ((Select-LongRunningAsyncWaitPolicy -Root $globalRoot -SourceRoot $script:ScriptRoot) -ne 'KeepCurrent') { throw 'Installed blank prompt did not default to keep/update.' }
+    $script:PromptAnswers.Enqueue('n')
+    if ((Select-LongRunningAsyncWaitPolicy -Root $globalRoot -SourceRoot $script:ScriptRoot) -ne 'Uninstall') { throw 'Installed No did not select uninstall.' }
+    $removeTarget = $target.PSObject.Copy(); $removeTarget.LongRunningAsyncWaitAction = 'Uninstall'
     $removeTransaction = New-FileTransaction -Root (Join-Path $testRoot 'remove') -Mode AsyncWaitRemove
     [void](Invoke-TargetInstallation -Target $removeTarget -Transaction $removeTransaction)
     Complete-FileTransaction $removeTransaction
@@ -67,7 +65,7 @@ try {
     if ([regex]::Matches($reinstalled, [regex]::Escape($script:LongRunningAsyncWaitPolicyStartMarker)).Count -ne 1) { throw 'Reinstall did not produce exactly one block.' }
 
     $beforeRollback = [IO.File]::ReadAllText($agentsPath)
-    $rollbackTarget = $target.PSObject.Copy(); $rollbackTarget.LongRunningAsyncWaitAction = 'Remove'
+    $rollbackTarget = $target.PSObject.Copy(); $rollbackTarget.LongRunningAsyncWaitAction = 'Uninstall'
     $rollbackTransaction = New-FileTransaction -Root (Join-Path $testRoot 'rollback') -Mode AsyncWaitRollback
     [void](Invoke-TargetInstallation -Target $rollbackTarget -Transaction $rollbackTransaction)
     Undo-FileTransaction $rollbackTransaction | Out-Null

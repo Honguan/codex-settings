@@ -354,7 +354,7 @@ function Get-InstallResultSymbol([string]$Status, $Glyphs) {
         '^(?:Installed|Created|Enabled)$' { return '+' }
         '^Updated$' { return '~' }
         '^(?:Existing|Unchanged|Current|Validated)$' { return '=' }
-        '^(?:Skipped|SkippedByUser|SkippedUnchanged|NotConfigured|Removed)$' { return '-' }
+        '^(?:Skipped|SkippedByUser|SkippedUnchanged|SkippedNotInstalled|LeftUnchanged|NotConfigured|Removed|Uninstalled)$' { return '-' }
         '^ActionRequired$' { return '!' }
         '^Failed$' { return $(if ($null -ne $Glyphs) { $Glyphs.Failure } else { '✗' }) }
         default { return '=' }
@@ -481,7 +481,8 @@ function Write-InstallationPlan {
         [switch]$InstallRequestExecutionOptimizer,
         [switch]$InstallMattPocockSkills,
         [switch]$EnableDefaultModeRequestUserInput,
-        [ValidateSet('Install', 'Remove', 'Skip')][string]$LongRunningAsyncWaitAction = 'Install',
+        [ValidateSet('Install', 'KeepCurrent', 'Update', 'Repair', 'Uninstall', 'SkipNotInstalled', 'LeaveUnchanged', 'Blocked')][string]$LongRunningAsyncWaitAction = 'Install',
+        [hashtable]$OptionalComponentActions = @{},
         [switch]$SkipContext7Key,
         [AllowNull()]$SerenaDashboard = $null
     )
@@ -489,6 +490,7 @@ function Write-InstallationPlan {
     $ccusageStatus = if ($null -eq $CcusageBefore) { '待偵測' } elseif ([bool]$CcusageBefore.Installed) { "已存在，沿用 $($CcusageBefore.Version)" } else { '未安裝，將安裝' }
     Write-InstallLog -Progress $Progress -Message ("PLAN environment={0}; style={1}; notifications={2}; targets={3}; skills={4}; defaultModeRequestUserInput={5}; longRunningAsyncWait={6}" -f $Context.DevelopmentEnvironment, $Context.InstallStyle, $Context.InstallWindowsNotifications, $Targets.Count, ($InstallRequestExecutionOptimizer -or $InstallMattPocockSkills), $EnableDefaultModeRequestUserInput, $LongRunningAsyncWaitAction)
     Write-InstallLog -Progress $Progress -Message "PLAN Other Settings; Long-running async wait policy=$LongRunningAsyncWaitAction"
+    if ($OptionalComponentActions.Count -gt 0) { Write-InstallLog -Progress $Progress -Message ("PLAN optionalLifecycle=" + (@($OptionalComponentActions.Keys | Sort-Object | ForEach-Object { "$_=$($OptionalComponentActions[$_])" }) -join ';')) }
     Write-InstallLog -Progress $Progress -Message ("PLAN targetRoots={0}; ccusage={1}; context7={2}" -f ((@($Targets | ForEach-Object { $_.Root }) -join ',')), $ccusageStatus, $(if ($SkipContext7Key) { 'skipped-by-user' } else { 'configure-or-existing' }))
     if ($null -ne $SerenaDashboard -and [bool]$SerenaDashboard.Selected) {
         $dashboardAction = switch ([string]$SerenaDashboard.DashboardConfigStatus) { 'Disabled' { 'Already configured' }; 'Invalid' { 'ConfigurationConflict' }; default { 'Configure: do not auto-open' } }

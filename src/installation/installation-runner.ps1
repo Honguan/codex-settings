@@ -37,33 +37,35 @@ function Invoke-InteractiveMode {
                 Write-Host '個人 Codex Settings'
                 Write-Host ('=' * 60)
                 Write-Host '核心設定                         自動安裝／更新'
-                $installRequestExecutionOptimizer = Select-OptionalGlobalSkill
-                $enableDefaultModeRequestUserInput = Select-OptionalDefaultModeRequestUserInput
+                $context7Action = Select-OptionalContext7
+                $requestExecutionOptimizerAction = Select-OptionalGlobalSkill
+                $requestUserInputAction = Select-OptionalDefaultModeRequestUserInput -AlreadyInstalled:(Test-DefaultModeRequestUserInputInstalled -Root $GlobalRoot)
                 $longRunningAsyncWaitAction = Select-LongRunningAsyncWaitPolicy -Root $GlobalRoot -SourceRoot $SourceRoot
                 Write-Host ''
                 Write-Host ('=' * 60)
                 Write-Host '社區／開源元件'
                 Write-Host ('=' * 60)
-                $installWindowsNotifications = Select-OptionalWindowsNotifications -AlreadyInstalled:(Test-WindowsNotificationsInstalled -Root $GlobalRoot)
-                $installMattPocockSkills = Select-OptionalMattPocockSkills
-                $ponytailState = $null
-                $installPonytail = Select-OptionalPonytail
+                $windowsNotificationsAction = Select-OptionalWindowsNotifications -AlreadyInstalled:(Test-WindowsNotificationsInstalled -Root $GlobalRoot)
+                $mattPocockSkillsAction = Select-OptionalMattPocockSkills
+                . (Get-OptionalInstallationScriptPath -Name Ponytail)
+                $ponytailState = Get-PonytailInstallationState -Root $GlobalRoot
+                $ponytailAction = Select-OptionalPonytail -AlreadyInstalled:([bool]$ponytailState.PluginPresent)
                 $ponytailMarketplaceAction = 'Auto'
-                if ($installPonytail) {
-                    . (Get-OptionalInstallationScriptPath -Name Ponytail)
-                    $ponytailState = Get-PonytailInstallationState -Root $GlobalRoot
+                if (Test-OptionalComponentKeepAction $ponytailAction) {
                     $ponytailMarketplaceAction = Select-PonytailMarketplaceAction -State $ponytailState
-                    if ($ponytailMarketplaceAction -eq 'Skip') { $installPonytail = $false }
+                    if ($ponytailMarketplaceAction -eq 'Skip') { $ponytailAction = 'LeaveUnchanged' }
                 }
-                $installCodexOrchestration = Select-OptionalCodexOrchestration
-                if ($installCodexOrchestration) { . (Get-OptionalInstallationScriptPath -Name CodexOrchestration) }
-                $installSerena = Select-OptionalSerena
+                . (Get-OptionalInstallationScriptPath -Name CodexOrchestration)
+                $codexOrchestrationAction = Select-OptionalCodexOrchestration -AlreadyInstalled:([bool](Get-CodexOrchestrationInstallationState).PluginPresent)
+                . (Get-OptionalInstallationScriptPath -Name Serena)
+                $serenaState = Get-SerenaInstallationState
+                $serenaAction = Select-OptionalSerena -AlreadyInstalled:([bool]$serenaState.ToolPresent)
                 $installSerenaUv = $false
-                if ($installSerena) {
-                    . (Get-OptionalInstallationScriptPath -Name Serena)
+                if (Test-OptionalComponentKeepAction $serenaAction) {
                     if (-not (Test-SerenaUvAvailable)) { $installSerenaUv = Select-SerenaUvInstallation }
                 }
-                Invoke-Installer -Mode Global -InstallStyle $style -DevelopmentEnvironment $selectedEnvironment -InstallRequestExecutionOptimizer:$installRequestExecutionOptimizer -InstallMattPocockSkills:$installMattPocockSkills -InstallPonytail:$installPonytail -PonytailState $ponytailState -PonytailMarketplaceAction $ponytailMarketplaceAction -InstallCodexOrchestration:$installCodexOrchestration -ConfigureCodexOrchestration:$installCodexOrchestration -InstallSerena:$installSerena -InstallSerenaUv:$installSerenaUv -EnableDefaultModeRequestUserInput:$enableDefaultModeRequestUserInput -LongRunningAsyncWaitAction $longRunningAsyncWaitAction -InstallWindowsNotifications:$installWindowsNotifications -SourceRoot $SourceRoot
+                $actions = @{ context7 = $context7Action; requestExecutionOptimizer = $requestExecutionOptimizerAction; requestUserInput = $requestUserInputAction; longRunningAsyncWait = $longRunningAsyncWaitAction; windowsUsageNotifications = $windowsNotificationsAction; mattpocockSkills = $mattPocockSkillsAction; ponytail = $ponytailAction; codexOrchestration = $codexOrchestrationAction; serena = $serenaAction }
+                Invoke-Installer -Mode Global -InstallStyle $style -DevelopmentEnvironment $selectedEnvironment -InstallRequestExecutionOptimizer:(Test-OptionalComponentKeepAction $requestExecutionOptimizerAction) -InstallMattPocockSkills:(Test-OptionalComponentKeepAction $mattPocockSkillsAction) -InstallPonytail:(Test-OptionalComponentKeepAction $ponytailAction) -PonytailState $ponytailState -PonytailMarketplaceAction $ponytailMarketplaceAction -InstallCodexOrchestration:(Test-OptionalComponentKeepAction $codexOrchestrationAction) -ConfigureCodexOrchestration:(Test-OptionalComponentKeepAction $codexOrchestrationAction) -InstallSerena:(Test-OptionalComponentKeepAction $serenaAction) -InstallSerenaUv:$installSerenaUv -EnableDefaultModeRequestUserInput:(Test-OptionalComponentKeepAction $requestUserInputAction) -LongRunningAsyncWaitAction $longRunningAsyncWaitAction -InstallWindowsNotifications:(Test-OptionalComponentKeepAction $windowsNotificationsAction) -OptionalComponentActions $actions -SourceRoot $SourceRoot
                 return
             }
 
@@ -85,7 +87,7 @@ function Invoke-InstallationRollback($Transaction, $CcusageBefore, $ContextState
     if ($null -ne $CcusageBefore) {
         try { Restore-CcusageState $CcusageBefore | Out-Null } catch { [void]$rollbackErrors.Add("ccusage rollback failed: $($_.Exception.Message)") }
     }
-    if ($null -ne $ContextState -and [bool]$ContextState.CreatedNow) {
+    if ($null -ne $ContextState -and ([bool]$ContextState.CreatedNow -or [string]$ContextState.Status -eq 'Uninstalled')) {
         try {
             [Environment]::SetEnvironmentVariable('CONTEXT7_API_KEY', $ContextState.UserBefore, 'User')
             [Environment]::SetEnvironmentVariable('CONTEXT7_API_KEY', $ContextState.ProcessBefore, 'Process')
@@ -235,26 +237,28 @@ function Write-InstallationSummary {
         $Ponytail,
         $CodexOrchestration,
         $Serena,
+        $Ownership,
         [object[]]$CommunityResults = @(),
         [ValidateSet('SUCCESS', 'PARTIAL SUCCESS')][string]$OverallStatus = 'SUCCESS'
     )
 
     if ($null -ne $Progress) {
-        if ($null -eq $LongRunningAsyncWait) { $LongRunningAsyncWait = [pscustomobject]@{ Status = 'SkippedByUser'; Result = '本次不變更' } }
+        if ($null -eq $LongRunningAsyncWait) { $LongRunningAsyncWait = [pscustomobject]@{ Status = 'SkippedNotInstalled'; Result = '本次不變更' } }
+        if ($null -eq $Ownership) { $Ownership = New-InstallationOwnershipManifest -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput -InstallWindowsNotifications:$InstallWindowsNotifications -InstallMattPocockSkills:$InstallMattPocockSkills }
         $fileSummary = Get-InstallResultSummary -Results $Results
         $fileSummary.Skipped = [int]$fileSummary.Skipped + $SkippedCount
         $fileSummary.Footer = '請完全關閉並重新啟動 VS Code、Codex 與 PowerShell；既有 Session 不會載入新安裝的 Hook。'
-        $context7Status = if ($SkipContext7Key) { 'SkippedByUser' } elseif ($null -ne $ContextState -and [bool]$ContextState.CreatedNow) { 'Installed' } elseif ($null -ne $ContextState -and [bool]$ContextState.CreatedByInstaller) { 'Existing' } else { 'Unchanged' }
-        $notificationComponentStatus = if (-not $InstallWindowsNotifications) { 'SkippedByUser' } elseif ($NotificationStatus -match '略過|未變更') { 'SkippedUnchanged' } else { 'Updated' }
+        $context7Status = if ($null -ne $ContextState -and $ContextState.Status -eq 'Uninstalled') { 'Uninstalled' } elseif ($SkipContext7Key) { 'SkippedNotInstalled' } elseif ($null -ne $ContextState -and [bool]$ContextState.CreatedNow) { 'Installed' } elseif ($null -ne $ContextState -and [bool]$ContextState.CreatedByInstaller) { 'Current' } else { 'Unchanged' }
+        $notificationComponentStatus = if ($NotificationStatus -eq 'Uninstalled') { 'Uninstalled' } elseif (-not $InstallWindowsNotifications) { 'SkippedNotInstalled' } elseif ($NotificationStatus -match '略過|未變更') { 'Current' } else { 'Updated' }
         $failedNames = @($CommunityResults | Where-Object Status -eq 'FAILED' | ForEach-Object Name)
         $components = @(
             [pscustomobject]@{ Category = 'Personal'; Name = 'Codex Settings'; Status = 'Validated'; Result = "Environment=$DevelopmentEnvironment" }
             [pscustomobject]@{ Category = 'Personal'; Name = 'MCP / Context7'; Status = $context7Status; Result = $(if ($SkipContext7Key) { '使用者略過' } else { '環境設定已處理' }) }
-            [pscustomobject]@{ Category = 'Personal'; Name = 'request-execution-optimizer'; Status = $(if ($InstallRequestExecutionOptimizer) { 'Enabled' } else { 'SkippedByUser' }); Result = $(if ($InstallRequestExecutionOptimizer) { '已選用' } else { '未選用' }) }
-            [pscustomobject]@{ Category = 'Personal'; Name = 'request_user_input feature'; Status = $(if ($EnableDefaultModeRequestUserInput) { 'Enabled' } else { 'SkippedByUser' }); Result = $(if ($EnableDefaultModeRequestUserInput) { '已啟用' } else { '未啟用' }) }
+            [pscustomobject]@{ Category = 'Personal'; Name = 'request-execution-optimizer'; Status = [string]$Ownership.personal.requestExecutionOptimizer.Status; Result = [string]$Ownership.personal.requestExecutionOptimizer.Action }
+            [pscustomobject]@{ Category = 'Personal'; Name = 'request_user_input feature'; Status = [string]$Ownership.personal.requestUserInput.Status; Result = [string]$Ownership.personal.requestUserInput.Action }
             [pscustomobject]@{ Category = 'Other Settings'; Name = 'Long-running async wait policy'; Status = [string]$LongRunningAsyncWait.Status; Result = [string]$LongRunningAsyncWait.Result }
             [pscustomobject]@{ Category = 'Community'; Name = 'Windows 開發狀態與使用量通知'; Status = $(if ($failedNames -contains 'WindowsUsageNotifications') { 'Failed' } else { $notificationComponentStatus }); Result = $(if ($InstallWindowsNotifications) { $NotificationStatus + '（ccusage / ccsessions / cdaily）' } else { '未安裝' }) }
-            [pscustomobject]@{ Category = 'Community'; Name = 'mattpocock/skills'; Status = $(if ($failedNames -contains 'MattPocockSkills') { 'Failed' } elseif ($InstallMattPocockSkills) { 'Updated' } else { 'SkippedByUser' }); Result = $(if ($InstallMattPocockSkills) { "已處理 $SkillsCount 個" } else { '未選用' }) }
+            [pscustomobject]@{ Category = 'Community'; Name = 'mattpocock/skills'; Status = $(if ($failedNames -contains 'MattPocockSkills') { 'Failed' } else { [string]$Ownership.community.mattpocockSkills.Status }); Result = [string]$Ownership.community.mattpocockSkills.Action }
         )
         $components += @(Get-PonytailInstallationComponents -Result $Ponytail | ForEach-Object { $_ | Add-Member -NotePropertyName Category -NotePropertyValue Community -PassThru })
         $components += @(Get-CodexOrchestrationInstallationComponents -Result $CodexOrchestration | ForEach-Object { $_ | Add-Member -NotePropertyName Category -NotePropertyValue Community -PassThru })
@@ -298,21 +302,48 @@ function Invoke-GlobalInstallation {
         [switch]$SkipSerena,
         [switch]$InstallSerenaUv,
         [switch]$EnableDefaultModeRequestUserInput,
-        [ValidateSet('Install', 'Remove', 'Skip')][string]$LongRunningAsyncWaitAction = 'Install',
+        [ValidateSet('Auto', 'Install', 'KeepCurrent', 'Update', 'Repair', 'Uninstall', 'SkipNotInstalled', 'LeaveUnchanged', 'Blocked')][string]$LongRunningAsyncWaitAction = 'Auto',
         [switch]$ForceValidation,
         [switch]$ForceNotificationTest,
-        [ValidateSet('Auto', 'Interactive', 'Line')][string]$RendererMode = 'Auto'
+        [ValidateSet('Auto', 'Interactive', 'Line')][string]$RendererMode = 'Auto',
+        [hashtable]$OptionalComponentActions = @{}
     )
 
-    if (-not $InstallMattPocockSkills -and (Test-MattPocockSkillsInstalled)) {
-        $InstallMattPocockSkills = $true
-    }
-    if ($InstallPonytail -and $null -eq $PonytailState) { $PonytailState = Get-PonytailInstallationState -Root $Context.GlobalRoot }
+    foreach ($optionalScript in @('Ponytail', 'CodexOrchestration', 'Serena')) { . (Get-OptionalInstallationScriptPath -Name $optionalScript) }
+    if ($null -eq $PonytailState) { $PonytailState = Get-PonytailInstallationState -Root $Context.GlobalRoot }
+    $codexOrchestrationState = Get-CodexOrchestrationInstallationState
+    $serenaState = Get-SerenaInstallationState
+    $context7Installed = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable('CONTEXT7_API_KEY', 'User'))
+    $context7Action = Get-OptionalComponentPlanAction -ExplicitAction ([string]$OptionalComponentActions.context7) -Installed $context7Installed -Requested (-not [bool]$SkipContext7Key)
+    $requestOptimizerInstalled = Test-Path -LiteralPath (Join-Path $Context.GlobalRoot 'skills\request-execution-optimizer') -PathType Container
+    $requestUserInputInstalled = Test-DefaultModeRequestUserInputInstalled -Root $Context.GlobalRoot
+    $windowsNotificationsInstalled = Test-WindowsNotificationsInstalled -Root $Context.GlobalRoot
+    $mattPocockSkillsInstalled = Test-MattPocockSkillsInstalled
+    $requestExecutionOptimizerAction = Get-OptionalComponentPlanAction -ExplicitAction ([string]$OptionalComponentActions.requestExecutionOptimizer) -Installed $requestOptimizerInstalled -Requested ([bool]$InstallRequestExecutionOptimizer)
+    $requestUserInputAction = Get-OptionalComponentPlanAction -ExplicitAction ([string]$OptionalComponentActions.requestUserInput) -Installed $requestUserInputInstalled -Requested ([bool]$EnableDefaultModeRequestUserInput)
+    $windowsNotificationsAction = Get-OptionalComponentPlanAction -ExplicitAction ([string]$OptionalComponentActions.windowsUsageNotifications) -Installed $windowsNotificationsInstalled -Requested ([bool]$Context.InstallWindowsNotifications)
+    $mattPocockSkillsAction = Get-OptionalComponentPlanAction -ExplicitAction ([string]$OptionalComponentActions.mattpocockSkills) -Installed $mattPocockSkillsInstalled -Requested ([bool]$InstallMattPocockSkills)
+    $ponytailAction = Get-OptionalComponentPlanAction -ExplicitAction ([string]$OptionalComponentActions.ponytail) -Installed ([bool]$PonytailState.PluginPresent) -Requested ([bool]$InstallPonytail)
+    $codexOrchestrationAction = Get-OptionalComponentPlanAction -ExplicitAction ([string]$OptionalComponentActions.codexOrchestration) -Installed ([bool]$codexOrchestrationState.PluginPresent) -Requested ([bool]$InstallCodexOrchestration)
+    $serenaAction = Get-OptionalComponentPlanAction -ExplicitAction ([string]$OptionalComponentActions.serena) -Installed ([bool]$serenaState.ToolPresent) -Requested ([bool]$InstallSerena)
+    if ($OptionalComponentActions.ContainsKey('longRunningAsyncWait')) { $LongRunningAsyncWaitAction = [string]$OptionalComponentActions.longRunningAsyncWait }
+    $InstallRequestExecutionOptimizer = Test-OptionalComponentKeepAction $requestExecutionOptimizerAction
+    $EnableDefaultModeRequestUserInput = Test-OptionalComponentKeepAction $requestUserInputAction
+    $Context.InstallWindowsNotifications = Test-OptionalComponentKeepAction $windowsNotificationsAction
+    $InstallMattPocockSkills = Test-OptionalComponentKeepAction $mattPocockSkillsAction
+    $InstallPonytail = Test-OptionalComponentKeepAction $ponytailAction
+    $InstallCodexOrchestration = Test-OptionalComponentKeepAction $codexOrchestrationAction
+    $InstallSerena = Test-OptionalComponentKeepAction $serenaAction
+    $SkipContext7Key = -not (Test-OptionalComponentKeepAction $context7Action)
     $policyTemplate = Get-LongRunningAsyncWaitPolicyTemplate -SourceRoot $Context.ScriptRoot
     $agentsPath = Join-Path $Context.GlobalRoot 'AGENTS.md'
     $policyBefore = Get-LongRunningAsyncWaitPolicyState -Content $(if (Test-Path -LiteralPath $agentsPath -PathType Leaf) { [IO.File]::ReadAllText($agentsPath) } else { '' }) -ManagedContent $policyTemplate
-    $targets = @(New-InstallationPlan -DevelopmentEnvironment $Context.DevelopmentEnvironment -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput -LongRunningAsyncWaitAction $LongRunningAsyncWaitAction -InstallWindowsNotifications $false -ManageWindowsNotifications $false -SourceRoot $Context.ScriptRoot -IncludeExistingSkills $Context.ExistingSkillsInstalled)
-    $steps = New-InstallationProgressSteps -TargetCount $targets.Count -IncludeContext7:(-not $SkipContext7Key) -IncludeSkills:$InstallMattPocockSkills -IncludePonytail:$InstallPonytail -IncludeCodexOrchestration:$InstallCodexOrchestration -IncludeSerena:$InstallSerena -IncludeNotifications:$Context.InstallWindowsNotifications
+    if ($LongRunningAsyncWaitAction -eq 'Auto') {
+        $policyLifecycleState = switch ($policyBefore.Status) { 'NotInstalled' { 'NotInstalled' }; 'InstalledCurrent' { 'InstalledCurrent' }; 'InstalledNeedsUpdate' { 'InstalledUpdateAvailable' }; default { 'Conflict' } }
+        $LongRunningAsyncWaitAction = Resolve-OptionalComponentAction -State $policyLifecycleState
+    }
+    $targets = @(New-InstallationPlan -DevelopmentEnvironment $Context.DevelopmentEnvironment -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput -RequestUserInputAction $requestUserInputAction -LongRunningAsyncWaitAction $LongRunningAsyncWaitAction -InstallWindowsNotifications $false -ManageWindowsNotifications $false -SourceRoot $Context.ScriptRoot -IncludeExistingSkills $Context.ExistingSkillsInstalled)
+    $steps = New-InstallationProgressSteps -TargetCount $targets.Count -IncludeContext7:(-not $SkipContext7Key) -IncludeSkills:($mattPocockSkillsAction -notin @('SkipNotInstalled', 'LeaveUnchanged', 'Blocked')) -IncludePonytail:($ponytailAction -notin @('SkipNotInstalled', 'LeaveUnchanged', 'Blocked')) -IncludeCodexOrchestration:($codexOrchestrationAction -notin @('SkipNotInstalled', 'LeaveUnchanged', 'Blocked')) -IncludeSerena:($serenaAction -notin @('SkipNotInstalled', 'LeaveUnchanged', 'Blocked')) -IncludeNotifications:($windowsNotificationsAction -notin @('SkipNotInstalled', 'LeaveUnchanged', 'Blocked'))
     $progress = Start-InstallProgress -Steps $steps -Root $Context.GlobalRoot -Metadata @{
         Mode = 'Global'
         Environment = $Context.DevelopmentEnvironment
@@ -336,8 +367,17 @@ function Invoke-GlobalInstallation {
     $communityResults = New-Object 'System.Collections.Generic.List[object]'
     $personalCommitted = $false
     $ownership = New-InstallationOwnershipManifest -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput -LongRunningAsyncWaitAction $LongRunningAsyncWaitAction -InstallWindowsNotifications:([bool]$Context.InstallWindowsNotifications) -InstallMattPocockSkills:$InstallMattPocockSkills -InstallPonytail:$InstallPonytail -InstallCodexOrchestration:$InstallCodexOrchestration -InstallSerena:$InstallSerena
+    $componentActions = [ordered]@{ context7 = $context7Action; requestExecutionOptimizer = $requestExecutionOptimizerAction; requestUserInput = $requestUserInputAction; longRunningAsyncWait = $LongRunningAsyncWaitAction; windowsUsageNotifications = $windowsNotificationsAction; mattpocockSkills = $mattPocockSkillsAction; ponytail = $ponytailAction; codexOrchestration = $codexOrchestrationAction; serena = $serenaAction }
+    $componentStates = [ordered]@{ context7 = (Get-OptionalComponentState -Installed $context7Installed); requestExecutionOptimizer = (Get-OptionalComponentState -Installed $requestOptimizerInstalled); requestUserInput = (Get-OptionalComponentState -Installed $requestUserInputInstalled); longRunningAsyncWait = $(switch ($policyBefore.Status) { 'NotInstalled' { 'NotInstalled' }; 'InstalledCurrent' { 'InstalledCurrent' }; 'InstalledNeedsUpdate' { 'InstalledUpdateAvailable' }; default { 'Conflict' } }); windowsUsageNotifications = (Get-OptionalComponentState -Installed $windowsNotificationsInstalled); mattpocockSkills = (Get-OptionalComponentState -Installed $mattPocockSkillsInstalled); ponytail = (Get-OptionalComponentState -Installed ([bool]$PonytailState.PluginPresent)); codexOrchestration = (Get-OptionalComponentState -Installed ([bool]$codexOrchestrationState.PluginPresent)); serena = (Get-OptionalComponentState -Installed ([bool]$serenaState.ToolPresent)) }
+    foreach ($id in $componentActions.Keys) {
+        $category = if ($id -in @('context7', 'requestExecutionOptimizer', 'requestUserInput')) { $ownership.personal } elseif ($id -eq 'longRunningAsyncWait') { $ownership.otherSettings } else { $ownership.community }
+        $category[$id].Action = [string]$componentActions[$id]
+        $category[$id].DiscoveredState = [string]$componentStates[$id]
+    }
     foreach ($category in @($ownership.personal, $ownership.otherSettings, $ownership.community)) {
-        foreach ($component in $category.Values) { $component.Status = if ([bool]$component.Selected) { 'PENDING' } else { 'SKIPPED' } }
+        foreach ($component in $category.Values) {
+            $component.Status = switch ([string]$component.Action) { 'SkipNotInstalled' { 'SkippedNotInstalled' }; 'LeaveUnchanged' { 'LeftUnchanged' }; 'Blocked' { 'Blocked' }; default { if ([bool]$component.Selected -or [string]$component.Action -eq 'Uninstall') { 'PENDING' } else { 'SKIPPED' } } }
+        }
     }
 
     try {
@@ -345,7 +385,7 @@ function Invoke-GlobalInstallation {
         $ccusageBefore = Get-CcusageState
         $serenaDashboardDiscovery = if ($InstallSerena) { $value = Get-SerenaConfigurationState; $value | Add-Member -NotePropertyName Selected -NotePropertyValue $true -PassThru } else { $null }
         $discovery = Get-InstallationDiscovery -Context $Context -Targets $targets -CcusageBefore $ccusageBefore -SerenaDashboard $serenaDashboardDiscovery
-        Write-InstallationPlan -Progress $progress -Context $Context -Targets $targets -CcusageBefore $ccusageBefore -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -InstallMattPocockSkills:$InstallMattPocockSkills -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput -LongRunningAsyncWaitAction $LongRunningAsyncWaitAction -SkipContext7Key:$SkipContext7Key -SerenaDashboard $serenaDashboardDiscovery
+        Write-InstallationPlan -Progress $progress -Context $Context -Targets $targets -CcusageBefore $ccusageBefore -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -InstallMattPocockSkills:$InstallMattPocockSkills -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput -LongRunningAsyncWaitAction $LongRunningAsyncWaitAction -OptionalComponentActions $componentActions -SkipContext7Key:$SkipContext7Key -SerenaDashboard $serenaDashboardDiscovery
         Complete-InstallStep -Progress $progress -Result ("已建立 $($targets.Count) 個目標")
 
         Set-InstallProgress -Progress $progress -StepId 'Prerequisites' -Detail '驗證 PowerShell、Node.js、Codex 與目標目錄'
@@ -384,18 +424,22 @@ function Invoke-GlobalInstallation {
 
             [object[]]$resultArray = $results.ToArray()
             $policyAfter = Get-LongRunningAsyncWaitPolicyState -Content ([IO.File]::ReadAllText($agentsPath)) -ManagedContent $policyTemplate
-            if ($LongRunningAsyncWaitAction -eq 'Install' -and $policyAfter.Status -ne 'InstalledCurrent') { throw "Long-running async wait policy 安裝驗證失敗：$($policyAfter.Status)" }
-            if ($LongRunningAsyncWaitAction -eq 'Remove' -and $policyAfter.Status -ne 'NotInstalled') { throw "Long-running async wait policy 移除驗證失敗：$($policyAfter.Status)" }
+            if ((Test-OptionalComponentKeepAction $LongRunningAsyncWaitAction) -and $policyAfter.Status -ne 'InstalledCurrent') { throw "Long-running async wait policy 安裝驗證失敗：$($policyAfter.Status)" }
+            if ($LongRunningAsyncWaitAction -eq 'Uninstall' -and $policyAfter.Status -ne 'NotInstalled') { throw "Long-running async wait policy 移除驗證失敗：$($policyAfter.Status)" }
             $asyncWaitStatus = switch ($LongRunningAsyncWaitAction) {
                 'Install' { if ($policyBefore.Status -eq 'NotInstalled') { 'Installed' } elseif ($policyBefore.Status -eq 'InstalledCurrent') { 'Unchanged' } else { 'Updated' } }
-                'Remove' { if ($policyBefore.ManagedBlockPresent) { 'Removed' } else { 'Unchanged' } }
-                default { 'SkippedByUser' }
+                { $_ -in @('KeepCurrent', 'Update', 'Repair') } { if ($policyBefore.Status -eq 'InstalledCurrent') { 'Unchanged' } else { 'Updated' } }
+                'Uninstall' { if ($policyBefore.ManagedBlockPresent) { 'Uninstalled' } else { 'Unchanged' } }
+                'SkipNotInstalled' { 'SkippedNotInstalled' }
+                default { 'LeftUnchanged' }
             }
-            $asyncWaitResult = [pscustomobject]@{ Status = $asyncWaitStatus; Result = $(if ($LongRunningAsyncWaitAction -eq 'Remove') { '已移除受管理區塊' } elseif ($LongRunningAsyncWaitAction -eq 'Skip') { '本次不變更' } else { '新 Session/Task 生效' }); State = $policyAfter }
+            $asyncWaitResult = [pscustomobject]@{ Status = $asyncWaitStatus; Result = $(if ($LongRunningAsyncWaitAction -eq 'Uninstall') { '已移除受管理區塊' } elseif ($LongRunningAsyncWaitAction -in @('SkipNotInstalled', 'LeaveUnchanged', 'Blocked')) { '本次不變更' } else { '新 Session/Task 生效' }); State = $policyAfter }
             $asyncWaitOwner = $ownership.otherSettings.longRunningAsyncWait
             $asyncWaitOwner.Status = $asyncWaitStatus
             $asyncWaitOwner.version = $script:LongRunningAsyncWaitPolicyVersion
             $asyncWaitOwner.managedBlockPresent = [bool]$policyAfter.ManagedBlockPresent
+            $ownership.personal.requestUserInput.Status = switch ($requestUserInputAction) { 'Install' { 'Installed' }; 'Uninstall' { 'Uninstalled' }; 'SkipNotInstalled' { 'SkippedNotInstalled' }; 'LeaveUnchanged' { 'LeftUnchanged' }; default { 'Current' } }
+            if ($requestExecutionOptimizerAction -ne 'Uninstall') { $ownership.personal.requestExecutionOptimizer.Status = switch ($requestExecutionOptimizerAction) { 'Install' { 'Installed' }; 'SkipNotInstalled' { 'SkippedNotInstalled' }; 'LeaveUnchanged' { 'LeftUnchanged' }; default { 'Current' } } }
             $changePlan = New-InstallationChangePlan -Discovery $discovery -Results $resultArray -CcusageBefore $ccusageBefore -ForceValidation:$ForceValidation -Force:$Context.Force -ForceNotificationTest:$ForceNotificationTest -SkipContext7Key:$SkipContext7Key -InstallMattPocockSkills:$InstallMattPocockSkills -SkipPackageInstall:$SkipCcusageInstall
             Save-TransactionMetadata -Transaction $transaction -Metadata @{ ChangePlan = $changePlan }
             Write-InstallLog -Progress $progress -Message ("WORKFLOW PLAN level={0}; hooksChanged={1}; configChanged={2}; usageToolsChanged={3}; notificationTest={4}; context7={5}" -f $changePlan.validationLevel, $changePlan.hooksChanged, $changePlan.configChanged, $changePlan.usageToolsChanged, $changePlan.runNotificationTest, $changePlan.runContext7)
@@ -445,13 +489,25 @@ function Invoke-GlobalInstallation {
                 Set-InstallProgress -Progress $progress -StepId 'Context7' -Detail $(if ($changePlan.runContext7) { '沿用或設定 Context7 API Key' } else { 'Context7 未變更，略過設定流程' })
             }
             $contextState = if ($changePlan.runContext7) { Set-Context7EnvironmentState -Skip:$SkipContext7Key -PreviousManifest $global.Previous -InformationAction Ignore } else { Set-Context7EnvironmentState -Skip:$true -PreviousManifest $global.Previous -InformationAction Ignore }
+            if ($context7Action -eq 'Uninstall') {
+                $context7Owned = $null -ne $global.Previous.External.Context7 -and [bool]$global.Previous.External.Context7.CreatedByInstaller
+                if (-not $context7Owned) { throw 'Context7 API Key 不是由安裝器建立，無法安全解除安裝。' }
+                [Environment]::SetEnvironmentVariable('CONTEXT7_API_KEY', $null, 'User')
+                [Environment]::SetEnvironmentVariable('CONTEXT7_API_KEY', $null, 'Process')
+                $contextState = [pscustomobject]@{ CreatedNow = $false; CreatedByInstaller = $false; UserBefore = $contextState.UserBefore; ProcessBefore = $contextState.ProcessBefore; Status = 'Uninstalled' }
+            }
+            if ($requestExecutionOptimizerAction -eq 'Uninstall') {
+                $optimizerOwned = $null -ne $global.Previous.Personal.requestExecutionOptimizer
+                if (-not $optimizerOwned) { throw 'request-execution-optimizer 缺少安裝器所有權紀錄，無法安全解除安裝。' }
+                $ownership.personal.requestExecutionOptimizer.Status = Remove-OptionalManagedDirectory -Path (Join-Path $Context.GlobalRoot 'skills\request-execution-optimizer') -Transaction $transaction
+            }
             Save-TransactionMetadata -Transaction $transaction -Metadata @{
                 Context7KeyCreatedNow = [bool]$contextState.CreatedNow
             }
             if (-not $SkipContext7Key) { Complete-InstallStep -Progress $progress -Result $(if (-not $changePlan.runContext7) { '未變更，略過' } elseif ($contextState.CreatedNow) { '已建立' } elseif ($contextState.CreatedByInstaller) { '已沿用' } else { '未設定' }) }
 
             Set-InstallProgress -Progress $progress -StepId 'PersonalCheckpoint' -Detail '驗證並提交個人 Codex Settings'
-            foreach ($component in $ownership.personal.Values) { if ([bool]$component.Selected) { $component.Status = 'SUCCESS' } }
+            foreach ($component in $ownership.personal.Values) { if ([bool]$component.Selected -and [string]$component.Status -eq 'PENDING') { $component.Status = 'SUCCESS' } }
             $personalExternal = [ordered]@{
                 Context7 = [ordered]@{ EnvironmentVariable = 'CONTEXT7_API_KEY'; CreatedByInstaller = [bool]$contextState.CreatedByInstaller; SecretStoredInRepository = $false }
             }
@@ -460,7 +516,20 @@ function Invoke-GlobalInstallation {
             Complete-InstallStep -Progress $progress -Result 'Personal 已提交；後續社區元件不會回滾此階段'
 
             $ccusage = New-CcusageUnchangedResult -PackageState $ccusageBefore
-            if ($Context.InstallWindowsNotifications) {
+            if ($windowsNotificationsAction -eq 'Uninstall') {
+                Set-InstallProgress -Progress $progress -StepId 'Notifications' -Detail '解除安裝受管理通知與使用量工具'
+                $component = Invoke-IsolatedCommunityComponent -Name WindowsUsageNotifications -BackupRoot $Context.BackupRoot -Operation {
+                    param($componentTransaction)
+                    $files = Invoke-WindowsUsageNotificationFiles -Root $Context.GlobalRoot -SourceRoot $Context.ScriptRoot -Transaction $componentTransaction -Remove
+                    if ($null -ne $global.Previous.External.Ccusage -and [bool]$global.Previous.External.Ccusage.Managed) {
+                        Restore-CcusageState ([pscustomobject]@{ Installed = [bool]$global.Previous.External.Ccusage.WasInstalledBefore; Version = [string]$global.Previous.External.Ccusage.PreviousVersion }) | Out-Null
+                    }
+                    [pscustomobject]@{ Files = $files; NotificationStatus = 'Uninstalled'; HookTrust = [pscustomobject]@{ Hooks = @() }; NotificationProbe = $null; Ccusage = (New-CcusageUnchangedResult -PackageState $ccusageBefore) }
+                } -RollbackExternal { param($ignored) Restore-CcusageState $ccusageBefore | Out-Null }
+                [void]$communityResults.Add($component)
+                $ownership.community.windowsUsageNotifications.Status = $(if ($component.Status -eq 'SUCCESS') { 'Uninstalled' } else { 'FAILED' })
+                if ($component.Status -eq 'SUCCESS') { $notificationStatus = 'Uninstalled'; Complete-InstallStep -Progress $progress -Result 'Uninstalled' } else { Fail-InstallStep -Progress $progress -Reason $component.Error -Continue }
+            } elseif ($Context.InstallWindowsNotifications) {
                 Set-InstallProgress -Progress $progress -StepId 'Notifications' -Detail '安裝單一所有權的通知、ccusage、ccsessions 與 cdaily'
                 $component = Invoke-IsolatedCommunityComponent -Name WindowsUsageNotifications -BackupRoot $Context.BackupRoot -Operation {
                     param($componentTransaction)
@@ -501,7 +570,13 @@ function Invoke-GlobalInstallation {
                 } else { Fail-InstallStep -Progress $progress -Reason $component.Error -Continue }
             }
 
-            if ($InstallMattPocockSkills) {
+            if ($mattPocockSkillsAction -eq 'Uninstall') {
+                Set-InstallProgress -Progress $progress -StepId 'Skills' -Detail '解除安裝 mattpocock/skills 管理的技能'
+                $component = Invoke-IsolatedCommunityComponent -Name MattPocockSkills -BackupRoot $Context.BackupRoot -Operation { param($componentTransaction) Invoke-MattPocockSkillsUninstall }
+                [void]$communityResults.Add($component)
+                $ownership.community.mattpocockSkills.Status = $(if ($component.Status -eq 'SUCCESS') { [string]$component.Result.Status } else { 'FAILED' })
+                if ($component.Status -eq 'SUCCESS') { Complete-InstallStep -Progress $progress -Result ([string]$component.Result.Status) } else { Fail-InstallStep -Progress $progress -Reason $component.Error -Continue }
+            } elseif ($InstallMattPocockSkills) {
                 Set-InstallProgress -Progress $progress -StepId 'Skills' -Detail '只在選用或偵測到既有技能時執行 npx'
                 $component = Invoke-IsolatedCommunityComponent -Name MattPocockSkills -BackupRoot $Context.BackupRoot -Operation {
                     param($componentTransaction)
@@ -512,12 +587,18 @@ function Invoke-GlobalInstallation {
                     [pscustomobject]@{ Names = $names; Output = $skillsOutput }
                 }
                 [void]$communityResults.Add($component)
-                $ownership.community.mattpocockSkills.Status = $component.Status
+                $ownership.community.mattpocockSkills.Status = $(if ($component.Status -eq 'SUCCESS') { if ($mattPocockSkillsInstalled) { 'Updated' } else { 'Installed' } } else { 'FAILED' })
                 if ($component.Status -eq 'SUCCESS') { $mattPocockSkillNames = @($component.Result.Names); Complete-InstallStep -Progress $progress -Result ("已處理 $($mattPocockSkillNames.Count) 個技能") }
                 else { Fail-InstallStep -Progress $progress -Reason $component.Error -Continue }
             }
 
-            if ($InstallPonytail) {
+            if ($ponytailAction -eq 'Uninstall') {
+                Set-InstallProgress -Progress $progress -StepId 'Ponytail' -Detail '解除安裝 Ponytail plugin 與專用 marketplace'
+                $component = Invoke-IsolatedCommunityComponent -Name Ponytail -BackupRoot $Context.BackupRoot -Operation { param($componentTransaction) Invoke-PonytailUninstall -State $PonytailState }
+                [void]$communityResults.Add($component)
+                $ownership.community.ponytail.Status = $(if ($component.Status -eq 'SUCCESS') { [string]$component.Result.Status } else { 'FAILED' })
+                if ($component.Status -eq 'SUCCESS') { $ponytail = $component.Result; Complete-InstallStep -Progress $progress -Result ([string]$ponytail.Status) } else { Fail-InstallStep -Progress $progress -Reason $component.Error -Continue }
+            } elseif ($InstallPonytail) {
                 Set-InstallProgress -Progress $progress -StepId 'Ponytail' -Detail '更新 marketplace、同步 plugin 並驗證 lifecycle hooks'
                 $component = Invoke-IsolatedCommunityComponent -Name Ponytail -BackupRoot $Context.BackupRoot -Operation {
                     param($componentTransaction)
@@ -530,7 +611,13 @@ function Invoke-GlobalInstallation {
                 else { Fail-InstallStep -Progress $progress -Reason $component.Error -Continue }
             }
 
-            if ($InstallCodexOrchestration) {
+            if ($codexOrchestrationAction -eq 'Uninstall') {
+                Set-InstallProgress -Progress $progress -StepId 'CodexOrchestration' -Detail '解除安裝 Codex-Orchestration plugin'
+                $component = Invoke-IsolatedCommunityComponent -Name CodexOrchestration -BackupRoot $Context.BackupRoot -Operation { param($componentTransaction) Invoke-CodexOrchestrationUninstall }
+                [void]$communityResults.Add($component)
+                $ownership.community.codexOrchestration.Status = $(if ($component.Status -eq 'SUCCESS') { [string]$component.Result.Status } else { 'FAILED' })
+                if ($component.Status -eq 'SUCCESS') { $codexOrchestration = $component.Result; Complete-InstallStep -Progress $progress -Result ([string]$codexOrchestration.Status) } else { Fail-InstallStep -Progress $progress -Reason $component.Error -Continue }
+            } elseif ($InstallCodexOrchestration) {
                 Set-InstallProgress -Progress $progress -StepId 'CodexOrchestration' -Detail '檢查 Python、安裝/更新 plugin、處理 workflow 設定'
                 $component = Invoke-IsolatedCommunityComponent -Name CodexOrchestration -BackupRoot $Context.BackupRoot -Operation { param($componentTransaction) [void](Assert-CodexOrchestrationPrerequisites); Invoke-CodexOrchestrationInstallation -InteractiveWorkflow:$ConfigureCodexOrchestration } -RollbackExternal { param($value) if ($null -ne $value) { Undo-CodexOrchestrationInstallation -Result $value } }
                 [void]$communityResults.Add($component)
@@ -549,7 +636,13 @@ function Invoke-GlobalInstallation {
                 else { Fail-InstallStep -Progress $progress -Reason $component.Error -Continue }
             }
 
-            if ($InstallSerena) {
+            if ($serenaAction -eq 'Uninstall') {
+                Set-InstallProgress -Progress $progress -StepId 'Serena' -Detail '解除安裝 Serena tool 與受管理 Codex MCP 區段'
+                $component = Invoke-IsolatedCommunityComponent -Name Serena -BackupRoot $Context.BackupRoot -Operation { param($componentTransaction) Invoke-SerenaUninstall -Root $Context.GlobalRoot -Transaction $componentTransaction }
+                [void]$communityResults.Add($component)
+                $ownership.community.serena.Status = $(if ($component.Status -eq 'SUCCESS') { [string]$component.Result.ToolStatus } else { 'FAILED' })
+                if ($component.Status -eq 'SUCCESS') { $serena = $component.Result; Complete-InstallStep -Progress $progress -Result ([string]$serena.ToolStatus) } else { Fail-InstallStep -Progress $progress -Reason $component.Error -Continue }
+            } elseif ($InstallSerena) {
                 Set-InstallProgress -Progress $progress -StepId 'Serena' -Detail '檢查 uv、安裝或更新 Serena、初始化並安全設定 Codex MCP'
                 $component = Invoke-IsolatedCommunityComponent -Name Serena -BackupRoot $Context.BackupRoot -Operation { param($componentTransaction) Invoke-SerenaInstallation -Root $Context.GlobalRoot -Transaction $componentTransaction -InstallUv:$InstallSerenaUv }
                 [void]$communityResults.Add($component)
@@ -600,12 +693,19 @@ function Invoke-GlobalInstallation {
             $windowsOwner.lastVerified = $(if ($windowsOwner.Status -eq 'SUCCESS') { (Get-Date).ToString('o') } elseif ($windowsOwner.managedByInstaller) { [string]$previousWindowsOwner.lastVerified } else { $null })
             $windowsOwner.rollbackCapability = 'ComponentScoped'
 
+            foreach ($category in @($ownership.personal, $ownership.otherSettings, $ownership.community)) {
+                foreach ($component in $category.Values) {
+                    if ($component.Contains('LastResult')) { $component.LastResult = [string]$component.Status }
+                    elseif ($component.Contains('lastResult')) { $component.lastResult = [string]$component.Status }
+                }
+            }
+
             Set-InstallProgress -Progress $progress -StepId 'Final' -Detail '寫入 Manifest 並完成交易驗證'
             $finalTransaction = New-FileTransaction -Root (Join-Path $Context.BackupRoot ((Get-Date -Format 'yyyyMMdd-HHmmss-fffffff') + '-manifest')) -Mode 'ManifestTransaction'
             Complete-Installation -Results $resultArray -Transaction $finalTransaction -External $external -Ownership $ownership -FinalizeTransaction | Out-Null
             Complete-InstallStep -Progress $progress -Result 'Manifest 與交易驗證通過'
             $overallStatus = if (@($communityResults | Where-Object Status -eq 'FAILED').Count -gt 0 -or $codexOrchestration.ActionRequired) { 'PARTIAL SUCCESS' } else { 'SUCCESS' }
-            Write-InstallationSummary -InstallStyle $Context.InstallStyle -DevelopmentEnvironment $Context.DevelopmentEnvironment -Results $resultArray -Ccusage $ccusage -CcusageBefore $ccusageBefore -HookTrust $hookTrust -TransactionRoot $transactionRoot -InstallWindowsNotifications $Context.InstallWindowsNotifications -Progress $progress -NotificationStatus $notificationStatus -SkippedCount $skippedCount -SkipContext7Key:$SkipContext7Key -InstallMattPocockSkills:$InstallMattPocockSkills -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput -LongRunningAsyncWait $asyncWaitResult -ContextState $contextState -SkillsCount $mattPocockSkillNames.Count -Ponytail $ponytail -CodexOrchestration $codexOrchestration -Serena $serena -CommunityResults $communityResults.ToArray() -OverallStatus $overallStatus
+            Write-InstallationSummary -InstallStyle $Context.InstallStyle -DevelopmentEnvironment $Context.DevelopmentEnvironment -Results $resultArray -Ccusage $ccusage -CcusageBefore $ccusageBefore -HookTrust $hookTrust -TransactionRoot $transactionRoot -InstallWindowsNotifications $Context.InstallWindowsNotifications -Progress $progress -NotificationStatus $notificationStatus -SkippedCount $skippedCount -SkipContext7Key:$SkipContext7Key -InstallMattPocockSkills:$InstallMattPocockSkills -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput -LongRunningAsyncWait $asyncWaitResult -ContextState $contextState -SkillsCount $mattPocockSkillNames.Count -Ponytail $ponytail -CodexOrchestration $codexOrchestration -Serena $serena -Ownership $ownership -CommunityResults $communityResults.ToArray() -OverallStatus $overallStatus
         } catch {
             $reason = $_.Exception.Message
             Write-InstallErrorRecord -Progress $progress -ErrorRecord $_ -CurrentSubOperation $currentSubOperation
@@ -656,7 +756,7 @@ function Invoke-Installer {
         [switch]$SkipSerena,
         [switch]$InstallSerenaUv,
         [switch]$EnableDefaultModeRequestUserInput,
-        [ValidateSet('Install', 'Remove', 'Skip')][string]$LongRunningAsyncWaitAction = 'Install',
+        [ValidateSet('Auto', 'Install', 'KeepCurrent', 'Update', 'Repair', 'Uninstall', 'SkipNotInstalled', 'LeaveUnchanged', 'Blocked')][string]$LongRunningAsyncWaitAction = 'Auto',
         [switch]$ForceValidation,
         [switch]$ForceNotificationTest,
         [switch]$NoPause,
@@ -666,16 +766,17 @@ function Invoke-Installer {
         [switch]$Force,
         [ValidateSet('Merge', 'Replace')]
         [string]$InstallStyle = 'Merge',
-        [string]$SourceRoot = ''
+        [string]$SourceRoot = '',
+        [hashtable]$OptionalComponentActions = @{}
     )
 
     if ($InstallPonytail -and $SkipPonytail) { throw 'InstallPonytail 與 SkipPonytail 不可同時指定。' }
     if ($InstallCodexOrchestration -and $SkipCodexOrchestration) { throw 'InstallCodexOrchestration 與 SkipCodexOrchestration 不可同時指定。' }
     if ($ConfigureCodexOrchestration -and -not $InstallCodexOrchestration) { throw 'ConfigureCodexOrchestration 必須搭配 InstallCodexOrchestration。' }
     if ($InstallSerena -and $SkipSerena) { throw 'InstallSerena 與 SkipSerena 不可同時指定。' }
-    if ($InstallPonytail) { . (Get-OptionalInstallationScriptPath -Name Ponytail) }
-    if ($InstallCodexOrchestration) { . (Get-OptionalInstallationScriptPath -Name CodexOrchestration) }
-    if ($InstallSerena) { . (Get-OptionalInstallationScriptPath -Name Serena) }
+    if ($InstallPonytail -or $OptionalComponentActions.ponytail -eq 'Uninstall') { . (Get-OptionalInstallationScriptPath -Name Ponytail) }
+    if ($InstallCodexOrchestration -or $OptionalComponentActions.codexOrchestration -eq 'Uninstall') { . (Get-OptionalInstallationScriptPath -Name CodexOrchestration) }
+    if ($InstallSerena -or $OptionalComponentActions.serena -eq 'Uninstall') { . (Get-OptionalInstallationScriptPath -Name Serena) }
     if ([string]::IsNullOrWhiteSpace($SourceRoot)) { $SourceRoot = [string]$ScriptRoot }
     if ($Mode -in @('Backup', 'Restore', 'Uninstall')) {
         Invoke-ManagementMode -Mode $Mode -SourceRoot $SourceRoot
@@ -688,6 +789,6 @@ function Invoke-Installer {
         return
     }
 
-    if ($InstallPonytail -and $null -eq $PonytailState) { $PonytailState = Get-PonytailInstallationState -Root $context.GlobalRoot }
-    Invoke-GlobalInstallation -Context $context -SkipContext7Key:$SkipContext7Key -SkipCcusageInstall:$SkipCcusageInstall -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -InstallMattPocockSkills:$InstallMattPocockSkills -InstallPonytail:$InstallPonytail -SkipPonytail:$SkipPonytail -PonytailState $PonytailState -PonytailMarketplaceAction $PonytailMarketplaceAction -InstallCodexOrchestration:$InstallCodexOrchestration -SkipCodexOrchestration:$SkipCodexOrchestration -ConfigureCodexOrchestration:$ConfigureCodexOrchestration -InstallSerena:$InstallSerena -SkipSerena:$SkipSerena -InstallSerenaUv:$InstallSerenaUv -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput -LongRunningAsyncWaitAction $LongRunningAsyncWaitAction -ForceValidation:$ForceValidation -ForceNotificationTest:$ForceNotificationTest -RendererMode $(if ($NoPause) { 'Line' } else { 'Auto' })
+    if (($InstallPonytail -or $OptionalComponentActions.ponytail -eq 'Uninstall') -and $null -eq $PonytailState) { $PonytailState = Get-PonytailInstallationState -Root $context.GlobalRoot }
+    Invoke-GlobalInstallation -Context $context -SkipContext7Key:$SkipContext7Key -SkipCcusageInstall:$SkipCcusageInstall -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -InstallMattPocockSkills:$InstallMattPocockSkills -InstallPonytail:$InstallPonytail -SkipPonytail:$SkipPonytail -PonytailState $PonytailState -PonytailMarketplaceAction $PonytailMarketplaceAction -InstallCodexOrchestration:$InstallCodexOrchestration -SkipCodexOrchestration:$SkipCodexOrchestration -ConfigureCodexOrchestration:$ConfigureCodexOrchestration -InstallSerena:$InstallSerena -SkipSerena:$SkipSerena -InstallSerenaUv:$InstallSerenaUv -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput -LongRunningAsyncWaitAction $LongRunningAsyncWaitAction -ForceValidation:$ForceValidation -ForceNotificationTest:$ForceNotificationTest -RendererMode $(if ($NoPause) { 'Line' } else { 'Auto' }) -OptionalComponentActions $OptionalComponentActions
 }

@@ -15,7 +15,7 @@ $getStateImplementation = (Get-Command Get-CodexOrchestrationInstallationState -
 $script:stateQueried = $false
 function Get-CodexOrchestrationInstallationState { $script:stateQueried = $true; throw '不應查詢 plugin state' }
 $script:readHostValues.Enqueue('')
-if (Select-OptionalCodexOrchestration) { throw 'Codex-Orchestration 直接 Enter 應預設不安裝。' }
+if ((Select-OptionalCodexOrchestration) -ne 'Install') { throw 'Codex-Orchestration 首次安裝直接 Enter 應預設安裝。' }
 if ($script:stateQueried) { throw '未選用 Codex-Orchestration 時不得查詢 marketplace 或 plugin。' }
 Set-Item -Path Function:Get-CodexOrchestrationInstallationState -Value $getStateImplementation
 

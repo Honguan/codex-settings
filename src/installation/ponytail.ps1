@@ -345,6 +345,23 @@ function Undo-PonytailInstallation($Result) {
         if ($restoreMarketplace.ExitCode -ne 0) { throw "Ponytail marketplace rollback restore failed: $($restoreMarketplace.Output -join [Environment]::NewLine)" }
     }
 }
+
+function Invoke-PonytailUninstall($State) {
+    if (-not [bool]$State.PluginPresent) { return [pscustomobject]@{ Status = 'Unchanged'; MarketplaceStatus = 'Unchanged'; PluginStatus = 'Unchanged' } }
+    $remove = Invoke-PonytailCodexCommand -Arguments @('plugin', 'remove', $script:PonytailPluginId)
+    if ($remove.ExitCode -ne 0) { throw "Ponytail 解除安裝失敗：$($remove.Output -join [Environment]::NewLine)" }
+    $marketplaceStatus = 'Preserved'
+    $otherPlugins = @($State.MarketplacePluginIds | Where-Object { $_ -ne $script:PonytailPluginId })
+    if ($otherPlugins.Count -eq 0 -and $State.SourceRelationship -in @('Exact', 'Equivalent')) {
+        $marketplace = Invoke-PonytailCodexCommand -Arguments @('plugin', 'marketplace', 'remove', $script:PonytailMarketplaceName, '--json')
+        if ($marketplace.ExitCode -ne 0) {
+            $restore = Invoke-PonytailCodexCommand -Arguments @('plugin', 'add', $script:PonytailPluginId, '--json')
+            throw "Ponytail marketplace 解除安裝失敗：$($marketplace.Output -join [Environment]::NewLine)；plugin 復原：$(if ($restore.ExitCode -eq 0) { '成功' } else { '失敗' })"
+        }
+        $marketplaceStatus = 'Uninstalled'
+    }
+    return [pscustomobject]@{ Status = 'Uninstalled'; MarketplaceStatus = $marketplaceStatus; PluginStatus = 'Uninstalled'; Managed = $false; HookCount = 0; TrustedHookCount = 0; ValidationStatus = 'Uninstalled'; TrustStatus = 'Uninstalled' }
+}
 function Select-PonytailMarketplaceAction {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)]$State)

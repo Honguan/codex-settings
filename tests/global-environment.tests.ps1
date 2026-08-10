@@ -226,10 +226,10 @@ try {
         return $script:notificationAnswer
     }
     try {
-        if (Select-OptionalWindowsNotifications -AlreadyInstalled:$false) { throw 'Blank first-install selection must not install Windows notifications.' }
-        if ($script:capturedNotificationPrompt -ne '要安裝嗎？[y/N]') { throw 'First-install notification prompt is invalid.' }
-        if (-not (Select-OptionalWindowsNotifications -AlreadyInstalled:$true)) { throw 'Blank update selection must preserve Windows notifications.' }
-        if ($script:capturedNotificationPrompt -ne '要繼續安裝/更新嗎？[Y/n]') { throw 'Existing notification prompt is invalid.' }
+        if ((Select-OptionalWindowsNotifications -AlreadyInstalled:$false) -ne 'Install') { throw 'Blank first-install selection must install Windows notifications.' }
+        if ($script:capturedNotificationPrompt -ne '要安裝嗎？[Y/n]') { throw 'First-install notification prompt is invalid.' }
+        if ((Select-OptionalWindowsNotifications -AlreadyInstalled:$true) -ne 'KeepCurrent') { throw 'Blank update selection must preserve Windows notifications.' }
+        if ($script:capturedNotificationPrompt -ne '要保留並檢查更新嗎？[Y/n]') { throw 'Existing notification prompt is invalid.' }
     } finally {
         Remove-Item -LiteralPath Function:\Read-Host -ErrorAction SilentlyContinue
     }
@@ -241,8 +241,8 @@ try {
         return ''
     }
     try {
-        if (-not (Select-OptionalSerena)) { throw 'Blank Serena selection must install or update Serena.' }
-        if ($script:capturedSerenaPrompt -ne '要安裝/更新嗎？[Y/n]') { throw 'Serena prompt must default to [Y/n].' }
+        if ((Select-OptionalSerena) -ne 'Install') { throw 'Blank Serena selection must install Serena.' }
+        if ($script:capturedSerenaPrompt -ne '要安裝嗎？[Y/n]') { throw 'Serena prompt must default to [Y/n].' }
     } finally {
         Remove-Item -LiteralPath Function:\Read-Host -ErrorAction SilentlyContinue
     }

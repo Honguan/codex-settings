@@ -46,10 +46,10 @@ try {
     }
 
     function global:Read-Host { return '' }
-    if (Select-OptionalMattPocockSkills -AlreadyInstalled:$false) {
-        throw 'First mattpocock/skills installation did not default to No.'
+    if ((Select-OptionalMattPocockSkills -AlreadyInstalled:$false) -ne 'Install') {
+        throw 'First mattpocock/skills installation did not default to Install.'
     }
-    if (-not (Select-OptionalMattPocockSkills -AlreadyInstalled:$true)) {
+    if ((Select-OptionalMattPocockSkills -AlreadyInstalled:$true) -ne 'KeepCurrent') {
         throw 'Existing mattpocock/skills installation did not select automatic update.'
     }
 
