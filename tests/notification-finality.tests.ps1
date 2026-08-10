@@ -48,9 +48,10 @@ try {
         (@{ hook_event_name = 'PostCompact'; session_id = 'session-compaction'; turn_id = 'turn-compaction'; trigger = 'auto' } | ConvertTo-Json -Compress),
         (@{ type = 'agent-turn-complete'; 'thread-id' = 'session-aborted'; 'turn-id' = 'turn-aborted'; status = 'aborted' } | ConvertTo-Json -Compress),
         (@{ type = 'agent-turn-complete'; 'thread-id' = 'session-subagent'; 'turn-id' = 'turn-subagent'; parent_session_id = 'session-parent' } | ConvertTo-Json -Compress),
+        (@{ type = 'task_complete'; turn_id = 'turn-background-task'; last_agent_message = 'background task done' } | ConvertTo-Json -Compress),
         (@{ type = 'unknown-lifecycle'; session_id = 'session-unknown'; turn_id = 'turn-unknown' } | ConvertTo-Json -Compress)
     )) { Invoke-CompletedNotification -Payload $payload -AsArgument }
-    if (Test-Path -LiteralPath $logPath) { throw 'Compaction, aborted, subagent, or unknown finality produced a Completed notification.' }
+    if (Test-Path -LiteralPath $logPath) { throw 'Compaction, aborted, subagent, task completion, or unknown finality produced a Completed notification.' }
 
     $completed = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'fixtures\codex-notify-agent-turn-complete.json') -Raw
     $completed = $completed.Replace('019fe798-1ecb-7221-b31d-2f2d3280a361', 'session-finality').Replace('019fe798-turn-1', 'turn-finality')
