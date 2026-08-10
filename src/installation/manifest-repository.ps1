@@ -1,7 +1,6 @@
 function New-InstallationOwnershipManifest {
     [CmdletBinding()]
     param(
-        [switch]$InstallRequestExecutionOptimizer,
         [switch]$EnableDefaultModeRequestUserInput,
         [ValidateSet('Install', 'KeepCurrent', 'Update', 'Repair', 'Uninstall', 'SkipNotInstalled', 'LeaveUnchanged', 'Blocked')][string]$LongRunningAsyncWaitAction = 'Install',
         [switch]$InstallWindowsNotifications,
@@ -14,7 +13,6 @@ function New-InstallationOwnershipManifest {
     return [ordered]@{
         personal = [ordered]@{
             codexSettings = [ordered]@{ Owner = 'CodexSettings'; Category = 'Personal'; Selected = $true; ManagedPaths = @('AGENTS.md', 'config.toml', 'hooks.json', 'hooks/runtime-core.ps1', 'rules/default.rules'); ManagedConfigSections = @('CODEX-SETTINGS:Global:CONFIG'); ManagedHooks = @('line-ending'); ManagedExternalState = @(); RollbackScope = 'PersonalTransaction' }
-            requestExecutionOptimizer = [ordered]@{ Owner = 'CodexSettings'; Category = 'Personal'; Selected = [bool]$InstallRequestExecutionOptimizer; Action = $(if ($InstallRequestExecutionOptimizer) { 'Install' } else { 'SkipNotInstalled' }); DiscoveredState = 'Unknown'; LastResult = ''; ManagedPaths = @('skills/request-execution-optimizer'); ManagedConfigSections = @(); ManagedHooks = @(); ManagedExternalState = @(); RollbackScope = 'PersonalTransaction' }
             requestUserInput = [ordered]@{ Owner = 'CodexSettings'; Category = 'Personal'; Selected = [bool]$EnableDefaultModeRequestUserInput; Action = $(if ($EnableDefaultModeRequestUserInput) { 'Install' } else { 'SkipNotInstalled' }); DiscoveredState = 'Unknown'; LastResult = ''; ManagedPaths = @(); ManagedConfigSections = @('features.default_mode_request_user_input'); ManagedHooks = @(); ManagedExternalState = @(); RollbackScope = 'PersonalTransaction' }
         }
         otherSettings = [ordered]@{

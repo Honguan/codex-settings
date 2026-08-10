@@ -71,13 +71,6 @@ function Select-DevelopmentEnvironment([ValidateSet('Git', 'CVS')][string]$Defau
     }
 }
 
-function Select-OptionalGlobalSkill {
-    param([bool]$AlreadyInstalled = (Test-Path -LiteralPath (Join-Path $HOME '.codex\skills\request-execution-optimizer') -PathType Container))
-    Write-Host ''
-    Write-Host '選用全域技能：request-execution-optimizer'
-    return Select-OptionalComponentAction -Name 'request-execution-optimizer' -State (Get-OptionalComponentState -Installed $AlreadyInstalled)
-}
-
 function Select-OptionalComponentAction([string]$Name, [string]$State) {
     if ($State -in @('TrueUnmanagedConflict', 'MalformedUserOwnedState', 'Conflict', 'Unknown')) { throw "$Name 的安裝狀態無法安全判定，請先排除衝突。" }
     if ($State -eq 'NotInstalled') {

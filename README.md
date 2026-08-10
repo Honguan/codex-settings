@@ -11,7 +11,7 @@ Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 - 在全域安裝流程選擇 Git 或 CVS，合併對應的全域 AGENTS 與 Rules。
 - 安裝 Playwright MCP 設定。
 - 安裝或更新 `ccusage`，並新增或更新 `ccsessions`（Session 用量）與 `cdaily`（每日用量）指令。
-- 選用 `request-execution-optimizer` 與 `mattpocock/skills`。
+- 選用 `mattpocock/skills`。
 - 安全合併既有設定，並提供交易備份、中斷回復、備份、還原及移除。
 - 安裝時顯示動態階段、百分比、耗時與永久結果列，並將詳細 timing 寫入 `~/.codex/logs/installer/`。
 - 首次執行新版安裝器時，自動清除舊登記專案內由本工具管理的設定。
@@ -73,9 +73,6 @@ Codex-Orchestration 是預設不安裝的選用 plugin。只有選擇安裝後�
 # ccusage 已安裝時只更新 ccsessions、cdaily 指令
 .\Install.cmd -Mode Global -SkipCcusageInstall
 
-# 安裝 request-execution-optimizer
-.\Install.cmd -Mode Global -InstallRequestExecutionOptimizer
-
 # 安裝或更新 mattpocock/skills 的 10 個預設全域技能
 .\Install.cmd -Mode Global -InstallMattPocockSkills
 
@@ -114,7 +111,7 @@ Codex-Orchestration 是預設不安裝的選用 plugin。只有選擇安裝後�
 └─ .codex-settings-manifest.json
 ```
 
-`request-execution-optimizer` 安裝到 `%USERPROFILE%\.codex\skills`。`ccsessions` 與 `cdaily` 的受管理區塊寫入目前使用者的 PowerShell Profile。
+`ccsessions` 與 `cdaily` 的受管理區塊寫入目前使用者的 PowerShell Profile。
 
 `mattpocock/skills` 會安裝到 Codex 的全域技能目錄。首次安裝會詢問且預設為 `N`；只要偵測到曾由 `mattpocock/skills` 安裝任一全域技能，後續執行安裝器就會自動安裝或更新下列 10 個預設技能：
 
