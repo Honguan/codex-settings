@@ -11,7 +11,8 @@ param(
     [ValidateSet('Completed', 'PermissionRequired', 'QuestionRequired', 'Error')]
     [string]$NativeNotificationType = 'Completed',
     [switch]$NativeSound,
-    [string]$NativeTag
+    [string]$NativeTag,
+    [string]$PreviousNotifyBase64
 )
 
 $ErrorActionPreference = 'Stop'
@@ -584,6 +585,22 @@ function Show-BalloonFallback([string]$Title, [string]$Message, [string]$Notific
     return [pscustomobject]@{ Shown = $true; CleanupScheduled = $false }
 }
 
+function Start-PreviousNotifier([string]$EncodedCommand, [string]$Payload) {
+    if ([string]::IsNullOrWhiteSpace($EncodedCommand)) { return $false }
+    $line = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($EncodedCommand))
+    $array = [regex]::Match($line, '^\s*notify\s*=\s*\[(?<items>.*)\]\s*(?:#.*)?$')
+    if (-not $array.Success) { throw 'Previous notify command is invalid.' }
+    $command = @([regex]::Matches($array.Groups['items'].Value, '"(?:\\.|[^"\\])*"') | ForEach-Object { $_.Value | ConvertFrom-Json })
+    if ($command.Count -eq 0 -or [string]::IsNullOrWhiteSpace([string]$command[0])) { throw 'Previous notify command is empty.' }
+    $startInfo = [Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = [string]$command[0]
+    foreach ($argument in @($command | Select-Object -Skip 1) + @($Payload)) { $startInfo.ArgumentList.Add([string]$argument) }
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    [Diagnostics.Process]::Start($startInfo).Dispose()
+    return $true
+}
+
 if ($NativeToast) {
     try {
         $nativeResult = Show-NativeToastCore -Title $NativeTitle -Message $NativeMessage -NotificationType $NativeNotificationType -Sound ([bool]$NativeSound) -Tag $NativeTag
@@ -616,6 +633,10 @@ try {
     }
     $script:PayloadParsed = $inputObject.PSObject.Properties.Count -gt 0
     $script:PayloadKeys = @($inputObject.PSObject.Properties.Name | Sort-Object)
+    if (-not $Test -and -not [string]::IsNullOrWhiteSpace($PreviousNotifyBase64)) {
+        try { $script:PreviousNotifyStarted = Start-PreviousNotifier -EncodedCommand $PreviousNotifyBase64 -Payload $NotificationPayload }
+        catch { $script:PreviousNotifyError = $_.Exception.Message }
+    }
     if ($Type -eq 'Completed') {
         $completion = Get-CompletionClassification -InputObject $inputObject
         $script:CompletionClassification = [string]$completion.Classification
@@ -677,7 +698,7 @@ try {
                 'Error' { [pscustomobject]@{ Title = 'Codex 執行失敗'; Message = '請查看錯誤內容' } }
                 default { [pscustomobject]@{ Title = 'Codex 任務完成'; Message = '工作已完成' } }
             }
-            $details = ''
+            $details = if (-not [string]::IsNullOrWhiteSpace($script:PreviousNotifyError)) { 'previousNotifyError=' + $script:PreviousNotifyError } elseif ($script:PreviousNotifyStarted) { 'previousNotifyStarted=true' } else { '' }
             $deliverySucceeded = $false
                 $testMode = $env:CODEX_SETTINGS_NOTIFICATION_TEST_MODE -eq '1'
                 if ($testMode) {

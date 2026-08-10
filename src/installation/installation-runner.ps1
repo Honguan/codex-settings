@@ -179,8 +179,18 @@ function Invoke-WindowsUsageNotificationFiles {
     $changed = $false
     $configState = Get-TextFileState -Path $configPath
     $repairableConfig = Remove-RepairableWindowsNotificationCommandConfig -Content $configState.Content -Root $Root
-    $desiredConfig = if ($lifecycle.ExternalNotifyCoexistence) { $configState.Content } elseif ($Remove) { $repairableConfig } else { Merge-WindowsNotificationCommandConfig -Content $repairableConfig -Root $Root -NewLine $configState.NewLine }
-    if (-not $lifecycle.ExternalNotifyCoexistence -and -not [string]::IsNullOrWhiteSpace($desiredConfig)) { $desiredConfig = $desiredConfig.TrimEnd() + $configState.NewLine }
+    $desiredConfig = if ($Remove) {
+        Remove-WindowsNotificationCommandConfig -Content $configState.Content -RestorePrevious
+    } elseif ($lifecycle.ConfigState -eq 'CurrentManagedBlock') {
+        $configState.Content
+    } elseif ($lifecycle.ExternalNotifyCoexistence) {
+        Merge-WindowsNotificationCommandConfig -Content $configState.Content -Root $Root -NewLine $configState.NewLine
+    } elseif (-not [string]::IsNullOrWhiteSpace((Get-PreviousWindowsNotificationCommandLine -Content $configState.Content))) {
+        Merge-WindowsNotificationCommandConfig -Content $configState.Content -Root $Root -NewLine $configState.NewLine
+    } else {
+        Merge-WindowsNotificationCommandConfig -Content $repairableConfig -Root $Root -NewLine $configState.NewLine
+    }
+    if (-not [string]::IsNullOrWhiteSpace($desiredConfig)) { $desiredConfig = $desiredConfig.TrimEnd() + $configState.NewLine }
     if ($desiredConfig -ne $configState.Content) {
         Save-TransactionFile -Transaction $Transaction -Path $configPath
         Write-TextFileState -Path $configPath -Content $desiredConfig -Encoding $configState.Encoding

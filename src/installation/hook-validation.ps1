@@ -9,7 +9,7 @@ function Remove-GlobalLineEndingHooks([string]$Root, $Transaction) {
         }
     }
 
-    foreach ($scriptName in @('crlf-updated-files.ps1', 'normalize-cvs-crlf.ps1', 'preserve-line-endings.ps1')) {
+    foreach ($scriptName in @('crlf-updated-files.ps1', 'normalize-cvs-crlf.ps1')) {
         $scriptPath = Join-Path $Root ("hooks\$scriptName")
         if (Test-Path -LiteralPath $scriptPath -PathType Leaf) {
             Save-TransactionFile -Transaction $Transaction -Path $scriptPath
@@ -287,8 +287,10 @@ function Get-WindowsNotificationLifecycleState([string]$Root, [string[]]$Managed
         'NotInstalled'
     } elseif ($question -eq 0 -and $permission -eq 0 -and $completed -eq 0 -and $scriptCount -eq 0 -and $configState -eq 'MissingManagedBlock') {
         'NotInstalled'
-    } elseif ($question -eq 1 -and $permission -eq 1 -and $completed -eq 0 -and $scriptCount -eq 1 -and ($configState -eq 'CurrentManagedBlock' -or $externalNotifyCoexistence)) {
+    } elseif ($question -eq 1 -and $permission -eq 1 -and $completed -eq 0 -and $scriptCount -eq 1 -and $configState -eq 'CurrentManagedBlock') {
         'InstalledCurrent'
+    } elseif ($question -eq 1 -and $permission -eq 1 -and $completed -eq 0 -and $scriptCount -eq 1 -and $externalNotifyCoexistence) {
+        'InstalledUpdateAvailable'
     } elseif ($question -eq 1 -and $permission -eq 1 -and $completed -eq 1 -and $scriptCount -eq 1 -and ($configState -in @('MissingManagedBlock', 'OutdatedManagedBlock') -or $externalNotifyCoexistence)) {
         'InstalledNeedsMigration'
     } elseif ($question -eq 1 -and $permission -eq 1 -and $completed -eq 0 -and $scriptCount -eq 1 -and $configState -eq 'OutdatedManagedBlock') {
@@ -377,7 +379,7 @@ function Assert-GlobalLineEndingHook([ValidateSet('Git', 'CVS')][string]$Develop
         } elseif ($trackHookCount -ne 1 -or $restoreHookCount -ne 1 -or $finalizeHookCount -ne 1 -or $preserveScriptCount -ne 1 -or $legacyHookCount -ne 0) {
             throw "CVS 換行保護安裝檢查失敗：TrackHookCount=$trackHookCount RestoreHookCount=$restoreHookCount FinalizeHookCount=$finalizeHookCount PreserveLineEndingScriptCount=$preserveScriptCount LegacyCrlfHookCount=$legacyHookCount"
         }
-    } elseif ($trackHookCount -ne 0 -or $restoreHookCount -ne 0 -or $finalizeHookCount -ne 0 -or $preserveScriptCount -ne 0 -or $legacyHookCount -ne 0) {
+    } elseif ($trackHookCount -ne 0 -or $restoreHookCount -ne 0 -or $finalizeHookCount -ne 0 -or $preserveScriptCount -notin @(0, 1) -or $legacyHookCount -ne 0) {
         throw 'Git 全域設定仍包含 CVS 換行保護 Hook。'
     }
     if ($DevelopmentEnvironment -eq 'Git' -and ($projectLineEndingPostToolUseHookCount -ne 0 -or $projectLineEndingStopHookCount -ne 0)) {

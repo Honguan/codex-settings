@@ -1,7 +1,7 @@
 $script:ManagedHookManifestId = 'codex-settings'
 $script:ManagedHookManifestVersion = 3
 $script:ManagedNotificationId = 'codex-settings-notification'
-$script:ManagedNotificationVersion = 5
+$script:ManagedNotificationVersion = 6
 $script:WindowsNotificationConfigStartMarker = '# >>> CODEX-SETTINGS:WINDOWS-NOTIFICATIONS:CONFIG >>>'
 $script:WindowsNotificationConfigEndMarker = '# <<< CODEX-SETTINGS:WINDOWS-NOTIFICATIONS:CONFIG <<<'
 $script:ManagedLineEndingHookSignaturePattern = '(?i)((?:crlf-updated-files|normalize-cvs-crlf|preserve-line-endings)\.ps1|Converting updated files? to CRLF|Normalizing updated files to CRLF|Finalizing CRLF normalization|CodexSettings CRLF (?:track|finalize)|Restoring original line endings)'
@@ -13,20 +13,35 @@ $script:ManagedGlobalHookSignaturePattern = '(?i)(show-codex-notification\.ps1|C
 $script:LegacyNotificationHookSignaturePattern = '(?i)(show[-_]?(?:codex|windows|win32|toast|balloon)[-_]?(?:notification|notify|toast|completion|completed)\.ps1|(?:codex|windows|win32|toast|balloon|completion|completed)[-_]?(?:notification|notify|toast|completion|completed)\.ps1|notify[-_]?codex\.ps1|CodexSettings Windows notification|Codex 任務完成|工作已完成|請回到 Codex)'
 $script:LegacyTokenHookSignaturePattern = '(?i)(show[-_]?(?:turn[-_]?)?token[-_]?usage\.ps1|turn[-_]?token[-_]?usage|CodexSettings turn token usage)'
 
-function Get-WindowsNotificationCommandConfig([string]$Root) {
+function Get-WindowsNotificationCommandConfig([string]$Root, [string]$PreviousNotifyLine = '') {
     $scriptPath = (Join-Path $Root 'hooks\show-codex-notification.ps1').Replace('\', '\\').Replace('"', '\"')
-    return 'notify = ["pwsh.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "' + $scriptPath + '", "-Type", "Completed"]'
+    $previous = if ([string]::IsNullOrWhiteSpace($PreviousNotifyLine)) { '' } else { ', "-PreviousNotifyBase64", "' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($PreviousNotifyLine)) + '"' }
+    return 'notify = ["pwsh.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "' + $scriptPath + '", "-Type", "Completed"' + $previous + ']'
 }
 
-function Remove-WindowsNotificationCommandConfig([string]$Content) {
-    return Remove-ManagedBlock -Content $Content -StartMarker $script:WindowsNotificationConfigStartMarker -EndMarker $script:WindowsNotificationConfigEndMarker
+function Get-PreviousWindowsNotificationCommandLine([string]$Content) {
+    $match = [regex]::Match($Content, '"-PreviousNotifyBase64"\s*,\s*"(?<value>[A-Za-z0-9+/=]+)"')
+    if (-not $match.Success) { return '' }
+    try { return [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($match.Groups['value'].Value)) } catch { return '' }
+}
+
+function Remove-WindowsNotificationCommandConfig([string]$Content, [switch]$RestorePrevious) {
+    $previous = if ($RestorePrevious) { Get-PreviousWindowsNotificationCommandLine -Content $Content } else { '' }
+    $base = Remove-ManagedBlock -Content $Content -StartMarker $script:WindowsNotificationConfigStartMarker -EndMarker $script:WindowsNotificationConfigEndMarker
+    if ([string]::IsNullOrWhiteSpace($previous)) { return $base }
+    $newLine = if ($Content.Contains("`r`n")) { "`r`n" } else { "`n" }
+    if ([string]::IsNullOrWhiteSpace($base)) { return $previous + $newLine }
+    return $previous + $newLine + $newLine + $base.TrimStart()
 }
 
 function Merge-WindowsNotificationCommandConfig([string]$Content, [string]$Root, [string]$NewLine = "`r`n") {
+    $chainedNotify = Get-PreviousWindowsNotificationCommandLine -Content $Content
     $base = Remove-WindowsNotificationCommandConfig -Content $Content
     $shape = Get-TomlShape -Content $base
-    if ($shape.TopLevelKeys.Contains('notify')) { throw 'config.toml 已有非 Codex Settings 管理的 notify；無法安全安裝 Windows 完成通知。' }
-    $block = $script:WindowsNotificationConfigStartMarker + $NewLine + (Get-WindowsNotificationCommandConfig -Root $Root) + $NewLine + $script:WindowsNotificationConfigEndMarker
+    $previousNotify = if ($shape.TopLevelKeys.Contains('notify')) { Get-WindowsNotificationCommandLine -Content $base } else { $chainedNotify }
+    if ($shape.TopLevelKeys.Contains('notify') -and [string]::IsNullOrWhiteSpace($previousNotify)) { throw 'config.toml 已有無法安全串接的 notify；無法安裝 Windows 完成通知。' }
+    if (-not [string]::IsNullOrWhiteSpace($previousNotify)) { $base = [regex]::Replace($base, '(?m)^' + [regex]::Escape($previousNotify) + '\r?\n?', '', 1) }
+    $block = $script:WindowsNotificationConfigStartMarker + $NewLine + (Get-WindowsNotificationCommandConfig -Root $Root -PreviousNotifyLine $previousNotify) + $NewLine + $script:WindowsNotificationConfigEndMarker
     if ([string]::IsNullOrWhiteSpace($base)) { return $block + $NewLine }
     return $block + $NewLine + $NewLine + $base.Trim() + $NewLine
 }
@@ -92,7 +107,9 @@ function Get-WindowsNotificationCommandConfigState([string]$Content, [string]$Ro
     $actual = @([regex]::Matches($notify.Groups['items'].Value, '"(?:\\.|[^"\\])*"') | ForEach-Object Value)
     $expected = [regex]::Match((Get-WindowsNotificationCommandConfig -Root $Root), '\[(?<items>.*)\]')
     $expectedItems = @([regex]::Matches($expected.Groups['items'].Value, '"(?:\\.|[^"\\])*"') | ForEach-Object Value)
-    return $(if ($actual.Count -eq $expectedItems.Count -and ($actual -join "`0") -ceq ($expectedItems -join "`0")) { 'CurrentManagedBlock' } else { 'OutdatedManagedBlock' })
+    $prefixMatches = $actual.Count -ge $expectedItems.Count -and ($actual[0..($expectedItems.Count - 1)] -join "`0") -ceq ($expectedItems -join "`0")
+    $chained = $actual.Count -eq ($expectedItems.Count + 2) -and $actual[$expectedItems.Count] -ceq '"-PreviousNotifyBase64"' -and -not [string]::IsNullOrWhiteSpace((Get-PreviousWindowsNotificationCommandLine -Content $managed.Groups['block'].Value))
+    return $(if ($prefixMatches -and ($actual.Count -eq $expectedItems.Count -or $chained)) { 'CurrentManagedBlock' } else { 'OutdatedManagedBlock' })
 }
 
 function Get-HookEntryText {

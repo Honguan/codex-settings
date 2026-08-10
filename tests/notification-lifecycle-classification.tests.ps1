@@ -108,10 +108,25 @@ try {
     Assert-GlobalLineEndingHook -DevelopmentEnvironment Git -Root $root -InstallWindowsNotifications:$false -ProjectRoot '' -ValidationPhase PreCommunity -PlannedNotificationAction Install | Out-Null
     $firstInstallTransaction = New-FileTransaction -Root (Join-Path $testRoot 'first-install-coexistence-transaction') -Mode Install
     Invoke-WindowsUsageNotificationFiles -Root $root -SourceRoot $script:ScriptRoot -Transaction $firstInstallTransaction | Out-Null
-    Assert-State InstalledCurrent | Out-Null
-    if ([IO.File]::ReadAllText((Join-Path $root 'config.toml')) -ne $firstInstallExternalNotify) { throw 'First-install external top-level notify was not preserved exactly.' }
+    $firstInstallCurrent = Assert-State InstalledCurrent
+    $firstInstallConfig = [IO.File]::ReadAllText((Join-Path $root 'config.toml'))
+    if (-not $firstInstallCurrent.ManagedNotifyPresent -or $firstInstallCurrent.ExternalNotifyCoexistence -or $firstInstallConfig -notmatch 'PreviousNotifyBase64') { throw 'First-install external notify was not chained through the managed completion notifier.' }
+    $firstInstallRemoveTransaction = New-FileTransaction -Root (Join-Path $testRoot 'first-install-remove-transaction') -Mode Remove
+    Invoke-WindowsUsageNotificationFiles -Root $root -SourceRoot $script:ScriptRoot -Transaction $firstInstallRemoveTransaction -Remove | Out-Null
+    if ([IO.File]::ReadAllText((Join-Path $root 'config.toml')) -ne $firstInstallExternalNotify) { throw 'Removing notifications did not restore the original external notify exactly.' }
+    Undo-FileTransaction -Transaction $firstInstallRemoveTransaction
+    $outdatedChain = [IO.File]::ReadAllText((Join-Path $root 'config.toml')).Replace('"-NoLogo"', '"-OldLogo"')
+    [IO.File]::WriteAllText((Join-Path $root 'config.toml'), $outdatedChain, $utf8)
+    Assert-State InstalledUpdateAvailable | Out-Null
+    $chainUpdateTransaction = New-FileTransaction -Root (Join-Path $testRoot 'chain-update-transaction') -Mode Update
+    Invoke-WindowsUsageNotificationFiles -Root $root -SourceRoot $script:ScriptRoot -Transaction $chainUpdateTransaction | Out-Null
+    if ((Get-PreviousWindowsNotificationCommandLine -Content ([IO.File]::ReadAllText((Join-Path $root 'config.toml')))) -ne $firstInstallExternalNotify.TrimEnd()) { throw 'Updating the managed notifier lost its existing external notify chain.' }
     $firstInstallSecondTransaction = New-FileTransaction -Root (Join-Path $testRoot 'first-install-coexistence-idempotent-transaction') -Mode Install
     if ((Invoke-WindowsUsageNotificationFiles -Root $root -SourceRoot $script:ScriptRoot -Transaction $firstInstallSecondTransaction).Changed) { throw 'Repeated first-install coexistence was not idempotent.' }
+
+    Reset-NotificationFixture
+    Set-NotificationFixture -Config $firstInstallExternalNotify -Hooks (Get-TemplateHooks) -Script -Manifest
+    Assert-State InstalledUpdateAvailable | Out-Null
 
     Reset-NotificationFixture
     $coexistenceHooks = Get-TemplateHooks
@@ -122,7 +137,7 @@ try {
     $coexistenceTransaction = New-FileTransaction -Root (Join-Path $testRoot 'coexistence-transaction') -Mode Repair
     Invoke-WindowsUsageNotificationFiles -Root $root -SourceRoot $script:ScriptRoot -Transaction $coexistenceTransaction | Out-Null
     Assert-State InstalledCurrent | Out-Null
-    if ([IO.File]::ReadAllText((Join-Path $root 'config.toml')) -ne $externalNotify) { throw 'External top-level notify was not preserved exactly.' }
+    if ([IO.File]::ReadAllText((Join-Path $root 'config.toml')) -notmatch 'PreviousNotifyBase64') { throw 'Existing external notify was not chained during migration.' }
     Assert-GlobalLineEndingHook -DevelopmentEnvironment Git -Root $root -InstallWindowsNotifications $true -ProjectRoot '' | Out-Null
     $coexistenceSecondTransaction = New-FileTransaction -Root (Join-Path $testRoot 'coexistence-idempotent-transaction') -Mode Repair
     if ((Invoke-WindowsUsageNotificationFiles -Root $root -SourceRoot $script:ScriptRoot -Transaction $coexistenceSecondTransaction).Changed) { throw 'Repeated coexistence repair was not idempotent.' }

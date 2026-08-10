@@ -36,6 +36,11 @@ function Get-InstallTemplateEntries($Target) {
             if ($globalPaths.Contains($relative)) { continue }
             [void]$entries.Add([pscustomobject]@{ RelativePath = $relative; Content = [IO.File]::ReadAllText($source.FullName) })
         }
+        $lineEndingRelativePath = 'hooks\preserve-line-endings.ps1'
+        if (@($entries | Where-Object RelativePath -eq $lineEndingRelativePath).Count -eq 0) {
+            $lineEndingSource = Join-Path $Target.SourceRoot 'templates\environments\cvs\hooks\preserve-line-endings.ps1'
+            [void]$entries.Add([pscustomobject]@{ RelativePath = $lineEndingRelativePath; Content = [IO.File]::ReadAllText($lineEndingSource) })
+        }
     }
     return $entries.ToArray()
 }

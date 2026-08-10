@@ -182,7 +182,7 @@ try {
 
     Install-TestEnvironment -Environment Git
     $manifest = Get-Manifest $globalRoot
-    if ($manifest.ManagedHooks.managedId -ne 'codex-settings' -or [int]$manifest.ManagedHooks.managedVersion -ne 3 -or $manifest.ManagedHooks.notification.managedId -ne 'codex-settings-notification' -or [int]$manifest.ManagedHooks.notification.managedVersion -ne 5) { throw '安裝 manifest 缺少通知 managedId/managedVersion。' }
+    if ($manifest.ManagedHooks.managedId -ne 'codex-settings' -or [int]$manifest.ManagedHooks.managedVersion -ne 3 -or $manifest.ManagedHooks.notification.managedId -ne 'codex-settings-notification' -or [int]$manifest.ManagedHooks.notification.managedVersion -ne 6) { throw '安裝 manifest 缺少通知 managedId/managedVersion。' }
     $completedManifestHandlers = @($manifest.ManagedHooks.notification.handlers | Where-Object { $_.event -eq 'Stop' -and $_.handlerId -eq 'completed-toast' })
     if ($completedManifestHandlers.Count -ne 0 -or @($manifest.Community.windowsUsageNotifications.ManagedConfigSections) -notcontains 'notify') { throw '安裝 manifest 未記錄 canonical notify 所有權。' }
     $agents = Get-Content -LiteralPath (Join-Path $globalRoot 'AGENTS.md') -Raw
@@ -199,7 +199,13 @@ try {
     if (-not (Test-Path -LiteralPath (Join-Path $globalRoot 'hooks\show-codex-notification.ps1') -PathType Leaf)) { throw 'Git installation omitted the global notification script.' }
     $notificationScriptBytes = [IO.File]::ReadAllBytes((Join-Path $globalRoot 'hooks\show-codex-notification.ps1'))
     if ($notificationScriptBytes.Length -lt 3 -or $notificationScriptBytes[0] -ne 0xEF -or $notificationScriptBytes[1] -ne 0xBB -or $notificationScriptBytes[2] -ne 0xBF) { throw 'Installed notification script lost its UTF-8 BOM.' }
-    if (Test-Path -LiteralPath (Join-Path $globalRoot 'hooks\preserve-line-endings.ps1')) { throw 'Git installation retained the CVS line-ending protection script.' }
+    $dormantLineEndingHook = Join-Path $globalRoot 'hooks\preserve-line-endings.ps1'
+    if (-not (Test-Path -LiteralPath $dormantLineEndingHook -PathType Leaf)) { throw 'Git installation removed the line-ending script while existing CVS sessions can still invoke it.' }
+    $noFileInput = [ordered]@{ session_id = 'cached-cvs-session'; cwd = $projectRoot; hook_event_name = 'PreToolUse'; tool_name = 'view_image'; tool_input = [ordered]@{} } | ConvertTo-Json -Depth 5 -Compress
+    $noFileOutput = $noFileInput | & pwsh -NoLogo -NoProfile -NonInteractive -File $dormantLineEndingHook -Mode Track
+    $noFileExitCode = $LASTEXITCODE
+    $noFileResult = $noFileOutput | ConvertFrom-Json -ErrorAction Stop
+    if ($noFileExitCode -ne 0 -or @($noFileResult.PSObject.Properties).Count -ne 0) { throw "Cached CVS Hook did not exit cleanly when no files were modified: exitCode=$noFileExitCode output=$noFileOutput" }
 
     Install-TestEnvironment -Environment CVS
     $agents = Get-Content -LiteralPath (Join-Path $globalRoot 'AGENTS.md') -Raw
@@ -216,7 +222,7 @@ try {
 
     Install-TestEnvironment -Environment Git
     if (Test-Path -LiteralPath (Join-Path $globalRoot 'hooks\normalize-cvs-crlf.ps1')) { throw 'Switching environments retained the obsolete CVS hook script.' }
-    if (Test-Path -LiteralPath (Join-Path $globalRoot 'hooks\preserve-line-endings.ps1')) { throw 'Switching environments retained the CVS line-ending protection script.' }
+    if (-not (Test-Path -LiteralPath (Join-Path $globalRoot 'hooks\preserve-line-endings.ps1') -PathType Leaf)) { throw 'Switching environments removed the dormant line-ending script needed by cached CVS sessions.' }
     $installedHooks = Get-Content -LiteralPath (Join-Path $globalRoot 'hooks.json') -Raw | ConvertFrom-Json
     if (@($installedHooks.hooks.PreToolUse | Where-Object { Test-ManagedNotificationHookEntry $_ }).Count -ne 1 -or @($installedHooks.hooks.PermissionRequest | Where-Object { Test-ManagedNotificationHookEntry $_ }).Count -ne 1 -or @($installedHooks.hooks.Stop | Where-Object { Test-ManagedNotificationHookEntry $_ }).Count -ne 0) { throw 'Switching environments duplicated or removed the global notification hooks.' }
 
