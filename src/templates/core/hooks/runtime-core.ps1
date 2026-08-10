@@ -9,15 +9,17 @@ function ConvertFrom-CodexHookInputJson {
     try { return $Text | ConvertFrom-Json -ErrorAction Stop }
     catch {
         $originalError = $_
-        $pattern = '(?s)("last_assistant_message"\s*:\s*)".*"(\s*}\s*)$'
-        $sanitized = [regex]::Replace($Text, $pattern, '$1null$2')
-        if ($sanitized -ne $Text) {
-            try { return $sanitized | ConvertFrom-Json -ErrorAction Stop } catch {}
-        }
-        $messageProperty = @([regex]::Matches($Text, ',\s*"last_assistant_message"\s*:'))[-1]
-        if ($null -ne $messageProperty) {
-            $prefix = $Text.Substring(0, $messageProperty.Index).TrimEnd()
-            try { return ($prefix + '}') | ConvertFrom-Json -ErrorAction Stop } catch {}
+        foreach ($messageName in @('last_assistant_message', 'last-assistant-message')) {
+            $escapedName = [regex]::Escape($messageName)
+            $sanitized = [regex]::Replace($Text, '(?s)("' + $escapedName + '"\s*:\s*)".*"(\s*}\s*)$', '$1null$2')
+            if ($sanitized -ne $Text) {
+                try { return $sanitized | ConvertFrom-Json -ErrorAction Stop } catch {}
+            }
+            $messageProperty = @([regex]::Matches($Text, ',\s*"' + $escapedName + '"\s*:'))[-1]
+            if ($null -ne $messageProperty) {
+                $prefix = $Text.Substring(0, $messageProperty.Index).TrimEnd()
+                try { return ($prefix + '}') | ConvertFrom-Json -ErrorAction Stop } catch {}
+            }
         }
         throw $originalError
     }

@@ -1,7 +1,9 @@
 $script:ManagedHookManifestId = 'codex-settings'
 $script:ManagedHookManifestVersion = 3
 $script:ManagedNotificationId = 'codex-settings-notification'
-$script:ManagedNotificationVersion = 3
+$script:ManagedNotificationVersion = 4
+$script:WindowsNotificationConfigStartMarker = '# >>> CODEX-SETTINGS:WINDOWS-NOTIFICATIONS:CONFIG >>>'
+$script:WindowsNotificationConfigEndMarker = '# <<< CODEX-SETTINGS:WINDOWS-NOTIFICATIONS:CONFIG <<<'
 $script:ManagedLineEndingHookSignaturePattern = '(?i)((?:crlf-updated-files|normalize-cvs-crlf|preserve-line-endings)\.ps1|Converting updated files? to CRLF|Normalizing updated files to CRLF|Finalizing CRLF normalization|CodexSettings CRLF (?:track|finalize)|Restoring original line endings)'
 $script:PreserveLineEndingHookSignaturePattern = '(?i)(preserve-line-endings\.ps1|Restoring original line endings)'
 $script:LegacyCrlfHookSignaturePattern = '(?i)((?:crlf-updated-files|normalize-cvs-crlf)\.ps1|Converting updated files? to CRLF|Normalizing updated files to CRLF|Finalizing CRLF normalization|CodexSettings CRLF (?:track|finalize))'
@@ -10,6 +12,30 @@ $script:ManagedTokenHookSignaturePattern = '(?i)(show-turn-token-usage\.ps1|turn
 $script:ManagedGlobalHookSignaturePattern = '(?i)(show-codex-notification\.ps1|CodexSettings Windows notification|show-turn-token-usage\.ps1|turn-token-usage|CodexSettings turn token usage)'
 $script:LegacyNotificationHookSignaturePattern = '(?i)(show[-_]?(?:codex|windows|win32|toast|balloon)[-_]?(?:notification|notify|toast|completion|completed)\.ps1|(?:codex|windows|win32|toast|balloon|completion|completed)[-_]?(?:notification|notify|toast|completion|completed)\.ps1|notify[-_]?codex\.ps1|CodexSettings Windows notification|Codex 任務完成|工作已完成|請回到 Codex)'
 $script:LegacyTokenHookSignaturePattern = '(?i)(show[-_]?(?:turn[-_]?)?token[-_]?usage\.ps1|turn[-_]?token[-_]?usage|CodexSettings turn token usage)'
+
+function Get-WindowsNotificationCommandConfig([string]$Root) {
+    $scriptPath = (Join-Path $Root 'hooks\show-codex-notification.ps1').Replace('\', '\\').Replace('"', '\"')
+    return 'notify = ["pwsh.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "' + $scriptPath + '", "-Type", "Completed"]'
+}
+
+function Remove-WindowsNotificationCommandConfig([string]$Content) {
+    return Remove-ManagedBlock -Content $Content -StartMarker $script:WindowsNotificationConfigStartMarker -EndMarker $script:WindowsNotificationConfigEndMarker
+}
+
+function Merge-WindowsNotificationCommandConfig([string]$Content, [string]$Root, [string]$NewLine = "`r`n") {
+    $base = Remove-WindowsNotificationCommandConfig -Content $Content
+    $shape = Get-TomlShape -Content $base
+    if ($shape.TopLevelKeys.Contains('notify')) { throw 'config.toml 已有非 Codex Settings 管理的 notify；無法安全安裝 Windows 完成通知。' }
+    $block = $script:WindowsNotificationConfigStartMarker + $NewLine + (Get-WindowsNotificationCommandConfig -Root $Root) + $NewLine + $script:WindowsNotificationConfigEndMarker
+    if ([string]::IsNullOrWhiteSpace($base)) { return $block + $NewLine }
+    return $block + $NewLine + $NewLine + $base.Trim() + $NewLine
+}
+
+function Test-WindowsNotificationCommandConfig([string]$Content, [string]$Root) {
+    if ([string]::IsNullOrWhiteSpace($Content)) { return $false }
+    $expected = Get-WindowsNotificationCommandConfig -Root $Root
+    return $Content.Contains($script:WindowsNotificationConfigStartMarker) -and $Content.Contains($script:WindowsNotificationConfigEndMarker) -and $Content.Contains($expected)
+}
 
 function Get-HookEntryText {
     [CmdletBinding()]

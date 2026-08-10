@@ -244,6 +244,9 @@ function Get-HookConfigurationCounts([string]$HooksPath, [string[]]$Notification
 
 function Assert-GlobalLineEndingHook([ValidateSet('Git', 'CVS')][string]$DevelopmentEnvironment, [string]$Root, [bool]$InstallWindowsNotifications, [string]$ProjectRoot, [string[]]$ManagedNotificationFingerprints = @(), [string[]]$ManagedTokenFingerprints = @()) {
     $hooksPath = Join-Path $Root 'hooks.json'
+    $configPath = Join-Path $Root 'config.toml'
+    $configContent = if (Test-Path -LiteralPath $configPath -PathType Leaf) { [IO.File]::ReadAllText($configPath) } else { '' }
+    $notificationCommandConfigured = Test-WindowsNotificationCommandConfig -Content $configContent -Root $Root
     $globalCounts = Get-HookConfigurationCounts -HooksPath $hooksPath -NotificationFingerprints $ManagedNotificationFingerprints -TokenFingerprints $ManagedTokenFingerprints
     $trackHookCount = [int]$globalCounts.LineEndingPreToolUse
     $restoreHookCount = [int]$globalCounts.LineEndingPostToolUse
@@ -255,8 +258,8 @@ function Assert-GlobalLineEndingHook([ValidateSet('Git', 'CVS')][string]$Develop
     $preserveScriptCount = if (Test-Path -LiteralPath (Join-Path $Root 'hooks\preserve-line-endings.ps1') -PathType Leaf) { 1 } else { 0 }
     $notificationScriptCount = if (Test-Path -LiteralPath (Join-Path $Root 'hooks\show-codex-notification.ps1') -PathType Leaf) { 1 } else { 0 }
     $expectedNotificationCount = if ($InstallWindowsNotifications) { 1 } else { 0 }
-    if ($notificationQuestionHookCount -ne $expectedNotificationCount -or $notificationPermissionHookCount -ne $expectedNotificationCount -or $notificationCompletedHookCount -ne $expectedNotificationCount -or $notificationScriptCount -ne $expectedNotificationCount) {
-        throw "Windows 通知安裝檢查失敗：Expected=$expectedNotificationCount QuestionHookCount=$notificationQuestionHookCount PermissionHookCount=$notificationPermissionHookCount CompletedHookCount=$notificationCompletedHookCount NotificationScriptCount=$notificationScriptCount"
+    if ($notificationQuestionHookCount -ne $expectedNotificationCount -or $notificationPermissionHookCount -ne $expectedNotificationCount -or $notificationCompletedHookCount -ne 0 -or [int]$notificationCommandConfigured -ne $expectedNotificationCount -or $notificationScriptCount -ne $expectedNotificationCount) {
+        throw "Windows 通知安裝檢查失敗：Expected=$expectedNotificationCount QuestionHookCount=$notificationQuestionHookCount PermissionHookCount=$notificationPermissionHookCount CompletedStopHookCount=$notificationCompletedHookCount NotificationCommandConfigured=$notificationCommandConfigured NotificationScriptCount=$notificationScriptCount"
     }
     $projectCounts = [pscustomobject]@{ NotificationStop = 0; LegacyNotificationStop = 0; Token = 0; LineEndingPreToolUse = 0; LineEndingPostToolUse = 0; LineEndingStop = 0; LegacyCrlf = 0 }
     if (-not [string]::IsNullOrWhiteSpace($ProjectRoot)) {
@@ -280,7 +283,7 @@ function Assert-GlobalLineEndingHook([ValidateSet('Git', 'CVS')][string]$Develop
     $globalNotificationStopHookCount = $notificationCompletedHookCount
     $legacyTokenHookCount = [int]$globalCounts.Token + $projectLegacyTokenHookCount
     $legacyCompletedNotificationHookCount = [int]$globalCounts.LegacyNotificationStop + [int]$projectCounts.LegacyNotificationStop
-    $effectiveCompletedNotificationHookCount = $notificationCompletedHookCount + $projectNotificationStopHookCount
+    $effectiveCompletedNotificationHookCount = [int]$notificationCommandConfigured + $notificationCompletedHookCount + $projectNotificationStopHookCount
     $legacyCrlfHookCount += $projectLegacyCrlfHookCount
     if ($legacyCompletedNotificationHookCount -ne 0 -or $projectLegacyCrlfHookCount -ne 0 -or $legacyTokenHookCount -ne 0) {
         throw "仍包含受管理的舊 Hook：LegacyCompletedNotification=$legacyCompletedNotificationHookCount LegacyCrlf=$legacyCrlfHookCount LegacyToken=$legacyTokenHookCount"
@@ -307,6 +310,7 @@ function Assert-GlobalLineEndingHook([ValidateSet('Git', 'CVS')][string]$Develop
         GlobalNotificationStopHookCount = $globalNotificationStopHookCount
         ProjectNotificationStopHookCount = $projectNotificationStopHookCount
         GlobalCompletedNotificationHookCount = $notificationCompletedHookCount
+        NotificationCommandConfigured = [bool]$notificationCommandConfigured
         ProjectCompletedNotificationHookCount = $projectNotificationStopHookCount
         LegacyCompletedNotificationHookCount = $legacyCompletedNotificationHookCount
         StandaloneTokenUsageHookCount = $legacyTokenHookCount

@@ -26,18 +26,6 @@
           }
         ]
       }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "pwsh -NoLogo -NoProfile -NonInteractive -File \"$HOME/.codex/hooks/show-codex-notification.ps1\" -Type Completed",
-            "commandWindows": "pwsh.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"%USERPROFILE%\\.codex\\hooks\\show-codex-notification.ps1\" -Type Completed",
-            "timeout": 30
-          }
-        ]
-      }
     ]
   }
 }

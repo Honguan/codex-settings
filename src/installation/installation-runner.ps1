@@ -153,9 +153,18 @@ function Invoke-WindowsUsageNotificationFiles {
     $manifest = Get-Manifest -Root $Root
     $fingerprints = @(Get-ManifestManagedHookFingerprints -Manifest $manifest -Kind Notification)
     $hooksPath = Join-Path $Root 'hooks.json'
+    $configPath = Join-Path $Root 'config.toml'
     $scriptPath = Join-Path $Root 'hooks\show-codex-notification.ps1'
     $hooksState = Get-TextFileState -Path $hooksPath
     $changed = $false
+    $configState = Get-TextFileState -Path $configPath
+    $desiredConfig = if ($Remove) { Remove-WindowsNotificationCommandConfig -Content $configState.Content } else { Merge-WindowsNotificationCommandConfig -Content $configState.Content -Root $Root -NewLine $configState.NewLine }
+    if (-not [string]::IsNullOrWhiteSpace($desiredConfig)) { $desiredConfig = $desiredConfig.TrimEnd() + $configState.NewLine }
+    if ($desiredConfig -ne $configState.Content) {
+        Save-TransactionFile -Transaction $Transaction -Path $configPath
+        Write-TextFileState -Path $configPath -Content $desiredConfig -Encoding $configState.Encoding
+        $changed = $true
+    }
     $unownedBefore = Remove-ManagedNotificationHooksJson -Content $hooksState.Content -ManagedHookFingerprints $fingerprints
     $desiredHooks = $unownedBefore
     if (-not $Remove) {
@@ -199,7 +208,7 @@ function Invoke-WindowsUsageNotificationFiles {
     $unownedFingerprintsAfter = @(& $getUnownedFingerprints $unownedAfter) -join "`n"
     if ($unownedFingerprintsBefore -ne $unownedFingerprintsAfter) { throw 'WindowsUsageNotifications 嘗試修改非自身擁有的 Hook。' }
 
-    return [pscustomobject]@{ Managed = -not $Remove; HookCount = $(if ($Remove) { 0 } else { 3 }); ScriptPath = $scriptPath; Removed = [bool]$Remove; Changed = $changed }
+    return [pscustomobject]@{ Managed = -not $Remove; HookCount = $(if ($Remove) { 0 } else { 2 }); ScriptPath = $scriptPath; Removed = [bool]$Remove; Changed = $changed }
 }
 
 function Write-InstallationSummary {
@@ -565,7 +574,7 @@ function Invoke-GlobalInstallation {
             $windowsOwner.ccusageStatus = $(if ($windowsOwner.Status -eq 'SUCCESS') { if ($ccusage.PackageInstalledNow) { 'Installed' } else { 'Current' } } elseif ($windowsOwner.managedByInstaller) { [string]$previousWindowsOwner.ccusageStatus } else { $windowsOwner.Status })
             $windowsOwner.ccsessionsStatus = $(if ($windowsOwner.Status -eq 'SUCCESS') { if ($ccusage.CommandsUpdated) { 'Updated' } else { 'Current' } } elseif ($windowsOwner.managedByInstaller) { [string]$previousWindowsOwner.ccsessionsStatus } else { $windowsOwner.Status })
             $windowsOwner.cdailyStatus = $windowsOwner.ccsessionsStatus
-            $windowsOwner.hookCount = $(if ($windowsOwner.Status -eq 'SUCCESS') { 3 } elseif ($windowsOwner.managedByInstaller) { [int]$previousWindowsOwner.hookCount } else { 0 })
+            $windowsOwner.hookCount = $(if ($windowsOwner.Status -eq 'SUCCESS') { 2 } elseif ($windowsOwner.managedByInstaller) { [int]$previousWindowsOwner.hookCount } else { 0 })
             $windowsOwner.hookValidation = $(if ($windowsOwner.Status -eq 'SUCCESS') { 'Validated' } elseif ($windowsOwner.managedByInstaller) { [string]$previousWindowsOwner.hookValidation } else { $windowsOwner.Status })
             $windowsOwner.lastVerified = $(if ($windowsOwner.Status -eq 'SUCCESS') { (Get-Date).ToString('o') } elseif ($windowsOwner.managedByInstaller) { [string]$previousWindowsOwner.lastVerified } else { $null })
             $windowsOwner.rollbackCapability = 'ComponentScoped'

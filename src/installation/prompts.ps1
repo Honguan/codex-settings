@@ -132,7 +132,8 @@ function Select-OptionalDefaultModeRequestUserInput {
 }
 
 function Test-WindowsNotificationsInstalled([string]$Root = (Join-Path $HOME '.codex')) {
-    if (Test-Path -LiteralPath (Join-Path $Root 'hooks\show-codex-notification.ps1') -PathType Leaf) { return $true }
+    $configPath = Join-Path $Root 'config.toml'
+    if ((Test-Path -LiteralPath (Join-Path $Root 'hooks\show-codex-notification.ps1') -PathType Leaf) -and (Test-Path -LiteralPath $configPath -PathType Leaf) -and (Test-WindowsNotificationCommandConfig -Content ([IO.File]::ReadAllText($configPath)) -Root $Root)) { return $true }
     $hooksPath = Join-Path $Root 'hooks.json'
     if (-not (Test-Path -LiteralPath $hooksPath -PathType Leaf)) { return $false }
     try {
