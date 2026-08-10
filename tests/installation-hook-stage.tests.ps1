@@ -112,7 +112,7 @@ try {
     Assert-LogContains -Log (Get-LatestInstallLog) -Markers @('notificationLifecycleState=InstalledNeedsMigration', 'plannedNotificationAction=Update', 'validationPhase=PreCommunity', 'migrationPending=True', 'STEP END Notifications:')
 
     & $installPath -Mode Global -DevelopmentEnvironment Git -InstallStyle Merge -InstallWindowsNotifications $true -SkipCcusageInstall -NoPause
-    Assert-LogContains -Log (Get-LatestInstallLog) -Markers @('STEP END Hooks: Hook 未變更，略過重新 trust', 'STEP END Notifications: 腳本、Hook 與使用量工具未變更', 'STEP END Final: Manifest 與交易驗證通過')
+    Assert-LogContains -Log (Get-LatestInstallLog) -Markers @('STEP END Hooks: Hook 未變更，略過重新 trust', 'STEP END Notifications: 腳本與 Hook 未變更', 'STEP END Final: Manifest 與交易驗證通過')
 
     $policyRemovalOutput = (& $installPath -Mode Global -DevelopmentEnvironment Git -InstallStyle Merge -InstallWindowsNotifications $true -LongRunningAsyncWaitAction Uninstall -SkipCcusageInstall -NoPause 6>&1 | Out-String)
     if ($policyRemovalOutput -notmatch 'Long-running async wait policy\s+Uninstalled' -or [IO.File]::ReadAllText((Join-Path $HOME '.codex\AGENTS.md')) -match 'CODEX-SETTINGS:OTHER:LONG-RUNNING-ASYNC-WAIT') { throw 'Global installer did not report and apply independent async-wait removal.' }

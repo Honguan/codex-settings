@@ -6,7 +6,8 @@ function New-InstallationProgressSteps {
         [switch]$IncludePonytail,
         [switch]$IncludeCodexOrchestration,
         [switch]$IncludeSerena,
-        [switch]$IncludeNotifications
+        [switch]$IncludeNotifications,
+        [switch]$IncludeUsageTools
     )
 
     $steps = New-Object 'System.Collections.Generic.List[object]'
@@ -22,7 +23,8 @@ function New-InstallationProgressSteps {
     $steps[$steps.Count - 1] | Add-Member -NotePropertyName TargetCount -NotePropertyValue $TargetCount
     & $addStep 'Hooks' 'Hook 去重與信任驗證' 'Personal' 'CodexSettings'
     & $addStep 'PersonalCheckpoint' '個人設定 checkpoint' 'Personal' 'CodexSettings'
-    if ($IncludeNotifications) { & $addStep 'Notifications' 'Windows 開發狀態通知與用量指令' 'Community' 'WindowsUsageNotifications' }
+    if ($IncludeNotifications) { & $addStep 'Notifications' 'Windows 開發狀態通知' 'Community' 'WindowsUsageNotifications' }
+    if ($IncludeUsageTools) { & $addStep 'UsageTools' 'ccusage、ccsessions、cdaily 用量指令' 'Community' 'UsageTools' }
     if ($IncludeSkills) { & $addStep 'Skills' '選用 Skills' 'Community' 'MattPocockSkills' }
     if ($IncludePonytail) { & $addStep 'Ponytail' 'Ponytail plugin 與 lifecycle hooks' 'Community' 'Ponytail' }
     if ($IncludeCodexOrchestration) { & $addStep 'CodexOrchestration' 'Codex-Orchestration plugin 與 workflow' 'Community' 'CodexOrchestration' }
@@ -476,14 +478,15 @@ function Write-InstallationPlan {
         [Parameter(Mandatory = $true)][object[]]$Targets,
         $CcusageBefore,
         [switch]$InstallMattPocockSkills,
+        [switch]$InstallUsageTools,
         [switch]$EnableDefaultModeRequestUserInput,
         [ValidateSet('Install', 'KeepCurrent', 'Update', 'Repair', 'Uninstall', 'SkipNotInstalled', 'LeaveUnchanged', 'Blocked')][string]$LongRunningAsyncWaitAction = 'Install',
         [hashtable]$OptionalComponentActions = @{},
         [AllowNull()]$SerenaDashboard = $null
     )
 
-    $ccusageStatus = if ($null -eq $CcusageBefore) { '待偵測' } elseif ([bool]$CcusageBefore.Installed) { "已存在，沿用 $($CcusageBefore.Version)" } else { '未安裝，將安裝' }
-    Write-InstallLog -Progress $Progress -Message ("PLAN environment={0}; style={1}; notifications={2}; targets={3}; skills={4}; defaultModeRequestUserInput={5}; longRunningAsyncWait={6}" -f $Context.DevelopmentEnvironment, $Context.InstallStyle, $Context.InstallWindowsNotifications, $Targets.Count, $InstallMattPocockSkills, $EnableDefaultModeRequestUserInput, $LongRunningAsyncWaitAction)
+    $ccusageStatus = if (-not $InstallUsageTools) { '未選用，略過' } elseif ($null -eq $CcusageBefore) { '待偵測' } elseif ([bool]$CcusageBefore.Installed) { "已存在，沿用 $($CcusageBefore.Version)" } else { '未安裝，將安裝' }
+    Write-InstallLog -Progress $Progress -Message ("PLAN environment={0}; style={1}; notifications={2}; usageTools={3}; targets={4}; skills={5}; defaultModeRequestUserInput={6}; longRunningAsyncWait={7}" -f $Context.DevelopmentEnvironment, $Context.InstallStyle, $Context.InstallWindowsNotifications, $InstallUsageTools, $Targets.Count, $InstallMattPocockSkills, $EnableDefaultModeRequestUserInput, $LongRunningAsyncWaitAction)
     Write-InstallLog -Progress $Progress -Message "PLAN Other Settings; Long-running async wait policy=$LongRunningAsyncWaitAction"
     if ($OptionalComponentActions.Count -gt 0) { Write-InstallLog -Progress $Progress -Message ("PLAN optionalLifecycle=" + (@($OptionalComponentActions.Keys | Sort-Object | ForEach-Object { "$_=$($OptionalComponentActions[$_])" }) -join ';')) }
     Write-InstallLog -Progress $Progress -Message ("PLAN targetRoots={0}; ccusage={1}" -f ((@($Targets | ForEach-Object { $_.Root }) -join ',')), $ccusageStatus)

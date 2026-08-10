@@ -17,6 +17,7 @@ function New-InstallationChangePlan {
         [bool]$Force = $false,
         [bool]$ForceNotificationTest = $false,
         [bool]$InstallMattPocockSkills = $false,
+        [bool]$InstallUsageTools = $false,
         [bool]$SkipPackageInstall = $false
     )
 
@@ -27,15 +28,15 @@ function New-InstallationChangePlan {
     $configChanged = @($changedPaths | Where-Object { $_ -eq 'config.toml' }).Count -gt 0
     $profileCurrent = if ($null -ne $Discovery -and $null -ne $Discovery.usageTools) { [bool]$Discovery.usageTools.profileCurrent } else { $false }
     $packageInstalled = $null -ne $CcusageBefore -and [bool]$CcusageBefore.Installed
-    $usageToolsChanged = (-not $packageInstalled -and -not $SkipPackageInstall) -or -not $profileCurrent
-    $externalPackageChanged = (-not $packageInstalled -and -not $SkipPackageInstall)
+    $usageToolsChanged = $InstallUsageTools -and ((-not $packageInstalled -and -not $SkipPackageInstall) -or -not $profileCurrent)
+    $externalPackageChanged = $InstallUsageTools -and (-not $packageInstalled -and -not $SkipPackageInstall)
     $fullValidation = $Force -or $ForceValidation -or $previousMissing
     $validationLevel = if ($fullValidation) { 'Full' } elseif ($changedPaths.Count -eq 0 -and -not $usageToolsChanged) { 'Fast' } else { 'ChangedOnly' }
     $targetChanged = @($Results | Where-Object { $_.Summary.Created -gt 0 -or $_.Summary.Updated -gt 0 }).Count -gt 0
     $runHookTrust = $fullValidation -or $hooksChanged -or $configChanged
     $runHookValidation = $fullValidation -or $hooksChanged
     $runConfigValidation = $fullValidation -or $configChanged
-    $runUsageRuntimeValidation = $fullValidation -or $externalPackageChanged
+    $runUsageRuntimeValidation = $InstallUsageTools -and ($fullValidation -or $externalPackageChanged)
     $runNotificationTest = $ForceNotificationTest -or $hooksChanged
     $runSkills = [bool]$InstallMattPocockSkills
     $serenaSelected = $null -ne $Discovery -and $null -ne $Discovery.serenaDashboard -and [bool]$Discovery.serenaDashboard.Selected

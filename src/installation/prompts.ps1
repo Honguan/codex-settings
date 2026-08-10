@@ -16,7 +16,7 @@ function Select-Mode {
     Write-Host ''
     Write-Host 'Codex Settings 一鍵安裝器'
     Write-Host '========================='
-    Write-Host '[1] 全域安裝／更新：Codex、MCP、技能、ccusage 套件、ccsessions、cdaily'
+    Write-Host '[1] 全域安裝／更新：Codex、MCP、技能與選用社區元件'
     Write-Host ''
     Write-Host '備份與管理'
     Write-Host '[2] 備份目前設定'
@@ -171,15 +171,36 @@ function Test-WindowsNotificationsInstalled([string]$Root = (Join-Path $HOME '.c
 
 function Select-OptionalWindowsNotifications([bool]$AlreadyInstalled = (Test-WindowsNotificationsInstalled), [string]$State = '', $Lifecycle = $null) {
     Write-Host ''
-    Write-Host '選用社區功能：Windows 開發狀態通知與用量指令'
+    Write-Host '選用社區功能：Windows 開發狀態通知'
     Write-Host '此功能會安裝／管理：'
     Write-Host '- 任務完成、等待權限、等待回答等 Codex 狀態提醒'
-    Write-Host '- ccusage、ccsessions、cdaily 用量查詢指令（不由 Hook 自動執行）'
-    Write-Host '手動用量指令欄位：Session、Model、Input、Output、Think、Cache、Total、Cost、Time'
     if ($null -ne $Lifecycle) { $State = [string]$Lifecycle.State }
     if ([string]::IsNullOrWhiteSpace($State)) { $State = Get-OptionalComponentState -Installed $AlreadyInstalled }
     if ($State -in @('TrueUnmanagedConflict', 'MalformedUserOwnedState', 'Unknown') -and $null -ne $Lifecycle) { throw (Format-WindowsNotificationLifecycleDiagnostic -Lifecycle $Lifecycle) }
-    return Select-OptionalComponentAction -Name 'Windows 開發狀態通知與用量指令' -State $State
+    return Select-OptionalComponentAction -Name 'Windows 開發狀態通知' -State $State
+}
+
+function Get-UsageToolsLifecycleState([string]$SourceRoot = '') {
+    if ([string]::IsNullOrWhiteSpace($SourceRoot)) { $SourceRoot = Split-Path -Parent $PSScriptRoot }
+    $templatePath = Join-Path $SourceRoot 'templates\profile\usage-commands.ps1'
+    $profileCurrent = Test-CcusageProfileCurrent -TemplatePath $templatePath
+    $package = Get-CcusageState
+    if ([bool]$package.Installed -and $profileCurrent) { return 'InstalledCurrent' }
+    if ([bool]$package.Installed -or $profileCurrent) { return 'InstalledUpdateAvailable' }
+    return 'NotInstalled'
+}
+
+function Test-UsageToolsInstalled([string]$SourceRoot = '') {
+    return (Get-UsageToolsLifecycleState -SourceRoot $SourceRoot) -ne 'NotInstalled'
+}
+
+function Select-OptionalUsageTools([string]$SourceRoot = '') {
+    Write-Host ''
+    Write-Host '選用社區功能：ccusage、ccsessions、cdaily 用量指令'
+    Write-Host '此功能會安裝／管理：'
+    Write-Host '- ccusage 套件與 ccsessions、cdaily PowerShell 指令（不由 Hook 自動執行）'
+    Write-Host '手動用量指令欄位：Session、Model、Input、Output、Think、Cache、Total、Cost、Time'
+    return Select-OptionalComponentAction -Name 'ccusage、ccsessions、cdaily 用量指令' -State (Get-UsageToolsLifecycleState -SourceRoot $SourceRoot)
 }
 
 function Test-DefaultModeRequestUserInputInstalled([string]$Root = (Join-Path $HOME '.codex')) {

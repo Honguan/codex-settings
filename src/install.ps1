@@ -18,6 +18,7 @@ param(
     [switch]$ForceNotificationTest,
     [switch]$NoPause,
     [Nullable[bool]]$InstallWindowsNotifications,
+    [Nullable[bool]]$InstallUsageTools,
     [ValidateSet('Git', 'CVS')]
     [string]$DevelopmentEnvironment,
     [string]$TargetUserProfile,

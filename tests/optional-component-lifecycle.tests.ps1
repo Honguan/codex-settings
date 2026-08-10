@@ -42,7 +42,7 @@ $removed = Remove-DefaultModeRequestUserInputFeature -Content $config
 if ($removed -match 'default_mode_request_user_input' -or $removed -notmatch 'other = true' -or (Remove-DefaultModeRequestUserInputFeature $removed) -ne $removed) { throw 'request_user_input uninstall is not owned/idempotent.' }
 
 $manifest = New-InstallationOwnershipManifest
-foreach ($component in @($manifest.personal.requestUserInput, $manifest.otherSettings.longRunningAsyncWait, $manifest.community.windowsUsageNotifications, $manifest.community.mattpocockSkills, $manifest.community.ponytail, $manifest.community.codexOrchestration, $manifest.community.serena)) {
+foreach ($component in @($manifest.personal.requestUserInput, $manifest.otherSettings.longRunningAsyncWait, $manifest.community.windowsUsageNotifications, $manifest.community.usageTools, $manifest.community.mattpocockSkills, $manifest.community.ponytail, $manifest.community.codexOrchestration, $manifest.community.serena)) {
     foreach ($field in @('Action', 'DiscoveredState')) { if (-not $component.Contains($field)) { throw "Manifest component is missing $field." } }
 }
 
