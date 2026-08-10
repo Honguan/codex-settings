@@ -86,13 +86,14 @@ try {
     Set-NotificationFixture -Config $ownedUnmarked
     $staleManifest = [ordered]@{ Community = [ordered]@{ windowsUsageNotifications = [ordered]@{ Owner = 'WindowsUsageNotifications'; Selected = $false; Status = 'Uninstalled' } } }
     [IO.File]::WriteAllText((Join-Path $root '.codex-settings-manifest.json'), ($staleManifest | ConvertTo-Json -Depth 8), $utf8)
-    Assert-State TrueUnmanagedConflict | Out-Null
+    Assert-State NotInstalled | Out-Null
 
     Reset-NotificationFixture
-    Set-NotificationFixture -Config 'notify = ["custom.exe", "secret-value-must-not-leak"]' -Hooks (Get-TemplateHooks) -Script
+    $conflictingConfig = (Get-CurrentConfig) + "`nnotify = [`"custom.exe`", `"secret-value-must-not-leak`"]`n"
+    Set-NotificationFixture -Config $conflictingConfig -Hooks (Get-TemplateHooks) -Script
     $conflict = Assert-State TrueUnmanagedConflict
     $diagnostic = Format-WindowsNotificationLifecycleDiagnostic $conflict
-    foreach ($field in @('notificationLifecycleState=TrueUnmanagedConflict', 'notificationConfigState=UnmanagedNotifyConflict', 'ownershipClassification=Unmanaged', 'conflictReason=', 'recommendedAction=')) { if (-not $diagnostic.Contains($field)) { throw "Missing conflict diagnostic: $field" } }
+    foreach ($field in @('notificationLifecycleState=TrueUnmanagedConflict', 'notificationConfigState=UnmanagedNotifyConflict', 'ownershipClassification=ManagedMarkers', 'conflictReason=', 'recommendedAction=')) { if (-not $diagnostic.Contains($field)) { throw "Missing conflict diagnostic: $field" } }
     if ($diagnostic.Contains('secret-value-must-not-leak')) { throw 'Conflict diagnostics exposed config content.' }
     $beforeConflict = [IO.File]::ReadAllBytes((Join-Path $root 'config.toml'))
     $conflictTransaction = New-FileTransaction -Root (Join-Path $testRoot 'conflict-transaction') -Mode Conflict
@@ -100,8 +101,16 @@ try {
     if (-not $blocked -or [Convert]::ToHexString($beforeConflict) -ne [Convert]::ToHexString([IO.File]::ReadAllBytes((Join-Path $root 'config.toml')))) { throw 'True unmanaged notify conflict was not blocked without mutation.' }
 
     Reset-NotificationFixture
-    Set-NotificationFixture -Config 'notify = ["third-party-notifier.exe"]'
-    Assert-State TrueUnmanagedConflict | Out-Null
+    $firstInstallExternalNotify = 'notify = ["third-party-notifier.exe"]' + "`n"
+    Set-NotificationFixture -Config $firstInstallExternalNotify
+    $firstInstall = Assert-State NotInstalled
+    if (-not $firstInstall.ExternalNotifyCoexistence) { throw 'First-install external notify was not classified for coexistence.' }
+    $firstInstallTransaction = New-FileTransaction -Root (Join-Path $testRoot 'first-install-coexistence-transaction') -Mode Install
+    Invoke-WindowsUsageNotificationFiles -Root $root -SourceRoot $script:ScriptRoot -Transaction $firstInstallTransaction | Out-Null
+    Assert-State InstalledCurrent | Out-Null
+    if ([IO.File]::ReadAllText((Join-Path $root 'config.toml')) -ne $firstInstallExternalNotify) { throw 'First-install external top-level notify was not preserved exactly.' }
+    $firstInstallSecondTransaction = New-FileTransaction -Root (Join-Path $testRoot 'first-install-coexistence-idempotent-transaction') -Mode Install
+    if ((Invoke-WindowsUsageNotificationFiles -Root $root -SourceRoot $script:ScriptRoot -Transaction $firstInstallSecondTransaction).Changed) { throw 'Repeated first-install coexistence was not idempotent.' }
 
     Reset-NotificationFixture
     $coexistenceHooks = Get-TemplateHooks

@@ -270,8 +270,9 @@ function Get-WindowsNotificationLifecycleState([string]$Root, [string[]]$Managed
     $knownUnmarkedNotify = $unmarkedNotifyPresent -and (Test-KnownWindowsNotificationCommand -Content $unmarkedConfig -Root $Root)
     $managedUnmarkedNotify = $knownUnmarkedNotify -and ($managedManifestPresent -or $fingerprintEvidence -or $managedScriptPresent -or $managedHookCount -gt 0)
     $unmanagedNotifyPresent = ($configState -eq 'UnmanagedNotifyConflict' -or $unmarkedNotifyPresent) -and -not $managedUnmarkedNotify
-    $externalNotifyCoexistence = $unmanagedNotifyPresent -and $managedManifestPresent -and $fingerprintEvidence -and $managedScriptPresent -and $question -eq 1 -and $permission -eq 1
-    $ownership = if ($managedMarkersPresent) { 'ManagedMarkers' } elseif ($managedUnmarkedNotify) { 'ManagedCorroborated' } elseif ($externalNotifyCoexistence) { 'ManagedWithExternalNotify' } elseif ($unmanagedNotifyPresent) { 'Unmanaged' } elseif ($managedManifestPresent -or $fingerprintEvidence -or $managedScriptPresent -or $managedHookCount -gt 0) { 'ManagedArtifacts' } else { 'None' }
+    $managedArtifactsPresent = $managedManifestPresent -or $fingerprintEvidence -or $managedScriptPresent -or $managedHookCount -gt 0
+    $externalNotifyCoexistence = $unmanagedNotifyPresent -and -not $managedMarkersPresent
+    $ownership = if ($managedMarkersPresent) { 'ManagedMarkers' } elseif ($managedUnmarkedNotify) { 'ManagedCorroborated' } elseif ($externalNotifyCoexistence -and $managedArtifactsPresent) { 'ManagedWithExternalNotify' } elseif ($externalNotifyCoexistence) { 'ExternalNotify' } elseif ($unmanagedNotifyPresent) { 'Unmanaged' } elseif ($managedArtifactsPresent) { 'ManagedArtifacts' } else { 'None' }
     $state = if ($configState -eq 'MalformedUserContent') {
         'MalformedUserOwnedState'
     } elseif ($unmanagedNotifyPresent -and -not $externalNotifyCoexistence) {
@@ -282,6 +283,8 @@ function Get-WindowsNotificationLifecycleState([string]$Root, [string[]]$Managed
         'ManagedPartialState'
     } elseif ($managedUnmarkedNotify) {
         'InstalledNeedsMigration'
+    } elseif ($externalNotifyCoexistence -and -not $managedArtifactsPresent) {
+        'NotInstalled'
     } elseif ($question -eq 0 -and $permission -eq 0 -and $completed -eq 0 -and $scriptCount -eq 0 -and $configState -eq 'MissingManagedBlock') {
         'NotInstalled'
     } elseif ($question -eq 1 -and $permission -eq 1 -and $completed -eq 0 -and $scriptCount -eq 1 -and ($configState -eq 'CurrentManagedBlock' -or $externalNotifyCoexistence)) {
