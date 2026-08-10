@@ -12,7 +12,7 @@ function Invoke-TargetInstallation($Target, $Transaction, [switch]$Force, $Previ
         if ([bool]$Target.ManageWindowsNotifications) { Remove-ManagedGlobalNotificationHooks -Root $Target.Root -Transaction $Transaction -ManagedHookFingerprints $managedHookFingerprints }
         $targetCwd = if ($Target.PSObject.Properties.Name -contains 'Cwd') { [string]$Target.Cwd } else { (Get-Location).Path }
         $projectRoot = Find-CvsProjectRoot -StartPath $targetCwd
-        if (-not [string]::IsNullOrWhiteSpace($projectRoot)) { Remove-ManagedProjectHooks -StartPath $projectRoot -Transaction $Transaction -PreserveNotifications:(-not [bool]$Target.ManageWindowsNotifications) -ManagedHookFingerprints $managedHookFingerprints | Out-Null }
+        if (-not [string]::IsNullOrWhiteSpace($projectRoot)) { Remove-ManagedProjectHooks -StartPath $projectRoot -Transaction $Transaction -KeepCvsLineEndingHooks:($Target.DevelopmentEnvironment -eq 'CVS') -PreserveNotifications:(-not [bool]$Target.ManageWindowsNotifications) -ManagedHookFingerprints $managedHookFingerprints | Out-Null }
     }
     $hookCleanupChanged = $Transaction.Entries.Count -gt $transactionEntriesBeforeCleanup
     $entries = New-Object 'System.Collections.Generic.List[object]'
