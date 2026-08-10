@@ -77,6 +77,13 @@ function Invoke-TargetInstallation($Target, $Transaction, [switch]$Force, $Previ
             }
             if ($isOptionalFeatureConfig) { $desiredContent = Add-DefaultModeRequestUserInputFeature -Content $desiredContent -NewLine $state.NewLine }
         }
+        if ($Target.Mode -eq 'Global' -and $relative.Replace('\', '/') -eq 'config.toml') {
+            if ([bool]$Target.ManageWindowsNotifications) {
+                $desiredContent = if ([bool]$Target.InstallWindowsNotifications) { Merge-WindowsNotificationCommandConfig -Content $desiredContent -Root $Target.Root -NewLine $state.NewLine } else { Remove-WindowsNotificationCommandConfig -Content $desiredContent }
+            } elseif (Test-WindowsNotificationCommandConfig -Content $state.Content -Root $Target.Root) {
+                $desiredContent = Merge-WindowsNotificationCommandConfig -Content $desiredContent -Root $Target.Root -NewLine $state.NewLine
+            }
+        }
 
         $changed = -not $state.Exists -or $state.Content -ne $desiredContent
         if ($changed) {

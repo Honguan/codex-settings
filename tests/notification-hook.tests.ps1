@@ -22,18 +22,23 @@ function Set-Snapshot([string]$SessionId, [long]$InputTokens, [long]$CachedInput
 }
 
 function Invoke-NotificationHook([string]$SessionId, [string]$TurnId, [hashtable]$AdditionalInput = @{}, [string]$RawInput, [string]$Type = 'Completed', [string]$LastMessage = '') {
-    $inputObject = [ordered]@{ session_id = $SessionId; turn_id = $TurnId; cwd = Join-Path $projectRoot 'src'; hook_event_name = 'Stop'; stop_hook_active = $false; last_assistant_message = $LastMessage }
+    $inputObject = if ($Type -eq 'Completed') {
+        [ordered]@{ type = 'agent-turn-complete'; 'thread-id' = $SessionId; 'turn-id' = $TurnId; cwd = Join-Path $projectRoot 'src'; client = 'codex_vscode'; 'input-messages' = @('fixture'); 'last-assistant-message' = $LastMessage }
+    } else {
+        [ordered]@{ session_id = $SessionId; turn_id = $TurnId; cwd = Join-Path $projectRoot 'src'; hook_event_name = $(if ($Type -eq 'PermissionRequired') { 'PermissionRequest' } else { 'PreToolUse' }); last_assistant_message = $LastMessage }
+    }
     foreach ($property in $AdditionalInput.GetEnumerator()) { $inputObject[$property.Key] = $property.Value }
     $inputText = if ([string]::IsNullOrWhiteSpace($RawInput)) { $inputObject | ConvertTo-Json -Depth 8 -Compress } else { $RawInput }
     $startInfo = [Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = 'pwsh'
     foreach ($argument in @('-NoLogo', '-NoProfile', '-File', $hookScript, '-Type', $Type)) { $startInfo.ArgumentList.Add($argument) }
+    if ($Type -eq 'Completed') { $startInfo.ArgumentList.Add($inputText) }
     $startInfo.RedirectStandardInput = $true
     $startInfo.RedirectStandardOutput = $true
     $startInfo.RedirectStandardError = $true
     $startInfo.UseShellExecute = $false
     $process = [Diagnostics.Process]::Start($startInfo)
-    $process.StandardInput.Write($inputText)
+    if ($Type -ne 'Completed') { $process.StandardInput.Write($inputText) }
     $process.StandardInput.Close()
     $stdout = $process.StandardOutput.ReadToEnd()
     $stderr = $process.StandardError.ReadToEnd()
@@ -50,11 +55,7 @@ function Get-LastNotification {
 try {
     New-Item -ItemType Directory -Path (Join-Path $projectRoot '.git'), (Join-Path $projectRoot 'src') -Force | Out-Null
     $hooksTemplate = Get-Content -LiteralPath (Join-Path $repositoryRoot 'src\templates\core\hooks.json') -Raw | ConvertFrom-Json
-    if (@($hooksTemplate.hooks.Stop).Count -ne 1) { throw 'Stop Hook 必須只保留一個完成通知 Hook。' }
-    $stopCommand = $hooksTemplate.hooks.Stop[0].hooks[0]
-    if (($stopCommand | ConvertTo-Json -Compress) -notmatch 'show-codex-notification\.ps1' -or $stopCommand.command -notmatch '-NoLogo.*-NonInteractive.*-File' -or $stopCommand.commandWindows -notmatch '-NoLogo.*-NonInteractive.*-File' -or $stopCommand.timeout -ne 30 -or $stopCommand.PSObject.Properties.Name -contains 'statusMessage') {
-        throw 'Stop 完成通知 Hook 設定錯誤。'
-    }
+    if ($null -ne $hooksTemplate.hooks.PSObject.Properties['Stop']) { throw 'Completed 通知不可再綁定 generic Stop。' }
     $notificationSource = Get-Content -LiteralPath $hookScript -Raw
     $notificationBytes = [IO.File]::ReadAllBytes($hookScript)
     if ($notificationBytes.Length -lt 3 -or $notificationBytes[0] -ne 0xEF -or $notificationBytes[1] -ne 0xBB -or $notificationBytes[2] -ne 0xBF) { throw '通知腳本必須使用 UTF-8 BOM，以便 Windows PowerShell 5.1 正確解析。' }
@@ -104,10 +105,10 @@ Get-Content -LiteralPath $env:CODEX_SETTINGS_CCSESSIONS_SNAPSHOT -Raw
 
     $vscodeSession = '019fe798-1ecb-7221-b31d-2f2d3280a361'
     Set-Snapshot -SessionId $vscodeSession -InputTokens 100 -CachedInputTokens 20 -CacheWriteTokens 0 -OutputTokens 10 -TotalTokens 130 -CostUsd 0.01
-    $vscodePayload = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'fixtures\codex-vscode-stop.json') -Raw
+    $vscodePayload = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'fixtures\codex-notify-agent-turn-complete.json') -Raw
     [void](Invoke-NotificationHook -SessionId $vscodeSession -TurnId 'ignored' -RawInput $vscodePayload)
     $vscodeDiagnostic = Get-Content -LiteralPath (Join-Path $diagnosticRoot ($vscodeSession + '.log')) -Raw | ConvertFrom-Json
-    if ((Get-LastNotification).type -ne 'Completed' -or $vscodeDiagnostic.mainSessionResult -ne 'Main' -or $vscodeDiagnostic.resultReason -ne 'shown-test') { throw '真實 codex_vscode Stop fixture 未走到 Completed delivery。' }
+    if ((Get-LastNotification).type -ne 'Completed' -or $vscodeDiagnostic.mainSessionResult -ne 'Main' -or $vscodeDiagnostic.resultReason -ne 'shown-test' -or $vscodeDiagnostic.completionClassification -ne 'FinalTurnCompletion') { throw '真實 Codex notify fixture 未走到 Completed delivery。' }
 
     $eventsBeforeMissingTurn = @(Get-Content -LiteralPath $logPath).Count
     [void](Invoke-NotificationHook -SessionId 'missing-turn-session' -TurnId '' -AdditionalInput @{ event_id = 'event-a' } -Type PermissionRequired)
@@ -183,11 +184,11 @@ Get-Content -LiteralPath $env:CODEX_SETTINGS_CCSESSIONS_SNAPSHOT -Raw
     $realtimeStateValue = Get-Content -LiteralPath $realtimeState.FullName -Raw | ConvertFrom-Json
     if ($realtimeStateValue.schemaVersion -ne 2 -or $null -eq $realtimeStateValue.ccsessionsBaseline -or $realtimeStateValue.ccsessionsBaseline.inputTokens -ne 999000 -or $realtimeStateValue.ccsessionsBaseline.reasoningTokens -ne 0 -or $realtimeStateValue.ccsessionsBaseline.cacheTokens -ne 888000 -or $realtimeStateValue.ccsessionsBaseline.time -ne '08-07 03:43 PM') { throw 'ccsessions 累積基準未依新快照格式保存。' }
     $realtimeDiagnostic = Get-Content -LiteralPath (Join-Path $diagnosticRoot ($sessionRealtime + '.log')) -Raw | ConvertFrom-Json
-    foreach ($field in @('timestamp', 'hookInvoked', 'payloadParsed', 'settingsEnabled', 'mainSessionResult', 'mainSessionEvidence', 'dedupeResult', 'usageRequested', 'usageResult', 'resultReason', 'hookSource', 'hookCommand', 'processId', 'parentProcessId', 'startTime', 'endTime', 'elapsedMs', 'exitCode', 'handlerId', 'claimState', 'nativeToastAttempted', 'nativeToastShown', 'nativeToastError', 'fallbackAttempted', 'fallbackShown', 'fallbackError', 'cleanupScheduled', 'stopKind', 'invocationSource', 'GlobalStopHookCount', 'EffectiveStopHookCount', 'NotificationInvocationCount', 'CrlfInvocationCount', 'ccsessionsQueryCount', 'ccsessionsRetryCount', 'ccsessionsAttemptDurationsMs', 'ccsessionsRetrySleepMs', 'ccsessionsResolveMs', 'ccsessionsRunMs', 'resultAcceptedAtAttempt', 'usageResultReason', 'fallbackReason', 'foregroundElapsedMs')) {
+    foreach ($field in @('timestamp', 'hookInvoked', 'payloadParsed', 'settingsEnabled', 'mainSessionResult', 'mainSessionEvidence', 'dedupeResult', 'usageRequested', 'usageResult', 'resultReason', 'hookSource', 'hookCommand', 'processId', 'parentProcessId', 'startTime', 'endTime', 'elapsedMs', 'exitCode', 'handlerId', 'claimState', 'claimResult', 'claimAttempted', 'nativeToastAttempted', 'nativeToastShown', 'nativeToastError', 'fallbackAttempted', 'fallbackShown', 'fallbackError', 'cleanupScheduled', 'stopKind', 'invocationSource', 'hookEventName', 'lifecyclePhase', 'completionClassification', 'completionEvidence', 'compactionDetected', 'continuationExpected', 'isFinalTurn', 'originator', 'source', 'payloadKeys', 'GlobalStopHookCount', 'EffectiveStopHookCount', 'NotificationInvocationCount', 'CrlfInvocationCount', 'ccsessionsQueryCount', 'ccsessionsRetryCount', 'ccsessionsAttemptDurationsMs', 'ccsessionsRetrySleepMs', 'ccsessionsResolveMs', 'ccsessionsRunMs', 'resultAcceptedAtAttempt', 'usageResultReason', 'fallbackReason', 'foregroundElapsedMs')) {
         if ($realtimeDiagnostic.PSObject.Properties.Name -notcontains $field) { throw "通知診斷缺少欄位：$field" }
     }
     if ($realtimeDiagnostic.ccsessionsQueryCount -ne 1 -or $realtimeDiagnostic.ccsessionsRetryCount -ne 0 -or @($realtimeDiagnostic.ccsessionsAttemptDurationsMs).Count -ne 1 -or $realtimeDiagnostic.ccsessionsRetrySleepMs -ne 0 -or $realtimeDiagnostic.resultAcceptedAtAttempt -ne 1 -or $realtimeDiagnostic.usageResultReason -ne 'no-baseline' -or $realtimeDiagnostic.fallbackReason -ne '' -or $realtimeDiagnostic.foregroundElapsedMs -ge 3000) { throw '無基準且首次查詢成功時未立即接受結果。' }
-    if (-not $realtimeDiagnostic.hookInvoked -or -not $realtimeDiagnostic.payloadParsed -or $realtimeDiagnostic.mainSessionResult -ne 'Unknown' -or $realtimeDiagnostic.resultReason -ne 'shown-test') { throw 'Lifecycle 診斷未記錄 invocation、payload、main-session 三態或 delivery 結果。' }
+    if (-not $realtimeDiagnostic.hookInvoked -or -not $realtimeDiagnostic.payloadParsed -or $realtimeDiagnostic.mainSessionResult -ne 'Main' -or -not $realtimeDiagnostic.isFinalTurn -or -not $realtimeDiagnostic.claimAttempted -or $realtimeDiagnostic.completionClassification -ne 'FinalTurnCompletion' -or $realtimeDiagnostic.completionEvidence -ne 'explicit-agent-turn-complete' -or $realtimeDiagnostic.resultReason -ne 'shown-test') { throw 'Lifecycle 診斷未記錄 canonical finality、claim 或 delivery 結果。' }
     if ($realtimeDiagnostic.handler -ne 'windows-notification' -or $realtimeDiagnostic.result -ne 'success' -or $realtimeDiagnostic.details -notmatch 'source=ccsessions-total' -or $realtimeDiagnostic.details -notmatch 'realtimeAvailable=true;ccsessionsAvailable=true;baselineFound=false;ccsessionsRetryCount=0;tokenSource=ccsessions-total;modelSource=ccsessions;costSource=ccsessions;showAsTurnDelta=false;model=gpt-5\.6-sol;input=999K;output=666K;think=0;cache=888K;total=3\.33M;cost=\$9\.99;time=08-07 03:43 PM;missingFields=\[\]' -or $realtimeDiagnostic.hookSource -ne 'global' -or $realtimeDiagnostic.NotificationInvocationCount -ne 1 -or $realtimeDiagnostic.CrlfInvocationCount -ne 0) {
         throw 'ccsessions 累積資料或完成通知診斷紀錄錯誤。'
     }
@@ -220,7 +221,7 @@ Get-Content -LiteralPath $env:CODEX_SETTINGS_CCSESSIONS_SNAPSHOT -Raw
     [void](Invoke-NotificationHook -SessionId $sessionRealtime -TurnId 'turn-realtime')
     if (@(Get-Content -LiteralPath $logPath).Count -ne $eventCountBeforeDuplicate) { throw '相同 Session、turn 與類型未正確去重。' }
     $duplicateDiagnostic = @(Get-Content -LiteralPath (Join-Path $diagnosticRoot ($sessionRealtime + '.log')) | ForEach-Object { $_ | ConvertFrom-Json }) | Select-Object -Last 1
-    if ($duplicateDiagnostic.result -ne 'deduplicated' -or $duplicateDiagnostic.NotificationInvocationCount -ne 2 -or $duplicateDiagnostic.EffectiveStopHookCount -ne 2) { throw '重複 Stop Hook 未在早期去重並記錄有效執行次數。' }
+    if ($duplicateDiagnostic.result -ne 'deduplicated' -or $duplicateDiagnostic.NotificationInvocationCount -ne 2 -or $duplicateDiagnostic.EffectiveStopHookCount -ne 0) { throw '重複 canonical completion 未在早期去重並記錄有效執行次數。' }
 
     $sessionTranscript = '019fd65b-39b0-7d60-99fc-deb094690002'
     Set-Snapshot -SessionId $sessionTranscript -InputTokens 999000 -CachedInputTokens 888000 -CacheWriteTokens 777000 -OutputTokens 666000 -TotalTokens 3330000 -CostUsd 9.99
@@ -244,34 +245,34 @@ Get-Content -LiteralPath $env:CODEX_SETTINGS_CCSESSIONS_SNAPSHOT -Raw
 
     $sessionMalformed = '019fd65b-39b0-7d60-99fc-deb094690004'
     $malformedInput = [ordered]@{
-        session_id = $sessionMalformed
-        turn_id = 'turn-malformed-message'
+        type = 'agent-turn-complete'
+        'thread-id' = $sessionMalformed
+        'turn-id' = 'turn-malformed-message'
         cwd = $repositoryRoot
+        client = 'codex_cli_rs'
         transcript_path = $rolloutPath
-        hook_event_name = 'Stop'
-        stop_hook_active = $false
-        last_assistant_message = '已刪除 "activity_config.php" 註解'
+        'last-assistant-message' = '已刪除 "activity_config.php" 註解'
     } | ConvertTo-Json -Compress
     $malformedInput = $malformedInput.Replace('\"activity_config.php\"', '"activity_config.php"')
     [void](Invoke-NotificationHook -SessionId $sessionMalformed -TurnId 'turn-malformed-message' -RawInput $malformedInput)
     if ((Get-LastNotification).message -match 'Token 用量暫時無法取得' -or -not (Get-LastNotification).message.Contains('Input          +2.47K') -or -not (Get-LastNotification).message.Contains('Cache      +1.36K')) {
-        throw '含未跳脫引號的 Stop payload 未使用 rollout Token 用量。'
+        throw '含未跳脫引號的 canonical payload 未使用 rollout Token 用量。'
     }
 
     $sessionTruncated = '019fd65b-39b0-7d60-99fc-deb094690005'
     $truncatedInput = [ordered]@{
-        session_id = $sessionTruncated
-        turn_id = 'turn-truncated-message'
+        type = 'agent-turn-complete'
+        'thread-id' = $sessionTruncated
+        'turn-id' = 'turn-truncated-message'
         cwd = $repositoryRoot
+        client = 'codex_cli_rs'
         transcript_path = $rolloutPath
-        hook_event_name = 'Stop'
-        stop_hook_active = $false
-        last_assistant_message = 'unfinished'
+        'last-assistant-message' = 'unfinished'
     } | ConvertTo-Json -Compress
     $truncatedInput = $truncatedInput.Substring(0, $truncatedInput.IndexOf('unfinished') + 'unfinished'.Length)
     [void](Invoke-NotificationHook -SessionId $sessionTruncated -TurnId 'turn-truncated-message' -RawInput $truncatedInput)
     if ((Get-LastNotification).message -match 'Token 用量暫時無法取得' -or -not (Get-LastNotification).message.Contains('Input          +2.47K') -or -not (Get-LastNotification).message.Contains('Cache      +1.36K')) {
-        throw '截斷的 Stop payload 未使用 rollout Token 用量。'
+        throw '截斷的 canonical payload 未使用 rollout Token 用量。'
     }
 
     $sessionRetry = '019fd65b-39b0-7d60-99fc-deb094690003'

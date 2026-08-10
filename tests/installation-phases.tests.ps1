@@ -113,16 +113,17 @@ try {
     }
     $hooks = Get-Content -LiteralPath $hooksPath -Raw | ConvertFrom-Json
     if (@($hooks.hooks.Stop | Where-Object { (Get-HookEntryText $_) -match 'ponytail lifecycle' }).Count -ne 1) { throw 'WindowsUsageNotifications 修改了第三方 Hook。' }
-    foreach ($event in @('PreToolUse', 'PermissionRequest', 'Stop')) {
+    foreach ($event in @('PreToolUse', 'PermissionRequest')) {
         if (@($hooks.hooks.$event | Where-Object { Test-ManagedNotificationHookEntry $_ }).Count -ne 1) { throw "notification bundle 未對 $event 保持唯一 Hook。" }
     }
+    if (@($hooks.hooks.Stop | Where-Object { Test-ManagedNotificationHookEntry $_ }).Count -ne 0 -or -not (Test-WindowsNotificationCommandConfig -Content (Get-Content -LiteralPath (Join-Path $notificationRoot 'config.toml') -Raw) -Root $notificationRoot)) { throw 'notification bundle 未使用唯一的原生完成通知。' }
     if (-not (Test-Path (Join-Path $notificationRoot 'hooks\show-codex-notification.ps1'))) { throw 'notification bundle 未安裝自己的腳本。' }
     $scriptHash = (Get-FileHash (Join-Path $notificationRoot 'hooks\show-codex-notification.ps1') -Algorithm SHA256).Hash
     $personalTarget = New-InstallTarget -Id personal -Mode Global -TemplateRoot (Join-Path $script:ScriptRoot 'templates\core') -EnvironmentTemplateRoot (Join-Path $script:ScriptRoot 'templates\environments\git') -DevelopmentEnvironment Git -Root $notificationRoot -Cwd $notificationRoot -InstallWindowsNotifications:$false -ManageWindowsNotifications:$false -SourceRoot $script:ScriptRoot
     $personalTransaction = New-FileTransaction -Root (Join-Path $notificationRoot 'personal') -Mode PersonalTransaction
     Invoke-TargetInstallation -Target $personalTarget -Transaction $personalTransaction | Out-Null
     $hooksAfterPersonal = Get-Content -LiteralPath $hooksPath -Raw | ConvertFrom-Json
-    if (@($hooksAfterPersonal.hooks.Stop | Where-Object { Test-ManagedNotificationHookEntry $_ }).Count -ne 1 -or (Get-FileHash (Join-Path $notificationRoot 'hooks\show-codex-notification.ps1') -Algorithm SHA256).Hash -ne $scriptHash) {
+    if (@($hooksAfterPersonal.hooks.Stop | Where-Object { Test-ManagedNotificationHookEntry $_ }).Count -ne 0 -or -not (Test-WindowsNotificationCommandConfig -Content (Get-Content -LiteralPath (Join-Path $notificationRoot 'config.toml') -Raw) -Root $notificationRoot) -or (Get-FileHash (Join-Path $notificationRoot 'hooks\show-codex-notification.ps1') -Algorithm SHA256).Hash -ne $scriptHash) {
         throw 'Personal phase 修改了 WindowsUsageNotifications 擁有的 Hook 或腳本。'
     }
 
@@ -133,6 +134,7 @@ try {
         throw '移除 notification bundle 時修改了第三方 Hook 或保留受管理通知。'
     }
     if (Test-Path (Join-Path $notificationRoot 'hooks\show-codex-notification.ps1')) { throw '移除 notification bundle 後仍保留受管理腳本。' }
+    if ((Test-Path (Join-Path $notificationRoot 'config.toml')) -and (Get-Content -LiteralPath (Join-Path $notificationRoot 'config.toml') -Raw) -match 'CODEX-SETTINGS:WINDOWS-NOTIFICATIONS:CONFIG') { throw '移除 notification bundle 後仍保留受管理 notify 設定。' }
 } finally {
     Remove-Item -LiteralPath $notificationRoot -Recurse -Force -ErrorAction SilentlyContinue
 }

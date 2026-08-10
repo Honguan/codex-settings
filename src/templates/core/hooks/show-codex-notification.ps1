@@ -1,5 +1,7 @@
 ﻿[CmdletBinding()]
 param(
+    [Parameter(Position = 0)]
+    [string]$NotificationPayload,
     [ValidateSet('Completed', 'PermissionRequired', 'QuestionRequired', 'Error')]
     [string]$Type = 'Completed',
     [switch]$Test,
@@ -62,6 +64,16 @@ $script:UsageResult = 'not-requested'
 $script:NativeToastError = ''
 $script:FallbackError = ''
 $script:DeliveryResultReason = 'unexpected-error'
+$script:CompletionClassification = 'NotApplicable'
+$script:CompletionEvidence = 'not-applicable'
+$script:CompactionDetected = $false
+$script:ContinuationExpected = $false
+$script:IsFinalTurn = $false
+$script:ClaimAttempted = $false
+$script:PayloadKeys = @()
+$script:LifecyclePhase = ''
+$script:Originator = ''
+$script:InvocationClient = ''
 
 function Add-HookTiming([string]$Name, [long]$Milliseconds) {
     if ($script:HookTimings.Contains($Name)) { $script:HookTimings[$Name] = [long]$script:HookTimings[$Name] + $Milliseconds }
@@ -87,6 +99,54 @@ function Get-UsageField($Usage, [string[]]$Names) {
         }
     }
     return [pscustomobject]@{ Present = $false; Value = $null; Name = $null }
+}
+
+function Get-CompletionClassification($InputObject) {
+    $eventType = [string](Get-UsageValue -Usage $InputObject -Names @('type') -Default '')
+    $eventName = [string](Get-UsageValue -Usage $InputObject -Names @('hook_event_name') -Default '')
+    $status = [string](Get-UsageValue -Usage $InputObject -Names @('status', 'turn_status') -Default '')
+    if ($status -in @('aborted', 'cancelled', 'canceled')) {
+        return [pscustomobject]@{ Classification = 'Aborted'; Evidence = 'aborted'; Compaction = $false; Continuation = $false; IsFinal = $false }
+    }
+    if ($status -eq 'interrupted') {
+        return [pscustomobject]@{ Classification = 'Interrupted'; Evidence = 'interrupted'; Compaction = $false; Continuation = $true; IsFinal = $false }
+    }
+    if ($null -ne $InputObject.PSObject.Properties['agent_id'] -or $null -ne $InputObject.PSObject.Properties['parent_session_id']) {
+        return [pscustomobject]@{ Classification = 'Subagent'; Evidence = 'subagent'; Compaction = $false; Continuation = $false; IsFinal = $false }
+    }
+    if ($eventType -eq 'agent-turn-complete') {
+        $threadId = [string](Get-UsageValue -Usage $InputObject -Names @('thread-id') -Default '')
+        $turnId = [string](Get-UsageValue -Usage $InputObject -Names @('turn-id') -Default '')
+        if (-not [string]::IsNullOrWhiteSpace($threadId) -and -not [string]::IsNullOrWhiteSpace($turnId)) {
+            return [pscustomobject]@{ Classification = 'FinalTurnCompletion'; Evidence = 'explicit-agent-turn-complete'; Compaction = $false; Continuation = $false; IsFinal = $true }
+        }
+        return [pscustomobject]@{ Classification = 'Unknown'; Evidence = 'agent-turn-complete-missing-identity'; Compaction = $false; Continuation = $false; IsFinal = $false }
+    }
+    if ($eventType -in @('contextCompaction', 'thread/compacted') -or $eventName -in @('PreCompact', 'PostCompact')) {
+        return [pscustomobject]@{ Classification = 'ContextCompaction'; Evidence = 'context-compaction'; Compaction = $true; Continuation = $true; IsFinal = $false }
+    }
+    if ($eventName -eq 'Stop') {
+        return [pscustomobject]@{ Classification = 'IntermediateStop'; Evidence = 'generic-stop-not-final'; Compaction = $false; Continuation = $true; IsFinal = $false }
+    }
+    return [pscustomobject]@{ Classification = 'Unknown'; Evidence = 'insufficient-evidence'; Compaction = $false; Continuation = $false; IsFinal = $false }
+}
+
+function ConvertTo-CompletedNotificationInput($InputObject) {
+    if ([string]$InputObject.type -ne 'agent-turn-complete') { return $InputObject }
+    $normalized = [ordered]@{
+        session_id = [string]$InputObject.'thread-id'
+        turn_id = [string]$InputObject.'turn-id'
+        cwd = [string]$InputObject.cwd
+        hook_event_name = 'agent-turn-complete'
+        last_assistant_message = [string]$InputObject.'last-assistant-message'
+        originator = [string]$InputObject.client
+        source = 'notify'
+        is_main_session = $true
+    }
+    foreach ($property in @($InputObject.PSObject.Properties)) {
+        if ($property.Name -notin @('type', 'thread-id', 'turn-id', 'cwd', 'client', 'input-messages', 'last-assistant-message')) { $normalized[$property.Name] = $property.Value }
+    }
+    return [pscustomobject]$normalized
 }
 function Get-NotificationRoot {
     if (-not [string]::IsNullOrWhiteSpace($env:CODEX_SETTINGS_NOTIFICATION_STATE_ROOT)) {
@@ -117,6 +177,17 @@ function Write-HookDiagnostic($InputObject, [string]$Result, [string]$Details) {
             handler = 'windows-notification'
             stopKind = 'notification'
             notificationType = $Type
+            hookEventName = if ($null -eq $InputObject) { '' } else { [string]$InputObject.hook_event_name }
+            lifecyclePhase = [string]$script:LifecyclePhase
+            completionClassification = [string]$script:CompletionClassification
+            completionEvidence = [string]$script:CompletionEvidence
+            compactionDetected = [bool]$script:CompactionDetected
+            continuationExpected = [bool]$script:ContinuationExpected
+            isFinalTurn = [bool]$script:IsFinalTurn
+            originator = [string]$script:Originator
+            source = [string]$script:InvocationClient
+            payloadKeys = @($script:PayloadKeys)
+            claimAttempted = [bool]$script:ClaimAttempted
             hookInvoked = $true
             payloadParsed = [bool]$script:PayloadParsed
             settingsEnabled = [bool]$script:SettingsEnabled
@@ -135,6 +206,7 @@ function Write-HookDiagnostic($InputObject, [string]$Result, [string]$Details) {
             statusMessage = ''
             handlerId = $script:NotificationHandlerId
             claimState = $script:NotificationClaimState
+            claimResult = $script:NotificationClaimState
             claimPath = $script:NotificationClaimPath
             nativeToastAttempted = [bool]$script:NativeToastAttempted
             nativeToastShown = [bool]$script:NativeToastShown
@@ -1353,26 +1425,40 @@ $notificationClaim = $null
 try {
     if ($Test) {
         $inputObject = [pscustomobject]@{
-            session_id = 'notification-test'
-            turn_id = [guid]::NewGuid().ToString('N')
-            hook_event_name = 'Stop'
-            stop_hook_active = $false
-            last_assistant_message = ''
+            type = 'agent-turn-complete'
+            'thread-id' = 'notification-test'
+            'turn-id' = [guid]::NewGuid().ToString('N')
+            cwd = (Get-Location).Path
+            client = 'notification-test'
+            'last-assistant-message' = ''
         }
     } else {
-        $inputObject = Read-CodexHookInvocation
+        $inputObject = if ($Type -eq 'Completed' -and -not [string]::IsNullOrWhiteSpace($NotificationPayload)) { ConvertFrom-CodexHookInputJson -Text $NotificationPayload } else { Read-CodexHookInvocation }
         if ($null -eq $inputObject) {
             $inputObject = [pscustomobject]@{}
             $script:DeliveryResultReason = 'invalid-payload'
         }
     }
     $script:PayloadParsed = $inputObject.PSObject.Properties.Count -gt 0
+    $script:PayloadKeys = @($inputObject.PSObject.Properties.Name | Sort-Object)
+    if ($Type -eq 'Completed') {
+        $completion = Get-CompletionClassification -InputObject $inputObject
+        $script:CompletionClassification = [string]$completion.Classification
+        $script:CompletionEvidence = [string]$completion.Evidence
+        $script:CompactionDetected = [bool]$completion.Compaction
+        $script:ContinuationExpected = [bool]$completion.Continuation
+        $script:IsFinalTurn = [bool]$completion.IsFinal
+        $script:LifecyclePhase = if ($script:IsFinalTurn) { 'turn-completed' } elseif ($script:CompactionDetected) { 'compaction' } else { 'non-final' }
+        $script:Originator = [string](Get-UsageValue -Usage $inputObject -Names @('client', 'originator') -Default '')
+        $script:InvocationClient = if ([string]$inputObject.type -eq 'agent-turn-complete') { 'notify' } else { [string](Get-UsageValue -Usage $inputObject -Names @('source') -Default 'hook') }
+        $inputObject = ConvertTo-CompletedNotificationInput -InputObject $inputObject
+    }
 
     $script:HookSource = Get-CodexHookSource
     $script:HookInvocationContext = New-CodexHookInvocationContext -InputObject $inputObject -HookSource $script:HookSource
     $script:HookInvocationCounts = Get-CodexHookInvocationCounts -InputObject $inputObject -Kind notification -EventName $Type -HookSource $script:HookSource
 
-    if ($Type -eq 'Completed' -and [string]$inputObject.last_assistant_message -match '(?s)(?:[?？]\s*$|請(?:選擇|確認|提供|回答))') {
+    if ($Type -eq 'Completed' -and $script:IsFinalTurn -and [string]$inputObject.last_assistant_message -match '(?s)(?:[?？]\s*$|請(?:選擇|確認|提供|回答))') {
         $Type = 'QuestionRequired'
     }
     $script:NotificationHandlerId = switch ($Type) {
@@ -1392,6 +1478,9 @@ try {
     if (-not $Test -and -not $script:PayloadParsed) {
         $script:DeliveryResultReason = 'invalid-payload'
         Write-HookDiagnostic -InputObject $inputObject -Result 'invalid-payload' -Details ''
+    } elseif (-not $Test -and $Type -eq 'Completed' -and -not $script:IsFinalTurn) {
+        $script:DeliveryResultReason = 'skipped-non-final'
+        Write-HookDiagnostic -InputObject $inputObject -Result 'skipped' -Details ('completionEvidence=' + $script:CompletionEvidence)
     } elseif (-not $Test -and (-not [bool]$settings.enabled -or -not [bool]$settings.$settingName)) {
         $script:DeliveryResultReason = 'skipped-disabled'
         Write-HookDiagnostic -InputObject $inputObject -Result 'disabled' -Details ''
@@ -1399,6 +1488,7 @@ try {
         $script:DeliveryResultReason = 'skipped-not-main'
         Write-HookDiagnostic -InputObject $inputObject -Result 'skipped' -Details ('mainSessionEvidence=' + $script:MainSessionEvidence)
     } else {
+        $script:ClaimAttempted = $true
         $notificationClaim = Acquire-NotificationClaim -Root $root -InputObject $inputObject -NotificationType $Type
         if (-not [bool]$notificationClaim.Acquired) {
             $script:DedupeResult = 'duplicate'

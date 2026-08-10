@@ -131,6 +131,16 @@ function Uninstall-ManagedTarget {
         }
 
         if ($ownsWindowsNotifications) {
+            $configPath = Join-Path $TargetRoot 'config.toml'
+            if (Test-Path -LiteralPath $configPath -PathType Leaf) {
+                $state = Get-TextFileState -Path $configPath
+                $newContent = Remove-WindowsNotificationCommandConfig -Content $state.Content
+                if ($newContent -ne $state.Content) {
+                    Save-TransactionFile -Transaction $transaction -Path $configPath
+                    if ([string]::IsNullOrWhiteSpace($newContent)) { Remove-Item -LiteralPath $configPath -Force; $removedCount++ }
+                    else { Write-TextFileState -Path $configPath -Content ($newContent.TrimEnd() + $state.NewLine) -Encoding $state.Encoding; $updatedCount++ }
+                }
+            }
             foreach ($relativePath in @($manifest.Community.windowsUsageNotifications.ManagedPaths)) {
                 $managedPath = Join-Path $TargetRoot ([string]$relativePath)
                 if (-not (Test-Path -LiteralPath $managedPath -PathType Leaf)) { continue }

@@ -53,11 +53,9 @@ try {
     if (-not [bool]$recovered.payload.recovered) { throw 'Corrupt state recovery failed.' }
 
     $hooks = Get-Content -LiteralPath (Join-Path $script:ScriptRoot 'templates\core\hooks.json') -Raw | ConvertFrom-Json
-    $stopEntry = @($hooks.hooks.Stop)[0]
-    $canonical = Get-CanonicalHookHandlerDescriptor -EventName Stop -Entry $stopEntry
-    if ($null -eq $canonical -or $canonical.handlerId -ne 'completed-token-toast' -or $canonical.kind -ne 'notification' -or [bool]$canonical.legacy) {
-        throw 'Current Hook ownership did not use canonical descriptor.'
-    }
+    if ($null -ne $hooks.hooks.PSObject.Properties['Stop']) { throw 'Completed notification must not use generic Stop.' }
+    $notificationConfig = Merge-WindowsNotificationCommandConfig -Content '' -Root 'C:\Users\fixture\.codex'
+    if (-not (Test-WindowsNotificationCommandConfig -Content $notificationConfig -Root 'C:\Users\fixture\.codex') -or $notificationConfig -notmatch 'notify\s*=.*Completed') { throw 'Canonical agent-turn-complete notification config is invalid.' }
 
     $runtimeCore = Get-Content -LiteralPath (Join-Path $script:ScriptRoot 'templates\core\hooks\runtime-core.ps1') -Raw
     $notificationSource = Get-Content -LiteralPath (Join-Path $script:ScriptRoot 'templates\core\hooks\show-codex-notification.ps1') -Raw
