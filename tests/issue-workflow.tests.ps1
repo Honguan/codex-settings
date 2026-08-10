@@ -118,17 +118,26 @@ Assert-Contains $closeGuardWorkflow 'deferred without reopen' 'Issue close guard
 foreach ($expected in @(
     'tags:',
     "- 'v*'",
+    'workflow_dispatch:',
     'fetch-depth: 1',
     'compare/',
     '$nonBlocking',
     'releaseTests',
     'build-installer.ps1',
+    'Smoke test built installer',
+    'RUNNER_TEMP',
+    'CODEX_SETTINGS_APP_SERVER_TEST_COMMAND',
+    'OverallResult: SUCCESS',
+    "if: github.event_name == 'push'",
     'gh release create'
 )) {
     Assert-Contains $releaseWorkflow $expected "Release validation workflow is missing: $expected"
 }
 Assert-NotContains $releaseWorkflow 'fetch-depth: 0' 'Release workflow still downloads the complete repository history.'
 Assert-NotContains $releaseWorkflow 'git merge-base --is-ancestor' 'Release workflow is still coupled to local full-history ancestry checks.'
+if ([regex]::Matches($releaseWorkflow, '- name: Smoke test built installer').Count -ne 1) { throw 'Release workflow must run exactly one Windows installer smoke test.' }
+if ($pullRequestWorkflow.Contains('Smoke test built installer') -or $mainWorkflow.Contains('Smoke test built installer')) { throw 'Windows installer smoke test must not be duplicated across PR and main workflows.' }
+if ($releaseWorkflow -notmatch "(?ms)- name: Publish installer\s+if: github\.event_name == 'push'") { throw 'Manual Windows smoke verification must not publish a release.' }
 
 foreach ($expected in @(
     'paths:',
