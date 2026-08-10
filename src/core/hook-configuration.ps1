@@ -1,7 +1,7 @@
 $script:ManagedHookManifestId = 'codex-settings'
 $script:ManagedHookManifestVersion = 3
 $script:ManagedNotificationId = 'codex-settings-notification'
-$script:ManagedNotificationVersion = 4
+$script:ManagedNotificationVersion = 5
 $script:WindowsNotificationConfigStartMarker = '# >>> CODEX-SETTINGS:WINDOWS-NOTIFICATIONS:CONFIG >>>'
 $script:WindowsNotificationConfigEndMarker = '# <<< CODEX-SETTINGS:WINDOWS-NOTIFICATIONS:CONFIG <<<'
 $script:ManagedLineEndingHookSignaturePattern = '(?i)((?:crlf-updated-files|normalize-cvs-crlf|preserve-line-endings)\.ps1|Converting updated files? to CRLF|Normalizing updated files to CRLF|Finalizing CRLF normalization|CodexSettings CRLF (?:track|finalize)|Restoring original line endings)'
@@ -128,7 +128,7 @@ function Get-CanonicalHookHandlerDescriptor {
         $handlerId = switch ($EventName) {
             'PreToolUse' { 'question-toast' }
             'PermissionRequest' { 'permission-toast' }
-            'Stop' { 'completed-token-toast' }
+            'Stop' { 'completed-toast' }
             default { 'notification-toast' }
         }
     } elseif (($command + ' ' + $commandWindows) -match '(?i)preserve-line-endings\.ps1') {
@@ -339,7 +339,7 @@ function Get-ManagedHookHandlerId([string]$EventName, $Entry) {
         switch ($EventName) {
             'PreToolUse' { return 'question-toast' }
             'PermissionRequest' { return 'permission-toast' }
-            'Stop' { return 'completed-token-toast' }
+            'Stop' { return 'completed-toast' }
             default { return 'notification-toast' }
         }
     }
@@ -365,7 +365,7 @@ function Get-ManagedHooksManifest {
                     foreach ($entry in @(Get-HookHandlerEntries -Entry $group)) {
                         $handlerId = Get-ManagedHookHandlerId -EventName $property.Name -Entry $entry
                         if ([string]::IsNullOrWhiteSpace($handlerId)) { continue }
-                        $managedId = if ($handlerId -eq 'completed-token-toast' -or $handlerId -match 'toast') { $script:ManagedNotificationId } else { $script:ManagedHookManifestId }
+                        $managedId = if ($handlerId -match 'toast') { $script:ManagedNotificationId } else { $script:ManagedHookManifestId }
                         $managedVersion = if ($managedId -eq $script:ManagedNotificationId) { $script:ManagedNotificationVersion } else { $script:ManagedHookManifestVersion }
                         $descriptor = Get-CanonicalHookHandlerDescriptor -EventName $property.Name -Entry $entry
                         $record = [ordered]@{ event = $property.Name; handlerId = $handlerId; managedId = $managedId; managedVersion = $managedVersion; fingerprint = Get-HookEntryFingerprint -Entry $entry; descriptor = $descriptor }

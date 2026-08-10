@@ -182,8 +182,8 @@ try {
 
     Install-TestEnvironment -Environment Git
     $manifest = Get-Manifest $globalRoot
-    if ($manifest.ManagedHooks.managedId -ne 'codex-settings' -or [int]$manifest.ManagedHooks.managedVersion -ne 3 -or $manifest.ManagedHooks.notification.managedId -ne 'codex-settings-notification' -or [int]$manifest.ManagedHooks.notification.managedVersion -ne 4) { throw '安裝 manifest 缺少通知 managedId/managedVersion。' }
-    $completedManifestHandlers = @($manifest.ManagedHooks.notification.handlers | Where-Object { $_.event -eq 'Stop' -and $_.handlerId -eq 'completed-token-toast' })
+    if ($manifest.ManagedHooks.managedId -ne 'codex-settings' -or [int]$manifest.ManagedHooks.managedVersion -ne 3 -or $manifest.ManagedHooks.notification.managedId -ne 'codex-settings-notification' -or [int]$manifest.ManagedHooks.notification.managedVersion -ne 5) { throw '安裝 manifest 缺少通知 managedId/managedVersion。' }
+    $completedManifestHandlers = @($manifest.ManagedHooks.notification.handlers | Where-Object { $_.event -eq 'Stop' -and $_.handlerId -eq 'completed-toast' })
     if ($completedManifestHandlers.Count -ne 0 -or @($manifest.Community.windowsUsageNotifications.ManagedConfigSections) -notcontains 'notify') { throw '安裝 manifest 未記錄 canonical notify 所有權。' }
     $agents = Get-Content -LiteralPath (Join-Path $globalRoot 'AGENTS.md') -Raw
     $rules = Get-Content -LiteralPath (Join-Path $globalRoot 'rules\default.rules') -Raw

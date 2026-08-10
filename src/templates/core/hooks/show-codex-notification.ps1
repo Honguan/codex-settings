@@ -39,28 +39,12 @@ $script:HookParentProcessId = $null
 $script:HookTimings = [ordered]@{
     invocationCounterMs = 0
     diagnosticWriteMs = 0
-    ccsessionsResolveMs = 0
-    ccsessionsRunMs = 0
-    ccsessionsRetrySleepMs = 0
-    transcriptReadMs = 0
 }
-$script:TranscriptTokenEventCache = @{}
-$script:CcSessionsCommandName = $null
-$script:CcSessionsCommandKind = $null
-$script:CcSessionsCommandPath = $null
-$script:CcSessionsQueryCount = 0
-$script:CcSessionsRetryCount = 0
-$script:CcSessionsAttemptDurationsMs = [Collections.Generic.List[long]]::new()
-$script:CcSessionsResultAcceptedAtAttempt = 0
-$script:CcSessionsResultReason = ''
-$script:CcSessionsFallbackReason = ''
 $script:PayloadParsed = $false
 $script:SettingsEnabled = $false
 $script:MainSessionResult = 'Unknown'
 $script:MainSessionEvidence = 'not-classified'
 $script:DedupeResult = 'not-checked'
-$script:UsageRequested = $false
-$script:UsageResult = 'not-requested'
 $script:NativeToastError = ''
 $script:FallbackError = ''
 $script:DeliveryResultReason = 'unexpected-error'
@@ -81,30 +65,19 @@ function Add-HookTiming([string]$Name, [long]$Milliseconds) {
 
 function Write-HookResult { [Console]::Out.Write('{}') }
 
-function Get-UsageValue($Usage, [string[]]$Names, $Default = 0) {
-    if ($null -eq $Usage) { return $Default }
+function Get-NotificationInputValue($InputObject, [string[]]$Names, $Default = 0) {
+    if ($null -eq $InputObject) { return $Default }
     foreach ($name in $Names) {
-        $property = $Usage.PSObject.Properties[$name]
+        $property = $InputObject.PSObject.Properties[$name]
         if ($null -ne $property -and $null -ne $property.Value) { return $property.Value }
     }
     return $Default
 }
 
-function Get-UsageField($Usage, [string[]]$Names) {
-    if ($null -eq $Usage) { return [pscustomobject]@{ Present = $false; Value = $null; Name = $null } }
-    foreach ($name in $Names) {
-        $property = $Usage.PSObject.Properties[$name]
-        if ($null -ne $property -and $null -ne $property.Value) {
-            return [pscustomobject]@{ Present = $true; Value = $property.Value; Name = $name }
-        }
-    }
-    return [pscustomobject]@{ Present = $false; Value = $null; Name = $null }
-}
-
 function Get-CompletionClassification($InputObject) {
-    $eventType = [string](Get-UsageValue -Usage $InputObject -Names @('type') -Default '')
-    $eventName = [string](Get-UsageValue -Usage $InputObject -Names @('hook_event_name') -Default '')
-    $status = [string](Get-UsageValue -Usage $InputObject -Names @('status', 'turn_status') -Default '')
+    $eventType = [string](Get-NotificationInputValue -InputObject $InputObject -Names @('type') -Default '')
+    $eventName = [string](Get-NotificationInputValue -InputObject $InputObject -Names @('hook_event_name') -Default '')
+    $status = [string](Get-NotificationInputValue -InputObject $InputObject -Names @('status', 'turn_status') -Default '')
     if ($status -in @('aborted', 'cancelled', 'canceled')) {
         return [pscustomobject]@{ Classification = 'Aborted'; Evidence = 'aborted'; Compaction = $false; Continuation = $false; IsFinal = $false }
     }
@@ -115,8 +88,8 @@ function Get-CompletionClassification($InputObject) {
         return [pscustomobject]@{ Classification = 'Subagent'; Evidence = 'subagent'; Compaction = $false; Continuation = $false; IsFinal = $false }
     }
     if ($eventType -eq 'agent-turn-complete') {
-        $threadId = [string](Get-UsageValue -Usage $InputObject -Names @('thread-id') -Default '')
-        $turnId = [string](Get-UsageValue -Usage $InputObject -Names @('turn-id') -Default '')
+        $threadId = [string](Get-NotificationInputValue -InputObject $InputObject -Names @('thread-id') -Default '')
+        $turnId = [string](Get-NotificationInputValue -InputObject $InputObject -Names @('turn-id') -Default '')
         if (-not [string]::IsNullOrWhiteSpace($threadId) -and -not [string]::IsNullOrWhiteSpace($turnId)) {
             return [pscustomobject]@{ Classification = 'FinalTurnCompletion'; Evidence = 'explicit-agent-turn-complete'; Compaction = $false; Continuation = $false; IsFinal = $true }
         }
@@ -155,13 +128,6 @@ function Get-NotificationRoot {
     return Join-Path $HOME '.codex\state\notifications'
 }
 
-function Get-TokenUsageRoot {
-    if (-not [string]::IsNullOrWhiteSpace($env:CODEX_SETTINGS_TOKEN_USAGE_STATE_ROOT)) {
-        return [IO.Path]::GetFullPath($env:CODEX_SETTINGS_TOKEN_USAGE_STATE_ROOT)
-    }
-    return Join-Path $HOME '.codex\state\token-usage'
-}
-
 function Write-HookDiagnostic($InputObject, [string]$Result, [string]$Details) {
     $stopwatch = [Diagnostics.Stopwatch]::StartNew()
     try {
@@ -194,8 +160,6 @@ function Write-HookDiagnostic($InputObject, [string]$Result, [string]$Details) {
             mainSessionResult = [string]$script:MainSessionResult
             mainSessionEvidence = [string]$script:MainSessionEvidence
             dedupeResult = [string]$script:DedupeResult
-            usageRequested = [bool]$script:UsageRequested
-            usageResult = [string]$script:UsageResult
             result = $Result
             resultReason = [string]$script:DeliveryResultReason
             sessionId = $sessionId
@@ -237,17 +201,7 @@ function Write-HookDiagnostic($InputObject, [string]$Result, [string]$Details) {
             CrlfInvocationCount = [int]$counts.CrlfInvocationCount
             invocationCounterMs = [long]$script:HookTimings.invocationCounterMs
             diagnosticWriteMs = [long]$stopwatch.ElapsedMilliseconds
-            ccsessionsResolveMs = [long]$script:HookTimings.ccsessionsResolveMs
-            ccsessionsRunMs = [long]$script:HookTimings.ccsessionsRunMs
-            ccsessionsRetrySleepMs = [long]$script:HookTimings.ccsessionsRetrySleepMs
-            ccsessionsQueryCount = [long]$script:CcSessionsQueryCount
-            ccsessionsRetryCount = [long]$script:CcSessionsRetryCount
-            ccsessionsAttemptDurationsMs = @($script:CcSessionsAttemptDurationsMs)
-            resultAcceptedAtAttempt = [long]$script:CcSessionsResultAcceptedAtAttempt
-            usageResultReason = [string]$script:CcSessionsResultReason
-            fallbackReason = [string]$script:CcSessionsFallbackReason
             foregroundElapsedMs = $elapsedMs
-            transcriptReadMs = [long]$script:HookTimings.transcriptReadMs
             details = $Details
         }
         New-Item -ItemType Directory -Path $root -Force | Out-Null
@@ -268,31 +222,6 @@ function Get-NotificationSettings([string]$Root) {
         mainSessionOnly = $true
         unknownMainSessionPolicy = 'Allow'
         dedupeSeconds = 10
-    }
-    $path = Join-Path $Root 'settings.json'
-    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-        New-Item -ItemType Directory -Path $Root -Force | Out-Null
-        [IO.File]::WriteAllText($path, (($defaults | ConvertTo-Json) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
-        return [pscustomobject]$defaults
-    }
-    try {
-        $stored = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json -ErrorAction Stop
-        foreach ($property in $defaults.Keys) {
-            if ($stored.PSObject.Properties.Name -notcontains $property) { $stored | Add-Member -NotePropertyName $property -NotePropertyValue $defaults[$property] }
-        }
-        return $stored
-    } catch { return [pscustomobject]$defaults }
-}
-
-function Get-TokenUsageSettings([string]$Root) {
-    $defaults = [ordered]@{
-        enabled = $true
-        showAfterEachTurn = $true
-        showSessionId = $true
-        showCost = $true
-        showModel = $true
-        firstTurnMode = 'session-total'
-        mainSessionOnly = $true
     }
     $path = Join-Path $Root 'settings.json'
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
@@ -369,7 +298,7 @@ function Acquire-NotificationClaim([string]$Root, $InputObject, [string]$Notific
             sessionId = $identity.SessionId
             turnId = $identity.TurnId
             type = $NotificationType
-            handlerId = if ($NotificationType -eq 'Completed') { 'completed-token-toast' } else { 'notification-toast' }
+            handlerId = if ($NotificationType -eq 'Completed') { 'completed-toast' } else { 'notification-toast' }
             processId = $PID
             state = 'showing'
             startedAt = [DateTimeOffset]::UtcNow.ToString('o')
@@ -410,49 +339,7 @@ function Set-NotificationClaimState($Claim, [ValidateSet('showing', 'shown', 'sk
 function ConvertTo-XmlText([string]$Text) { return [Security.SecurityElement]::Escape($Text) }
 
 function ConvertTo-ToastVisualXml([string]$Title, [string]$Message) {
-    $titleXml = '<text hint-style="title" hint-maxLines="1">' + (ConvertTo-XmlText $Title) + '</text>'
-    $lines = @($Message -split '\r?\n')
-    $expectedRows = @(
-        ,@('Session ID', 'Model')
-        ,@('Input', 'Output')
-        ,@('Think', 'Cache')
-        ,@('Total', 'Cost')
-    )
-
-    if ($lines.Count -eq ($expectedRows.Count + 1)) {
-        $rowsXml = [Text.StringBuilder]::new()
-        $isTokenUsageLayout = $true
-        for ($index = 0; $index -lt $expectedRows.Count; $index++) {
-            $leftLabel = [regex]::Escape($expectedRows[$index][0])
-            $rightLabel = [regex]::Escape($expectedRows[$index][1])
-            $pattern = '^\s*' + $leftLabel + '\s+(?<leftValue>.+?)\s+\|\s+' + $rightLabel + '\s+(?<rightValue>.+?)\s*$'
-            $match = [regex]::Match($lines[$index], $pattern)
-            if (-not $match.Success) {
-                $isTokenUsageLayout = $false
-                break
-            }
-
-            $left = $expectedRows[$index][0] + ' ' + $match.Groups['leftValue'].Value.Trim()
-            $right = $expectedRows[$index][1] + ' ' + $match.Groups['rightValue'].Value.Trim()
-            [void]$rowsXml.Append('<group><subgroup hint-weight="1"><text hint-style="body" hint-align="left" hint-maxLines="1">')
-            [void]$rowsXml.Append((ConvertTo-XmlText $left))
-            [void]$rowsXml.Append('</text></subgroup><subgroup hint-weight="1"><text hint-style="body" hint-align="left" hint-maxLines="1">')
-            [void]$rowsXml.Append((ConvertTo-XmlText $right))
-            [void]$rowsXml.Append('</text></subgroup></group>')
-        }
-
-        $timeMatch = [regex]::Match($lines[$expectedRows.Count], '^\s*Time\s+(?<timeValue>.+?)\s*$')
-        if (-not $timeMatch.Success) { $isTokenUsageLayout = $false }
-        if ($isTokenUsageLayout) {
-            $time = 'Time ' + $timeMatch.Groups['timeValue'].Value.Trim()
-            [void]$rowsXml.Append('<group><subgroup hint-weight="1"><text hint-style="body" hint-align="left" hint-maxLines="1">')
-            [void]$rowsXml.Append((ConvertTo-XmlText $time))
-            [void]$rowsXml.Append('</text></subgroup></group>')
-            return $titleXml + $rowsXml.ToString()
-        }
-    }
-
-    return $titleXml + '<text hint-style="body" hint-maxLines="4">' + (ConvertTo-XmlText $Message) + '</text>'
+    return '<text hint-style="title" hint-maxLines="1">' + (ConvertTo-XmlText $Title) + '</text><text hint-style="body" hint-maxLines="4">' + (ConvertTo-XmlText $Message) + '</text>'
 }
 
 function Get-ToastTag($InputObject, [string]$NotificationType) {
@@ -544,7 +431,7 @@ function Start-DetachedPowerShell([string[]]$Arguments, [switch]$Wait) {
     if ($null -eq $powershell) { throw 'Windows PowerShell 5.1 is required for Windows Toast notifications.' }
     $startInfo = [Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = $powershell.Source
-    $startInfo.UseShellExecute = -not $Wait
+    $startInfo.UseShellExecute = $false
     $startInfo.CreateNoWindow = $true
     $startInfo.WindowStyle = [Diagnostics.ProcessWindowStyle]::Hidden
     $startInfo.RedirectStandardInput = [bool]$Wait
@@ -696,719 +583,6 @@ function Show-BalloonFallback([string]$Title, [string]$Message, [string]$Notific
     return [pscustomobject]@{ Shown = $true; CleanupScheduled = $false }
 }
 
-function Resolve-CcSessionsCommand {
-    if (-not [string]::IsNullOrWhiteSpace($env:CODEX_SETTINGS_CCSESSIONS_TEST_COMMAND)) {
-        return [pscustomobject]@{ Kind = 'test'; Name = 'pwsh'; Path = $env:CODEX_SETTINGS_CCSESSIONS_TEST_COMMAND }
-    }
-    if ($null -ne $script:CcSessionsCommandName) {
-        return [pscustomobject]@{ Kind = $script:CcSessionsCommandKind; Name = $script:CcSessionsCommandName; Path = $script:CcSessionsCommandPath }
-    }
-
-    $stopwatch = [Diagnostics.Stopwatch]::StartNew()
-    try {
-        foreach ($profilePath in @($PROFILE.CurrentUserAllHosts, $PROFILE.CurrentUserCurrentHost) | Select-Object -Unique) {
-            if (Test-Path -LiteralPath $profilePath -PathType Leaf) { . $profilePath *> $null }
-            if (Get-Command ccsessions -ErrorAction SilentlyContinue) { break }
-        }
-        $command = Get-Command ccsessions -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($null -eq $command) { throw 'ccsessions not found' }
-        $script:CcSessionsCommandName = [string]$command.Name
-        $script:CcSessionsCommandKind = 'profile'
-        $script:CcSessionsCommandPath = [string]$command.Source
-        return [pscustomobject]@{ Kind = 'profile'; Name = [string]$command.Name; Path = [string]$command.Source }
-    } finally { Add-HookTiming -Name 'ccsessionsResolveMs' -Milliseconds $stopwatch.ElapsedMilliseconds }
-}
-
-function Test-CcSessionsRetryableError {
-    [CmdletBinding()]
-    param([Parameter(Mandatory = $true)]$ErrorRecord)
-
-    $message = [string]$ErrorRecord.Exception.Message
-    if ([string]::IsNullOrWhiteSpace($message)) { $message = [string]$ErrorRecord }
-    return $message -match '(?i)(?:usage\s+not\s+ready|not\s+ready|stale|no\s+matching\s+session|different\s+session|session\s+mismatch)'
-}
-
-function Invoke-CcSessionsProcess {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)]$Command,
-        [Parameter(Mandatory = $true)][string]$SessionId,
-        [int]$TimeoutMilliseconds = 2000
-    )
-
-    $startInfo = [Diagnostics.ProcessStartInfo]::new()
-    $startInfo.FileName = 'pwsh'
-    foreach ($argument in @('-NoLogo', '-NoProfile', '-NonInteractive')) { $startInfo.ArgumentList.Add($argument) }
-    if ($Command.Kind -eq 'test') {
-        foreach ($argument in @('-File', [string]$Command.Path, '-SessionId', $SessionId)) { $startInfo.ArgumentList.Add($argument) }
-    } else {
-        $profileCommands = @($PROFILE.CurrentUserAllHosts, $PROFILE.CurrentUserCurrentHost) | Select-Object -Unique | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | ForEach-Object { ". '" + ([string]$_).Replace("'", "''") + "' *> `$null" }
-        $escapedSessionId = $SessionId.Replace("'", "''")
-        $commandText = (@($profileCommands) + "ccsessions -Json '$escapedSessionId'") -join '; '
-        foreach ($argument in @('-Command', $commandText)) { $startInfo.ArgumentList.Add($argument) }
-    }
-    $startInfo.RedirectStandardOutput = $true
-    $startInfo.RedirectStandardError = $true
-    $startInfo.UseShellExecute = $false
-    $startInfo.CreateNoWindow = $true
-
-    $process = [Diagnostics.Process]::Start($startInfo)
-    try {
-        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
-        $stderrTask = $process.StandardError.ReadToEndAsync()
-        if (-not $process.WaitForExit($TimeoutMilliseconds)) {
-            try { $process.Kill($true) } catch {}
-            try { [void]$process.WaitForExit(1000) } catch {}
-            throw [TimeoutException]::new("ccsessions query timed out after $TimeoutMilliseconds ms")
-        }
-        $stdout = $stdoutTask.GetAwaiter().GetResult()
-        $stderr = $stderrTask.GetAwaiter().GetResult()
-        if ($process.ExitCode -ne 0) { throw "ccsessions exited with code $($process.ExitCode): $stderr" }
-        return (@($stdout, $stderr) -join [Environment]::NewLine).Trim()
-    } finally {
-        $process.Dispose()
-    }
-}
-
-function Invoke-CcSessionsJson([string]$SessionId, $Baseline) {
-    $lastError = $null
-    $retryDelays = @(100, 150)
-    $command = Resolve-CcSessionsCommand
-    $queryBudgetStopwatch = [Diagnostics.Stopwatch]::StartNew()
-    for ($attempt = 0; $attempt -le $retryDelays.Count; $attempt++) {
-        $attemptNumber = $attempt + 1
-        $remainingBudgetMs = 2600 - [long]$queryBudgetStopwatch.ElapsedMilliseconds
-        if ($remainingBudgetMs -le 0) {
-            $script:CcSessionsResultReason = 'foreground-budget-exhausted'
-            $script:CcSessionsFallbackReason = 'foreground-budget-exhausted'
-            throw [TimeoutException]::new('ccsessions foreground budget exhausted')
-        }
-        $script:CcSessionsQueryCount++
-        $attemptStopwatch = [Diagnostics.Stopwatch]::StartNew()
-        try {
-            $runStopwatch = [Diagnostics.Stopwatch]::StartNew()
-            try { $text = Invoke-CcSessionsProcess -Command $command -SessionId $SessionId -TimeoutMilliseconds ([int][Math]::Min(2000, $remainingBudgetMs)) } finally { Add-HookTiming -Name 'ccsessionsRunMs' -Milliseconds $runStopwatch.ElapsedMilliseconds }
-            $start = $text.IndexOf('{')
-            $end = $text.LastIndexOf('}')
-            if ($start -lt 0 -or $end -le $start) {
-                if ($text -match '(?i)(?:usage\s+not\s+ready|not\s+ready|stale|no\s+matching\s+session|different\s+session)') { throw 'ccsessions usage not ready' }
-                throw 'ccsessions returned invalid JSON'
-            }
-            $result = $text.Substring($start, $end - $start + 1) | ConvertFrom-Json -ErrorAction Stop
-            if ($result -is [array]) { $result = @($result | Where-Object { [string]$_.sessionId -eq $SessionId })[0] }
-            if ($null -eq $result -or -not [bool]$result.success) { throw $(if ($result.error) { [string]$result.error } else { 'ccsessions returned no matching session' }) }
-            if ([string]$result.sessionId -ne $SessionId) { throw 'ccsessions returned a different session' }
-            if ($null -ne $Baseline) {
-                $candidate = ConvertTo-Snapshot -Usage $result -SessionId $SessionId -Source 'ccsessions'
-                if (-not (Test-SnapshotChanged -Current $candidate -Previous $Baseline)) {
-                    if ($attempt -ge $retryDelays.Count) {
-                        $script:CcSessionsRetryCount = $attempt
-                        $script:CcSessionsResultReason = 'stale-baseline'
-                        return [pscustomobject]@{ Data = $result; RetryCount = $attempt }
-                    }
-                    $sleepStopwatch = [Diagnostics.Stopwatch]::StartNew()
-                    Start-Sleep -Milliseconds $retryDelays[$attempt]
-                    Add-HookTiming -Name 'ccsessionsRetrySleepMs' -Milliseconds $sleepStopwatch.ElapsedMilliseconds
-                    $script:CcSessionsRetryCount = $attemptNumber
-                    continue
-                }
-            }
-            $script:CcSessionsRetryCount = $attempt
-            $script:CcSessionsResultAcceptedAtAttempt = $attemptNumber
-            $script:CcSessionsResultReason = if ($null -eq $Baseline) { 'no-baseline' } else { 'new-snapshot' }
-            return [pscustomobject]@{ Data = $result; RetryCount = $attempt }
-        } catch {
-            $lastError = $_
-            $script:CcSessionsRetryCount = $attempt
-            try { $lastError.Exception.Data['ccsessionsRetryCount'] = $attempt } catch {}
-            if ($_.Exception -is [TimeoutException]) {
-                $script:CcSessionsResultReason = 'query-timeout'
-                $script:CcSessionsFallbackReason = 'query-timeout'
-                throw
-            }
-            if (-not (Test-CcSessionsRetryableError -ErrorRecord $_)) {
-                $script:CcSessionsResultReason = 'non-retryable-error'
-                $script:CcSessionsFallbackReason = 'non-retryable-error'
-                throw
-            }
-            if ($attempt -ge $retryDelays.Count) {
-                $script:CcSessionsResultReason = 'transient-not-ready'
-                $script:CcSessionsFallbackReason = 'transient-not-ready'
-                throw
-            }
-            $sleepStopwatch = [Diagnostics.Stopwatch]::StartNew()
-            Start-Sleep -Milliseconds $retryDelays[$attempt]
-            Add-HookTiming -Name 'ccsessionsRetrySleepMs' -Milliseconds $sleepStopwatch.ElapsedMilliseconds
-            $script:CcSessionsRetryCount = $attemptNumber
-        } finally {
-            $attemptStopwatch.Stop()
-            $script:CcSessionsAttemptDurationsMs.Add([long]$attemptStopwatch.ElapsedMilliseconds)
-        }
-    }
-    throw $lastError
-}
-
-function Get-LastTokenCountEvent([string]$TranscriptPath) {
-    if ($script:TranscriptTokenEventCache.ContainsKey($TranscriptPath)) { return $script:TranscriptTokenEventCache[$TranscriptPath] }
-    $stopwatch = [Diagnostics.Stopwatch]::StartNew()
-    $event = $null
-    try {
-        $event = Get-Content -LiteralPath $TranscriptPath -Tail 512 | ForEach-Object {
-            try { $_ | ConvertFrom-Json -ErrorAction Stop } catch { $null }
-        } | Where-Object {
-            $_.type -eq 'event_msg' -and $_.payload.type -eq 'token_count'
-        } | Select-Object -Last 1
-    } catch {}
-    $script:TranscriptTokenEventCache[$TranscriptPath] = $event
-    Add-HookTiming -Name 'transcriptReadMs' -Milliseconds $stopwatch.ElapsedMilliseconds
-    return $event
-}
-
-function Get-RealtimeUsage($InputObject) {
-    $directUsage = Get-UsageValue -Usage $InputObject -Names @('last_token_usage') -Default $null
-    if ($null -ne $directUsage) { return $directUsage }
-
-    $transcriptPath = [string](Get-UsageValue -Usage $InputObject -Names @('transcript_path') -Default '')
-    if ([string]::IsNullOrWhiteSpace($transcriptPath) -or -not (Test-Path -LiteralPath $transcriptPath -PathType Leaf)) { return $null }
-    try {
-        $event = Get-LastTokenCountEvent -TranscriptPath $transcriptPath
-        if ($null -ne $event -and $null -ne $event.payload.info.last_token_usage) { return $event.payload.info.last_token_usage }
-    } catch {}
-    return $null
-}
-
-function ConvertTo-ModelNames($Value) {
-    if ($null -eq $Value) { return @() }
-    $values = if ($Value -is [string]) { @($Value) } else { @($Value) }
-    return @($values | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-}
-
-function Get-ModelNamesFromUsage($Usage) {
-    foreach ($name in @('models', 'model', 'model_name', 'modelName')) {
-        $field = Get-UsageField -Usage $Usage -Names @($name)
-        if ($field.Present) {
-            $models = @(ConvertTo-ModelNames $field.Value)
-            if ($models.Count -gt 0) { return $models }
-        }
-    }
-    return @()
-}
-
-function Get-ModelNamesFromInput($InputObject) {
-    $models = @(Get-ModelNamesFromUsage -Usage $InputObject)
-    if ($models.Count -gt 0) { return [pscustomobject]@{ Names = $models; Source = 'input' } }
-
-    $directUsage = Get-UsageValue -Usage $InputObject -Names @('last_token_usage') -Default $null
-    $models = @(Get-ModelNamesFromUsage -Usage $directUsage)
-    if ($models.Count -gt 0) { return [pscustomobject]@{ Names = $models; Source = 'payload' } }
-
-    $transcriptPath = [string](Get-UsageValue -Usage $InputObject -Names @('transcript_path') -Default '')
-    if (-not [string]::IsNullOrWhiteSpace($transcriptPath) -and (Test-Path -LiteralPath $transcriptPath -PathType Leaf)) {
-        try {
-            $event = Get-LastTokenCountEvent -TranscriptPath $transcriptPath
-            if ($null -ne $event) {
-                $models = @(Get-ModelNamesFromUsage -Usage $event.payload.info)
-                if ($models.Count -eq 0) { $models = @(Get-ModelNamesFromUsage -Usage $event.payload) }
-                if ($models.Count -gt 0) { return [pscustomobject]@{ Names = $models; Source = 'transcript' } }
-            }
-        } catch {}
-    }
-    return [pscustomobject]@{ Names = @(); Source = 'N/A' }
-}
-
-function ConvertTo-NotificationTime($Value) {
-    if ($null -eq $Value) { return '' }
-    $text = ([string]$Value).Trim()
-    if ([string]::IsNullOrWhiteSpace($text)) { return '' }
-    if ($text -match '^\d{2}-\d{2} \d{2}:\d{2} [AP]M$') { return $text }
-    try {
-        $parsed = if ($Value -is [DateTimeOffset]) { $Value } elseif ($Value -is [DateTime]) { [DateTimeOffset]::new($Value) } else { [DateTimeOffset]::Parse($text, [Globalization.CultureInfo]::InvariantCulture) }
-        return [TimeZoneInfo]::ConvertTimeBySystemTimeZoneId($parsed, 'Taipei Standard Time').ToString('MM-dd hh:mm tt', [Globalization.CultureInfo]::InvariantCulture)
-    } catch { return '' }
-}
-
-function Get-UsageTime($Usage) {
-    foreach ($name in @('time', 'formattedTime', 'lastActivity', 'last_activity', 'timestamp', 'last_activity_time')) {
-        $field = Get-UsageField -Usage $Usage -Names @($name)
-        if ($field.Present) {
-            $text = ConvertTo-NotificationTime -Value $field.Value
-            if (-not [string]::IsNullOrWhiteSpace($text)) { return [pscustomobject]@{ Present = $true; Value = $text; Name = $name } }
-        }
-    }
-    return [pscustomobject]@{ Present = $false; Value = ''; Name = $null }
-}
-
-function ConvertTo-Snapshot($Usage, [string]$SessionId, [string]$Source = 'ccsessions') {
-    $models = @(Get-ModelNamesFromUsage -Usage $Usage)
-    $inputField = Get-UsageField -Usage $Usage -Names @('inputTokens', 'input_tokens')
-    $outputField = Get-UsageField -Usage $Usage -Names @('outputTokens', 'output_tokens')
-    $reasoningField = Get-UsageField -Usage $Usage -Names @('reasoningTokens', 'reasoningOutputTokens', 'reasoning_output_tokens', 'thinkingTokens', 'thinking_tokens')
-    $cacheField = Get-UsageField -Usage $Usage -Names @('cacheTokens', 'cachedInputTokens', 'cached_input_tokens', 'cacheReadTokens', 'cache_read_tokens')
-    $totalField = Get-UsageField -Usage $Usage -Names @('totalTokens', 'total_tokens')
-    $costField = Get-UsageField -Usage $Usage -Names @('costUsd', 'cost_usd', 'costUSD')
-    $timeField = Get-UsageTime -Usage $Usage
-    $presentFields = @()
-    foreach ($field in @($inputField, $outputField, $reasoningField, $cacheField, $totalField, $costField)) { if ([bool]$field.Present) { $presentFields += [string]$field.Name } }
-    if ([bool]$timeField.Present) { $presentFields += [string]$timeField.Name }
-    return [pscustomobject][ordered]@{
-        schemaVersion = 1
-        sessionId = $SessionId
-        source = $Source
-        models = $models
-        hasModel = $models.Count -gt 0
-        time = [string]$timeField.Value
-        hasTime = [bool]$timeField.Present
-        inputTokens = if ($inputField.Present) { [long]$inputField.Value } else { [long]0 }
-        hasInputTokens = [bool]$inputField.Present
-        outputTokens = if ($outputField.Present) { [long]$outputField.Value } else { [long]0 }
-        hasOutputTokens = [bool]$outputField.Present
-        reasoningTokens = if ($reasoningField.Present) { [long]$reasoningField.Value } else { [long]0 }
-        hasReasoningTokens = [bool]$reasoningField.Present
-        cacheTokens = if ($cacheField.Present) { [long]$cacheField.Value } else { [long]0 }
-        hasCacheTokens = [bool]$cacheField.Present
-        totalTokens = if ($totalField.Present) { [long]$totalField.Value } else { [long]0 }
-        hasTotalTokens = [bool]$totalField.Present
-        hasCost = [bool]$costField.Present
-        costUsd = if ($costField.Present) { [decimal]$costField.Value } else { [decimal]0 }
-        presentFields = @($presentFields)
-        capturedAt = [DateTimeOffset]::UtcNow.ToString('o')
-    }
-}
-
-function Get-SnapshotHash($Snapshot) {
-    $json = $Snapshot | ConvertTo-Json -Depth 6 -Compress
-    $sha = [Security.Cryptography.SHA256]::Create()
-    try { return ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($json)))).Replace('-', '').ToLowerInvariant() }
-    finally { $sha.Dispose() }
-}
-
-function Get-SessionStatePath([string]$Root, [string]$SessionId) {
-    $sha = [Security.Cryptography.SHA256]::Create()
-    try { $name = ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($SessionId)))).Replace('-', '').ToLowerInvariant() + '.json' }
-    finally { $sha.Dispose() }
-    return Join-Path $Root $name
-}
-
-function Read-PreviousState([string]$Path) {
-    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
-    try { return Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json -ErrorAction Stop }
-    catch {
-        $backup = "$Path.corrupt-$([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())"
-        Move-Item -LiteralPath $Path -Destination $backup -Force
-        return $null
-    }
-}
-
-function ConvertTo-StateSnapshot($Snapshot) {
-    return [ordered]@{
-        schemaVersion = 2
-        sessionId = $Snapshot.sessionId
-        source = $Snapshot.source
-        models = @($Snapshot.models)
-        hasModel = [bool]$Snapshot.hasModel
-        time = $Snapshot.time
-        hasTime = [bool]$Snapshot.hasTime
-        inputTokens = $Snapshot.inputTokens
-        hasInputTokens = [bool]$Snapshot.hasInputTokens
-        outputTokens = $Snapshot.outputTokens
-        hasOutputTokens = [bool]$Snapshot.hasOutputTokens
-        reasoningTokens = $Snapshot.reasoningTokens
-        hasReasoningTokens = [bool]$Snapshot.hasReasoningTokens
-        cacheTokens = $Snapshot.cacheTokens
-        hasCacheTokens = [bool]$Snapshot.hasCacheTokens
-        totalTokens = $Snapshot.totalTokens
-        hasTotalTokens = [bool]$Snapshot.hasTotalTokens
-        hasCost = [bool]$Snapshot.hasCost
-        costUsd = $Snapshot.costUsd
-    }
-}
-
-function ConvertTo-BaselineSnapshot($Usage, [string]$SessionId) {
-    $snapshot = ConvertTo-Snapshot -Usage $Usage -SessionId $SessionId -Source 'ccsessions'
-    foreach ($property in @('hasModel', 'hasTime', 'hasInputTokens', 'hasOutputTokens', 'hasReasoningTokens', 'hasCacheTokens', 'hasTotalTokens', 'hasCost')) {
-        if ($Usage.PSObject.Properties.Name -contains $property) { $snapshot.$property = [bool]$Usage.$property }
-    }
-    return $snapshot
-}
-
-function Get-CcSessionsBaseline($State, [string]$SessionId) {
-    if ($null -eq $State) { return $null }
-    if ([string]$State.source -eq 'realtime') { return $null }
-    if ($State.PSObject.Properties.Name -contains 'ccsessionsBaseline' -and $null -ne $State.ccsessionsBaseline) {
-        $storedBaseline = $State.ccsessionsBaseline
-        if ($storedBaseline.PSObject.Properties.Name -notcontains 'source' -or [string]$storedBaseline.source -ne 'ccsessions') { return $null }
-        $baseline = ConvertTo-BaselineSnapshot -Usage $storedBaseline -SessionId $SessionId
-        if (Test-SnapshotHasCoreUsage -Snapshot $baseline) { return $baseline }
-        return $null
-    }
-    if ([string]$State.source -eq 'ccsessions') {
-        $baseline = ConvertTo-BaselineSnapshot -Usage $State -SessionId $SessionId
-        if (Test-SnapshotHasCoreUsage -Snapshot $baseline) { return $baseline }
-    }
-    return $null
-}
-
-function Get-LastKnownModel($State) {
-    if ($null -eq $State) { return '' }
-    $lastKnownModel = [string]$State.lastKnownModel
-    if (-not [string]::IsNullOrWhiteSpace($lastKnownModel)) { return $lastKnownModel }
-    $models = @(ConvertTo-ModelNames $State.models)
-    if ($models.Count -gt 0) { return [string]$models[0] }
-    return ''
-}
-
-function Test-SnapshotHasCoreUsage($Snapshot) {
-    if ($null -eq $Snapshot) { return $false }
-    return [bool]$Snapshot.hasInputTokens -and [bool]$Snapshot.hasOutputTokens -and [bool]$Snapshot.hasReasoningTokens -and [bool]$Snapshot.hasCacheTokens -and [bool]$Snapshot.hasTotalTokens
-}
-
-function Test-SnapshotCanSubtract($Current, $Previous) {
-    if ($null -eq $Current -or $null -eq $Previous) { return $false }
-    $comparable = $false
-    foreach ($property in @('inputTokens', 'outputTokens', 'reasoningTokens', 'cacheTokens', 'totalTokens')) {
-        $hasProperty = 'has' + $property.Substring(0, 1).ToUpperInvariant() + $property.Substring(1)
-        if ([bool]$Current.$hasProperty -and [bool]$Previous.$hasProperty) {
-            if ([decimal]$Current.$property -lt [decimal]$Previous.$property) { return $false }
-            $comparable = $true
-        }
-    }
-    if ([bool]$Current.hasCost -and [bool]$Previous.hasCost -and [decimal]$Current.costUsd -lt [decimal]$Previous.costUsd) { return $false }
-    return $comparable
-}
-
-function Test-SnapshotChanged($Current, $Previous) {
-    if ($null -eq $Previous) { return $true }
-    foreach ($property in @('inputTokens', 'outputTokens', 'reasoningTokens', 'cacheTokens', 'totalTokens')) {
-        $hasProperty = 'has' + $property.Substring(0, 1).ToUpperInvariant() + $property.Substring(1)
-        if ([bool]$Current.$hasProperty -ne [bool]$Previous.$hasProperty) { return $true }
-        if ([bool]$Current.$hasProperty -and [decimal]$Current.$property -ne [decimal]$Previous.$property) { return $true }
-    }
-    if ([bool]$Current.hasCost -ne [bool]$Previous.hasCost) { return $true }
-    if ([bool]$Current.hasCost -and [bool]$Previous.hasCost -and [decimal]$Current.costUsd -ne [decimal]$Previous.costUsd) { return $true }
-    return $false
-}
-
-function New-SnapshotDelta($Current, $Previous, [string]$ModelFallback) {
-    $models = if ([bool]$Current.hasModel -and @($Current.models).Count -gt 0) { @($Current.models) } elseif (-not [string]::IsNullOrWhiteSpace($ModelFallback)) { @($ModelFallback) } else { @() }
-    $value = [ordered]@{
-        schemaVersion = 1
-        kind = 'usage-delta'
-        sessionId = $Current.sessionId
-        source = 'ccsessions-delta'
-        models = $models
-        hasModel = $models.Count -gt 0
-        time = $Current.time
-        hasTime = [bool]$Current.hasTime
-    }
-    foreach ($property in @('inputTokens', 'outputTokens', 'reasoningTokens', 'cacheTokens', 'totalTokens')) {
-        $hasProperty = 'has' + $property.Substring(0, 1).ToUpperInvariant() + $property.Substring(1)
-        $hasDelta = [bool]$Current.$hasProperty -and [bool]$Previous.$hasProperty
-        $value[$property] = if ($hasDelta) { [long]$Current.$property - [long]$Previous.$property } else { [long]0 }
-        $value[$hasProperty] = $hasDelta
-    }
-    $hasCostDelta = [bool]$Current.hasCost -and [bool]$Previous.hasCost
-    $value.hasCost = $hasCostDelta
-    $value.costUsd = if ($hasCostDelta) { [decimal]$Current.costUsd - [decimal]$Previous.costUsd } else { [decimal]0 }
-    return [pscustomobject]$value
-}
-
-function New-DisplaySnapshot($TokenSnapshot, $MetadataSnapshot, [string]$ModelFallback, [bool]$UseMetadataCost, [string]$Source) {
-    $value = [ordered]@{
-        schemaVersion = 1
-        kind = 'usage-display'
-        sessionId = $TokenSnapshot.sessionId
-        source = $Source
-    }
-    $models = if ($null -ne $MetadataSnapshot -and @($MetadataSnapshot.models).Count -gt 0) { @($MetadataSnapshot.models) } elseif (@($TokenSnapshot.models).Count -gt 0) { @($TokenSnapshot.models) } elseif (-not [string]::IsNullOrWhiteSpace($ModelFallback)) { @($ModelFallback) } else { @() }
-    $value.models = $models
-    $value.hasModel = $models.Count -gt 0
-    $metadataHasTime = $null -ne $MetadataSnapshot -and [bool]$MetadataSnapshot.hasTime
-    $value.time = if ($metadataHasTime) { [string]$MetadataSnapshot.time } elseif ([bool]$TokenSnapshot.hasTime) { [string]$TokenSnapshot.time } else { '' }
-    $value.hasTime = $metadataHasTime -or [bool]$TokenSnapshot.hasTime
-    $fieldMap = [ordered]@{
-        inputTokens = 'hasInputTokens'
-        outputTokens = 'hasOutputTokens'
-        reasoningTokens = 'hasReasoningTokens'
-        cacheTokens = 'hasCacheTokens'
-        totalTokens = 'hasTotalTokens'
-    }
-    foreach ($property in $fieldMap.Keys) {
-        $hasProperty = $fieldMap[$property]
-        $hasTokenValue = [bool]$TokenSnapshot.$hasProperty
-        $value[$property] = if ($hasTokenValue) { $TokenSnapshot.$property } else { [long]0 }
-        $value[$hasProperty] = $hasTokenValue
-    }
-    $hasMetadataCost = $null -ne $MetadataSnapshot -and [bool]$MetadataSnapshot.hasCost
-    $useMetadataCostValue = $UseMetadataCost -and -not [bool]$TokenSnapshot.hasCost -and $hasMetadataCost
-    $value.hasCost = [bool]$TokenSnapshot.hasCost -or $useMetadataCostValue
-    $value.costUsd = if ([bool]$TokenSnapshot.hasCost) { [decimal]$TokenSnapshot.costUsd } elseif ($useMetadataCostValue) { [decimal]$MetadataSnapshot.costUsd } else { [decimal]0 }
-    return [pscustomobject]$value
-}
-
-function Get-MissingSnapshotFields($Snapshot) {
-    if ($null -eq $Snapshot) { return @('snapshot') }
-    $missing = @()
-    $fields = [ordered]@{
-        inputTokens = 'hasInputTokens'
-        outputTokens = 'hasOutputTokens'
-        reasoningTokens = 'hasReasoningTokens'
-        cacheTokens = 'hasCacheTokens'
-        totalTokens = 'hasTotalTokens'
-        costUsd = 'hasCost'
-        model = 'hasModel'
-        time = 'hasTime'
-    }
-    foreach ($field in $fields.Keys) {
-        if (-not [bool]$Snapshot.($fields[$field])) { $missing += $field }
-    }
-    return $missing
-}
-
-function Save-State([string]$Path, $Snapshot, [string]$Hash, [string]$TurnId, [string]$RealtimeHash, $Baseline, [string]$LastKnownModel) {
-    New-Item -ItemType Directory -Path (Split-Path -Parent $Path) -Force | Out-Null
-    $value = [ordered]@{
-        schemaVersion = 2
-        sessionId = $Snapshot.sessionId
-        source = $Snapshot.source
-        models = @($Snapshot.models)
-        hasModel = $Snapshot.hasModel
-        time = $Snapshot.time
-        hasTime = $Snapshot.hasTime
-        inputTokens = $Snapshot.inputTokens
-        hasInputTokens = $Snapshot.hasInputTokens
-        outputTokens = $Snapshot.outputTokens
-        hasOutputTokens = $Snapshot.hasOutputTokens
-        reasoningTokens = $Snapshot.reasoningTokens
-        hasReasoningTokens = $Snapshot.hasReasoningTokens
-        cacheTokens = $Snapshot.cacheTokens
-        hasCacheTokens = $Snapshot.hasCacheTokens
-        totalTokens = $Snapshot.totalTokens
-        hasTotalTokens = $Snapshot.hasTotalTokens
-        hasCost = $Snapshot.hasCost
-        costUsd = $Snapshot.costUsd
-        snapshotHash = $Hash
-        turnId = $TurnId
-        lastDisplayedTurnId = $TurnId
-        lastDisplayedRealtimeHash = $RealtimeHash
-        lastDisplayedSnapshotHash = $Hash
-        ccsessionsBaseline = if ($null -ne $Baseline) { ConvertTo-StateSnapshot -Snapshot $Baseline } else { $null }
-        lastKnownModel = $LastKnownModel
-        updatedAt = [DateTimeOffset]::Now.ToString('o')
-    }
-    $payload = [ordered]@{}
-    foreach ($property in $value.Keys) { $payload[$property] = $value[$property] }
-    $value.kind = 'token-usage'
-    $value.createdAt = [DateTimeOffset]::UtcNow.ToString('o')
-    $value.payload = [pscustomobject]$payload
-    $temporaryPath = "$Path.$([guid]::NewGuid().ToString('N')).tmp"
-    [IO.File]::WriteAllText($temporaryPath, (($value | ConvertTo-Json -Depth 10) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
-    Move-Item -LiteralPath $temporaryPath -Destination $Path -Force
-}
-
-function Format-TokenCount([long]$Value, [bool]$Delta) {
-    $prefix = if ($Delta) { '+' } else { '' }
-    $units = @(
-        [pscustomobject]@{ Limit = 1000000000; Divisor = 1000000000; Suffix = 'B' },
-        [pscustomobject]@{ Limit = 1000000; Divisor = 1000000; Suffix = 'M' },
-        [pscustomobject]@{ Limit = 1000; Divisor = 1000; Suffix = 'K' }
-    )
-    foreach ($unit in $units) {
-        if ([Math]::Abs($Value) -lt $unit.Limit) { continue }
-        $scaled = [double]$Value / $unit.Divisor
-        $decimals = if ([Math]::Abs($scaled) -ge 100) { 0 } elseif ([Math]::Abs($scaled) -ge 10) { 1 } else { 2 }
-        $text = $scaled.ToString("F$decimals", [Globalization.CultureInfo]::InvariantCulture)
-        if ($decimals -gt 0) { $text = $text.TrimEnd('0').TrimEnd('.') }
-        return $prefix + $text + $unit.Suffix
-    }
-    return $prefix + $Value.ToString([Globalization.CultureInfo]::InvariantCulture)
-}
-
-function Format-SnapshotToken($Snapshot, [string]$Property, [string]$HasProperty, [bool]$Delta) {
-    if ($null -eq $Snapshot -or -not [bool]$Snapshot.$HasProperty) { return 'N/A' }
-    return Format-TokenCount -Value ([long]$Snapshot.$Property) -Delta $Delta
-}
-
-function Format-Cost([decimal]$Value, [bool]$Delta) {
-    $prefix = if ($Delta) { '+' } else { '' }
-    $text = $Value.ToString('0.0000', [Globalization.CultureInfo]::InvariantCulture).TrimEnd('0').TrimEnd('.')
-    if ([string]::IsNullOrWhiteSpace($text)) { $text = '0' }
-    return $prefix + '$' + $text
-}
-
-function Format-SessionId([string]$SessionId) {
-    if ([string]::IsNullOrWhiteSpace($SessionId)) { return 'N/A' }
-    if ($SessionId.Length -le 6) { return $SessionId }
-    return $SessionId.Substring($SessionId.Length - 6)
-}
-
-function Get-TokenUsageDisplayCore($InputObject, $Settings) {
-    $sessionId = [string]$InputObject.session_id
-    if ([string]::IsNullOrWhiteSpace($sessionId)) { throw 'session ID could not be resolved' }
-    if ([bool]$InputObject.stop_hook_active) { return [pscustomobject]@{ Skipped = $true } }
-
-    $root = Get-TokenUsageRoot
-    $statePath = Get-SessionStatePath -Root $root -SessionId $sessionId
-    $previous = Read-PreviousState -Path $statePath
-    $baseline = Get-CcSessionsBaseline -State $previous -SessionId $sessionId
-    $realtimeUsage = Get-RealtimeUsage -InputObject $InputObject
-    $realtimeSnapshot = $null
-    $realtimeHash = ''
-    $realtimeModelSource = 'N/A'
-    if ($null -ne $realtimeUsage) {
-        $realtimeSnapshot = ConvertTo-Snapshot -Usage $realtimeUsage -SessionId $sessionId -Source 'realtime'
-        $modelInfo = Get-ModelNamesFromInput -InputObject $InputObject
-        if (-not [bool]$realtimeSnapshot.hasModel -and @($modelInfo.Names).Count -gt 0) {
-            $realtimeSnapshot.models = @($modelInfo.Names)
-            $realtimeSnapshot.hasModel = $true
-            $realtimeModelSource = [string]$modelInfo.Source
-        } elseif ([bool]$realtimeSnapshot.hasModel) {
-            $realtimeModelSource = 'realtime'
-        } elseif ($null -ne $previous -and -not [string]::IsNullOrWhiteSpace((Get-LastKnownModel -State $previous))) {
-            $realtimeModelSource = 'lastKnownModel'
-        }
-        $realtimeHash = Get-SnapshotHash -Snapshot $realtimeSnapshot
-        if ($null -ne $previous) {
-            $previousTurnId = [string]$previous.lastDisplayedTurnId
-            if ([string]::IsNullOrWhiteSpace($previousTurnId)) { $previousTurnId = [string]$previous.turnId }
-            if (-not [string]::IsNullOrWhiteSpace([string]$InputObject.turn_id) -and $previousTurnId -eq [string]$InputObject.turn_id) {
-                return [pscustomobject]@{ Duplicate = $true; Source = [string]$previous.source }
-            }
-            if ([string]$previous.source -eq 'realtime-fallback' -and [string]$previous.lastDisplayedRealtimeHash -eq $realtimeHash) {
-                return [pscustomobject]@{ Duplicate = $true; Source = 'realtime-fallback' }
-            }
-        }
-    }
-
-    $ccsessionsSnapshot = $null
-    $ccsessionsRetryCount = 0
-    $ccsessionsError = ''
-    try {
-        $ccsessionsResult = Invoke-CcSessionsJson -SessionId $sessionId -Baseline $baseline
-        $ccsessionsRetryCount = [int]$ccsessionsResult.RetryCount
-        $ccsessionsSnapshot = ConvertTo-Snapshot -Usage $ccsessionsResult.Data -SessionId $sessionId -Source 'ccsessions'
-    } catch {
-        $ccsessionsError = $_.Exception.Message
-        try {
-            if ($_.Exception.Data.Contains('ccsessionsRetryCount')) { $ccsessionsRetryCount = [int]$_.Exception.Data['ccsessionsRetryCount'] }
-        } catch {}
-    }
-
-    $newBaseline = $baseline
-    $display = $null
-    $showAsTurnDelta = $false
-    $tokenSource = 'N/A'
-    $modelSource = 'N/A'
-    $costSource = 'N/A'
-    $modelFallback = Get-LastKnownModel -State $previous
-    if ($null -ne $realtimeSnapshot -and [bool]$realtimeSnapshot.hasModel) { $modelFallback = [string]@($realtimeSnapshot.models)[0] }
-
-    if ($null -ne $ccsessionsSnapshot) {
-        $ccsessionsHasCoreUsage = Test-SnapshotHasCoreUsage -Snapshot $ccsessionsSnapshot
-        $ccsessionsChanged = $null -eq $baseline -or (Test-SnapshotChanged -Current $ccsessionsSnapshot -Previous $baseline)
-        $canSubtract = Test-SnapshotCanSubtract -Current $ccsessionsSnapshot -Previous $baseline
-        if ($ccsessionsHasCoreUsage -and $ccsessionsChanged) { $newBaseline = $ccsessionsSnapshot }
-
-        if ($null -eq $baseline) {
-            $display = New-DisplaySnapshot -TokenSnapshot $ccsessionsSnapshot -MetadataSnapshot $null -ModelFallback $modelFallback -UseMetadataCost $false -Source 'ccsessions-total'
-            $tokenSource = 'ccsessions-total'
-            $modelSource = if ([bool]$display.hasModel) { 'ccsessions' } else { 'N/A' }
-            $costSource = if ([bool]$display.hasCost) { 'ccsessions' } else { 'N/A' }
-        } elseif ($ccsessionsChanged -and $canSubtract) {
-            $display = New-SnapshotDelta -Current $ccsessionsSnapshot -Previous $baseline -ModelFallback $modelFallback
-            $showAsTurnDelta = $true
-            $tokenSource = 'ccsessions-delta'
-            $modelSource = if ([bool]$ccsessionsSnapshot.hasModel) { 'ccsessions' } elseif ([bool]$baseline.hasModel) { 'ccsessions-baseline' } else { $realtimeModelSource }
-            $costSource = if ([bool]$display.hasCost) { 'ccsessions-delta' } else { 'N/A' }
-        } elseif ($ccsessionsChanged) {
-            $display = New-DisplaySnapshot -TokenSnapshot $ccsessionsSnapshot -MetadataSnapshot $null -ModelFallback $modelFallback -UseMetadataCost $false -Source 'ccsessions-total'
-            $tokenSource = 'ccsessions-total'
-            $modelSource = if ([bool]$display.hasModel) { 'ccsessions' } else { 'N/A' }
-            $costSource = if ([bool]$display.hasCost) { 'ccsessions' } else { 'N/A' }
-        } elseif ($null -ne $realtimeSnapshot) {
-            $script:CcSessionsFallbackReason = if ([string]::IsNullOrWhiteSpace($script:CcSessionsResultReason)) { 'stale-baseline' } else { $script:CcSessionsResultReason }
-            $metadataSnapshot = if ($null -ne $baseline) { $baseline } else { $ccsessionsSnapshot }
-            $display = New-DisplaySnapshot -TokenSnapshot $realtimeSnapshot -MetadataSnapshot $metadataSnapshot -ModelFallback $modelFallback -UseMetadataCost $true -Source 'realtime-fallback'
-            $showAsTurnDelta = $true
-            $tokenSource = 'realtime-fallback'
-            $modelSource = if ($null -ne $metadataSnapshot -and [bool]$metadataSnapshot.hasModel) { 'ccsessions' } elseif ([bool]$display.hasModel) { $realtimeModelSource } else { 'N/A' }
-            $costSource = if ([bool]$realtimeSnapshot.hasCost) { 'realtime-fallback' } elseif ($null -ne $metadataSnapshot -and [bool]$metadataSnapshot.hasCost) { 'ccsessions-metadata' } else { 'N/A' }
-        } else {
-            return [pscustomobject]@{ Duplicate = $true; Source = 'ccsessions-total' }
-        }
-    } elseif ($null -ne $realtimeSnapshot) {
-        if ([string]::IsNullOrWhiteSpace($script:CcSessionsFallbackReason)) { $script:CcSessionsFallbackReason = if ([string]::IsNullOrWhiteSpace($script:CcSessionsResultReason)) { 'ccsessions-unavailable' } else { $script:CcSessionsResultReason } }
-        $display = New-DisplaySnapshot -TokenSnapshot $realtimeSnapshot -MetadataSnapshot $baseline -ModelFallback $modelFallback -UseMetadataCost $true -Source 'realtime-fallback'
-        $showAsTurnDelta = $true
-        $tokenSource = 'realtime-fallback'
-        $modelSource = if ($null -ne $baseline -and [bool]$baseline.hasModel) { 'ccsessions' } elseif ([bool]$display.hasModel) { $realtimeModelSource } else { 'N/A' }
-        $costSource = if ([bool]$realtimeSnapshot.hasCost) { 'realtime-fallback' } elseif ($null -ne $baseline -and [bool]$baseline.hasCost) { 'ccsessions-metadata' } else { 'N/A' }
-    } else {
-        if ([string]::IsNullOrWhiteSpace($ccsessionsError)) { $ccsessionsError = 'ccsessions returned no data' }
-        $failure = [InvalidOperationException]::new($ccsessionsError)
-        $failure.Data['realtimeAvailable'] = $false
-        $failure.Data['ccsessionsAvailable'] = $false
-        $failure.Data['ccsessionsRetryCount'] = $ccsessionsRetryCount
-        $failure.Data['missingFields'] = 'inputTokens,outputTokens,reasoningTokens,cacheTokens,totalTokens,costUsd,model,time'
-        $failure.Data['ccsessionsError'] = $ccsessionsError
-        throw $failure
-    }
-
-    if ($null -eq $display) { throw 'token usage display could not be assembled' }
-    $displayHash = Get-SnapshotHash -Snapshot $display
-    if ($null -ne $previous -and [string]$previous.lastDisplayedSnapshotHash -eq $displayHash) {
-        return [pscustomobject]@{ Duplicate = $true; Source = $display.source }
-    }
-    if ($null -ne $previous -and [string]$previous.snapshotHash -eq $displayHash -and [string]$previous.source -eq [string]$display.source) {
-        return [pscustomobject]@{ Duplicate = $true; Source = $display.source }
-    }
-    $lastKnownModel = if ([bool]$display.hasModel) { [string]@($display.models)[0] } else { Get-LastKnownModel -State $previous }
-    Save-State -Path $statePath -Snapshot $display -Hash $displayHash -TurnId ([string]$InputObject.turn_id) -RealtimeHash $realtimeHash -Baseline $newBaseline -LastKnownModel $lastKnownModel
-
-    $sessionText = if ([bool]$Settings.showSessionId) { Format-SessionId $sessionId } else { 'N/A' }
-    $modelText = if ([bool]$Settings.showModel -and [bool]$display.hasModel) { [string]@($display.models)[0] } else { 'N/A' }
-    $inputText = Format-SnapshotToken $display 'inputTokens' 'hasInputTokens' $showAsTurnDelta
-    $outputText = Format-SnapshotToken $display 'outputTokens' 'hasOutputTokens' $showAsTurnDelta
-    $reasoningText = Format-SnapshotToken $display 'reasoningTokens' 'hasReasoningTokens' $showAsTurnDelta
-    $cacheText = Format-SnapshotToken $display 'cacheTokens' 'hasCacheTokens' $showAsTurnDelta
-    $totalText = Format-SnapshotToken $display 'totalTokens' 'hasTotalTokens' $showAsTurnDelta
-    $costIsDelta = $showAsTurnDelta -and $costSource -ne 'ccsessions-metadata'
-    $costText = if ([bool]$Settings.showCost -and [bool]$display.hasCost) { Format-Cost $display.costUsd $costIsDelta } else { 'N/A' }
-    $timeText = if ([bool]$display.hasTime) { [string]$display.time } else { 'N/A' }
-    $lines = @(
-        ('Session ID     {0}   | Model      {1}' -f $sessionText, $modelText)
-        ('Input          {0}   | Output     {1}' -f $inputText, $outputText)
-        ('Think          {0}   | Cache      {1}' -f $reasoningText, $cacheText)
-        ('Total          {0}   | Cost       {1}' -f $totalText, $costText)
-        ('Time           {0}' -f $timeText)
-    )
-    $missingFields = @(Get-MissingSnapshotFields -Snapshot $display)
-    return [pscustomobject]@{
-        Text = $lines -join [Environment]::NewLine
-        Source = $display.source
-        DisplayedDelta = $showAsTurnDelta
-        BaselineFound = $null -ne $baseline
-        RealtimeAvailable = $null -ne $realtimeSnapshot
-        CcsessionsAvailable = $null -ne $ccsessionsSnapshot
-        CcsessionsRetryCount = $ccsessionsRetryCount
-        TokenSource = $tokenSource
-        ModelSource = $modelSource
-        CostSource = $costSource
-        MissingFields = $missingFields
-        DisplaySnapshot = $display
-        CcsessionsError = $ccsessionsError
-    }
-}
-
-function Get-TokenUsageDisplay($InputObject, $Settings) {
-    $sessionId = [string]$InputObject.session_id
-    if ([string]::IsNullOrWhiteSpace($sessionId)) { return Get-TokenUsageDisplayCore -InputObject $InputObject -Settings $Settings }
-    $sha = [Security.Cryptography.SHA256]::Create()
-    try { $sessionHash = ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($sessionId)))).Replace('-', '').ToLowerInvariant() }
-    finally { $sha.Dispose() }
-    $mutexName = 'CodexSettings.TokenUsage.' + $sessionHash
-    return Invoke-CodexHookMutex -Name $mutexName -Action { Get-TokenUsageDisplayCore -InputObject $InputObject -Settings $Settings }
-}
-
 if ($NativeToast) {
     try {
         $nativeResult = Show-NativeToastCore -Title $NativeTitle -Message $NativeMessage -NotificationType $NativeNotificationType -Sound ([bool]$NativeSound) -Tag $NativeTag
@@ -1449,8 +623,8 @@ try {
         $script:ContinuationExpected = [bool]$completion.Continuation
         $script:IsFinalTurn = [bool]$completion.IsFinal
         $script:LifecyclePhase = if ($script:IsFinalTurn) { 'turn-completed' } elseif ($script:CompactionDetected) { 'compaction' } else { 'non-final' }
-        $script:Originator = [string](Get-UsageValue -Usage $inputObject -Names @('client', 'originator') -Default '')
-        $script:InvocationClient = if ([string]$inputObject.type -eq 'agent-turn-complete') { 'notify' } else { [string](Get-UsageValue -Usage $inputObject -Names @('source') -Default 'hook') }
+        $script:Originator = [string](Get-NotificationInputValue -InputObject $inputObject -Names @('client', 'originator') -Default '')
+        $script:InvocationClient = if ([string]$inputObject.type -eq 'agent-turn-complete') { 'notify' } else { [string](Get-NotificationInputValue -InputObject $inputObject -Names @('source') -Default 'hook') }
         $inputObject = ConvertTo-CompletedNotificationInput -InputObject $inputObject
     }
 
@@ -1462,7 +636,7 @@ try {
         $Type = 'QuestionRequired'
     }
     $script:NotificationHandlerId = switch ($Type) {
-        'Completed' { 'completed-token-toast' }
+        'Completed' { 'completed-toast' }
         'PermissionRequired' { 'permission-toast' }
         'QuestionRequired' { 'question-toast' }
         default { 'error-toast' }
@@ -1503,64 +677,7 @@ try {
                 default { [pscustomobject]@{ Title = 'Codex 任務完成'; Message = '工作已完成' } }
             }
             $details = ''
-            $skipNotification = $false
-            if ($Type -eq 'Completed') {
-                $tokenSettings = Get-TokenUsageSettings -Root (Get-TokenUsageRoot)
-                if ([bool]$tokenSettings.enabled -and [bool]$tokenSettings.showAfterEachTurn -and (-not [bool]$tokenSettings.mainSessionOnly -or $mainSession)) {
-                    $script:UsageRequested = $true
-                    try {
-                        $usage = Get-TokenUsageDisplay -InputObject $inputObject -Settings $tokenSettings
-                        $script:UsageResult = 'available'
-                        if ([bool]$usage.Duplicate) {
-                            $skipNotification = $true
-                            $details = 'tokenUsage=duplicate; source={0}' -f $usage.Source
-                        } elseif (-not [bool]$usage.Skipped) {
-                            $content.Message = $usage.Text
-                            $realtimeAvailable = if ([bool]$usage.RealtimeAvailable) { 'true' } else { 'false' }
-                            $ccsessionsAvailable = if ([bool]$usage.CcsessionsAvailable) { 'true' } else { 'false' }
-                            $showAsTurnDelta = if ([bool]$usage.DisplayedDelta) { 'true' } else { 'false' }
-                            $missingFields = (@($usage.MissingFields) | ForEach-Object { [string]$_ }) -join ','
-                            $baselineFound = if ([bool]$usage.BaselineFound) { 'true' } else { 'false' }
-                            $snapshot = $usage.DisplaySnapshot
-                            $modelValue = if ([bool]$snapshot.hasModel) { [string]@($snapshot.models)[0] } else { 'N/A' }
-                            $inputValue = Format-SnapshotToken $snapshot 'inputTokens' 'hasInputTokens' ([bool]$usage.DisplayedDelta)
-                            $outputValue = Format-SnapshotToken $snapshot 'outputTokens' 'hasOutputTokens' ([bool]$usage.DisplayedDelta)
-                            $reasoningValue = Format-SnapshotToken $snapshot 'reasoningTokens' 'hasReasoningTokens' ([bool]$usage.DisplayedDelta)
-                            $cacheValue = Format-SnapshotToken $snapshot 'cacheTokens' 'hasCacheTokens' ([bool]$usage.DisplayedDelta)
-                            $totalValue = Format-SnapshotToken $snapshot 'totalTokens' 'hasTotalTokens' ([bool]$usage.DisplayedDelta)
-                            $costValue = if ([bool]$snapshot.hasCost) { Format-Cost $snapshot.costUsd ([bool]$usage.DisplayedDelta -and [string]$usage.CostSource -ne 'ccsessions-metadata') } else { 'N/A' }
-                            $timeValue = if ([bool]$snapshot.hasTime) { [string]$snapshot.time } else { 'N/A' }
-                            $details = 'source={0};displayedDelta={1};realtimeAvailable={2};ccsessionsAvailable={3};baselineFound={4};ccsessionsRetryCount={5};tokenSource={6};modelSource={7};costSource={8};showAsTurnDelta={9};model={10};input={11};output={12};think={13};cache={14};total={15};cost={16};time={17};missingFields=[{18}]' -f $usage.Source, $showAsTurnDelta, $realtimeAvailable, $ccsessionsAvailable, $baselineFound, $usage.CcsessionsRetryCount, $usage.TokenSource, $usage.ModelSource, $usage.CostSource, $showAsTurnDelta, $modelValue, $inputValue, $outputValue, $reasoningValue, $cacheValue, $totalValue, $costValue, $timeValue, $missingFields
-                            if (-not [string]::IsNullOrWhiteSpace([string]$usage.CcsessionsError)) {
-                                $safeError = [regex]::Replace([string]$usage.CcsessionsError, '[\r\n;]', ' ')
-                                $details += ';ccsessionsError=' + $safeError
-                            }
-                        }
-                    } catch {
-                        $script:UsageResult = 'unavailable-status-shown'
-                        $content.Message = 'Token 用量暫時無法取得'
-                        $details = 'tokenUsageError={0}' -f $_.Exception.ToString()
-                        try {
-                            $errorData = $_.Exception.Data
-                            if ($errorData.Contains('realtimeAvailable')) {
-                                $realtimeAvailable = if ([bool]$errorData['realtimeAvailable']) { 'true' } else { 'false' }
-                                $ccsessionsAvailable = if ([bool]$errorData['ccsessionsAvailable']) { 'true' } else { 'false' }
-                                $missingFields = [string]$errorData['missingFields']
-                                $safeError = [regex]::Replace([string]$errorData['ccsessionsError'], '[\r\n;]', ' ')
-                                $details += ';realtimeAvailable=' + $realtimeAvailable + ';ccsessionsAvailable=' + $ccsessionsAvailable + ';ccsessionsRetryCount=' + [string]$errorData['ccsessionsRetryCount'] + ';missingFields=[' + $missingFields + '];ccsessionsError=' + $safeError
-                            }
-                        } catch {}
-                    }
-                } elseif ([bool]$tokenSettings.enabled -and [bool]$tokenSettings.showAfterEachTurn) {
-                    $script:UsageResult = 'skipped-not-main'
-                }
-            }
-
-            if ($skipNotification) {
-                Set-NotificationClaimState -Claim $notificationClaim -State skipped -Result 'token-usage-duplicate'
-                Write-HookDiagnostic -InputObject $inputObject -Result 'deduplicated' -Details $details
-            } else {
-                $deliverySucceeded = $false
+            $deliverySucceeded = $false
                 $testMode = $env:CODEX_SETTINGS_NOTIFICATION_TEST_MODE -eq '1'
                 if ($testMode) {
                     if (-not [string]::IsNullOrWhiteSpace($env:CODEX_SETTINGS_NOTIFICATION_TEST_LOG)) {
@@ -1601,7 +718,6 @@ try {
                 $deliveryDetails = 'claimState={0};nativeToastAttempted={1};nativeToastShown={2};fallbackAttempted={3};fallbackShown={4};cleanupScheduled={5}' -f $script:NotificationClaimState, $script:NativeToastAttempted, $script:NativeToastShown, $script:FallbackAttempted, $script:FallbackShown, $script:CleanupScheduled
                 $details = if ([string]::IsNullOrWhiteSpace($details)) { $deliveryDetails } else { $details + ';' + $deliveryDetails }
                 Write-HookDiagnostic -InputObject $inputObject -Result $(if ($deliverySucceeded) { 'success' } else { 'delivery-failed' }) -Details $details
-            }
         }
     }
 } catch {

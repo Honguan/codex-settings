@@ -18,8 +18,8 @@ try {
         throw 'HookInvocationContext contract normalization failed.'
     }
 
-    $descriptor = New-HookHandlerDescriptor -ManagedId 'codex-settings' -HandlerId 'completed-token-toast' -Kind notification -EventName Stop -Command 'show-codex-notification.ps1'
-    if (-not (Test-CodexSettingsContract -InputObject $descriptor -Kind HookHandlerDescriptor) -or $descriptor.handlerId -ne 'completed-token-toast') {
+    $descriptor = New-HookHandlerDescriptor -ManagedId 'codex-settings' -HandlerId 'completed-toast' -Kind notification -EventName Stop -Command 'show-codex-notification.ps1'
+    if (-not (Test-CodexSettingsContract -InputObject $descriptor -Kind HookHandlerDescriptor) -or $descriptor.handlerId -ne 'completed-toast') {
         throw 'HookHandlerDescriptor contract failed.'
     }
 
