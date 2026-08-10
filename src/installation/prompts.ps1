@@ -86,7 +86,7 @@ function Select-OptionalContext7 {
 }
 
 function Select-OptionalComponentAction([string]$Name, [string]$State) {
-    if ($State -in @('Conflict', 'Unknown')) { throw "$Name 的安裝狀態無法安全判定，請先排除衝突。" }
+    if ($State -in @('TrueUnmanagedConflict', 'MalformedUserOwnedState', 'Conflict', 'Unknown')) { throw "$Name 的安裝狀態無法安全判定，請先排除衝突。" }
     if ($State -eq 'NotInstalled') {
         Write-Host "$Name 尚未安裝。"
         $selection = if (Read-YesNoChoice -Prompt '要安裝嗎？[Y/n]' -Default $true) { 'Yes' } else { 'No' }
@@ -182,7 +182,7 @@ function Test-WindowsNotificationsInstalled([string]$Root = (Join-Path $HOME '.c
     return $false
 }
 
-function Select-OptionalWindowsNotifications([bool]$AlreadyInstalled = (Test-WindowsNotificationsInstalled), [string]$State = '') {
+function Select-OptionalWindowsNotifications([bool]$AlreadyInstalled = (Test-WindowsNotificationsInstalled), [string]$State = '', $Lifecycle = $null) {
     Write-Host ''
     Write-Host '選用社區功能：Windows 開發狀態與使用量通知'
     Write-Host '此功能會安裝／管理：'
@@ -190,7 +190,9 @@ function Select-OptionalWindowsNotifications([bool]$AlreadyInstalled = (Test-Win
     Write-Host '- 每輪完成後的 Token / Cost 使用量通知'
     Write-Host '- ccusage、ccsessions、cdaily'
     Write-Host '使用量顯示：Session、Model、Input、Output、Think、Cache、Total、Cost、Time'
+    if ($null -ne $Lifecycle) { $State = [string]$Lifecycle.State }
     if ([string]::IsNullOrWhiteSpace($State)) { $State = Get-OptionalComponentState -Installed $AlreadyInstalled }
+    if ($State -in @('TrueUnmanagedConflict', 'MalformedUserOwnedState', 'Unknown') -and $null -ne $Lifecycle) { throw (Format-WindowsNotificationLifecycleDiagnostic -Lifecycle $Lifecycle) }
     return Select-OptionalComponentAction -Name 'Windows 開發狀態與使用量通知' -State $State
 }
 

@@ -35,9 +35,50 @@ function Test-WindowsNotificationCommandConfig([string]$Content, [string]$Root) 
     return (Get-WindowsNotificationCommandConfigState -Content $Content -Root $Root) -eq 'CurrentManagedBlock'
 }
 
+function Test-TomlDelimiterBalance([string]$Content) {
+    $cleaned = [regex]::Replace($Content, '"(?:\\.|[^"\\])*"|''[^'']*''|(?m)#.*$', '')
+    foreach ($pair in @(@('[', ']'), @('{', '}'))) {
+        $depth = 0
+        foreach ($character in $cleaned.ToCharArray()) {
+            if ($character -eq $pair[0]) { $depth++ }
+            elseif ($character -eq $pair[1] -and --$depth -lt 0) { return $false }
+        }
+        if ($depth -ne 0) { return $false }
+    }
+    return $true
+}
+
+function Get-WindowsNotificationCommandLine([string]$Content) {
+    foreach ($line in ($Content -split '\r?\n')) {
+        if ($line.Trim() -match '^\[') { return '' }
+        if ($line -match '^\s*notify\s*=\s*\[[^\r\n]*\]\s*(?:#.*)?$') { return $line }
+    }
+    return ''
+}
+
+function Test-KnownWindowsNotificationCommand([string]$Content, [string]$Root) {
+    $line = Get-WindowsNotificationCommandLine -Content $Content
+    if ([string]::IsNullOrWhiteSpace($line)) { return $false }
+    if ($line.Trim() -ceq (Get-WindowsNotificationCommandConfig -Root $Root)) { return $true }
+    return $line -match '(?i)pwsh(?:\.exe)?' -and $line -match '(?i)(show-codex-notification|show-windows-notification|notify-codex)\.ps1' -and $line -match '(?i)(-Type"?\s*,?\s*"?Completed|Completed)'
+}
+
+function Remove-RepairableWindowsNotificationCommandConfig([string]$Content, [string]$Root) {
+    $base = Remove-WindowsNotificationCommandConfig -Content $Content
+    $markerPattern = '(?m)^\s*(?:' + [regex]::Escape($script:WindowsNotificationConfigStartMarker) + '|' + [regex]::Escape($script:WindowsNotificationConfigEndMarker) + ')\s*\r?\n?'
+    $base = [regex]::Replace($base, $markerPattern, '')
+    $ownedNotify = Get-WindowsNotificationCommandLine -Content $base
+    if (-not [string]::IsNullOrWhiteSpace($ownedNotify) -and (Test-KnownWindowsNotificationCommand -Content $base -Root $Root)) {
+        $base = [regex]::Replace($base, '(?m)^' + [regex]::Escape($ownedNotify) + '\r?\n?', '', 1)
+    }
+    return $base.TrimEnd()
+}
+
 function Get-WindowsNotificationCommandConfigState([string]$Content, [string]$Root) {
     $startCount = [regex]::Matches($Content, '(?m)^\s*' + [regex]::Escape($script:WindowsNotificationConfigStartMarker) + '\s*$').Count
     $endCount = [regex]::Matches($Content, '(?m)^\s*' + [regex]::Escape($script:WindowsNotificationConfigEndMarker) + '\s*$').Count
+    $contentWithoutManagedBlocks = Remove-WindowsNotificationCommandConfig -Content $Content
+    if (-not (Test-TomlDelimiterBalance -Content $contentWithoutManagedBlocks)) { return 'MalformedUserContent' }
     try { $shape = Get-TomlShape -Content $Content } catch { return 'MalformedManagedBlock' }
     if ($startCount -eq 0 -and $endCount -eq 0) { return $(if ($shape.TopLevelKeys.Contains('notify')) { 'UnmanagedNotifyConflict' } else { 'MissingManagedBlock' }) }
     if ($startCount -ne 1 -or $endCount -ne 1) { return 'MalformedManagedBlock' }

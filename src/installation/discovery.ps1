@@ -35,6 +35,7 @@ function Get-InstallationDiscovery {
             profileCurrent = $profileCurrent
             profilePaths = @($PROFILE.CurrentUserAllHosts, $PROFILE.CurrentUserCurrentHost) | Select-Object -Unique
         }
+        windowsUsageNotifications = Get-WindowsNotificationLifecycleState -Root $Context.GlobalRoot
         context7UserPresent = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable('CONTEXT7_API_KEY', 'User'))
         serenaDashboard = $SerenaDashboard
     }
