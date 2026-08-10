@@ -56,10 +56,10 @@ $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('codex-settings-ownership-' + 
 try {
     $result = New-InstallationResult -Mode Global -Root $testRoot -DevelopmentEnvironment Git
     $transaction = New-FileTransaction -Root (Join-Path $testRoot 'transaction') -Mode TestOwnership
-    $ownership = New-InstallationOwnershipManifest -InstallRequestExecutionOptimizer -EnableDefaultModeRequestUserInput -InstallWindowsNotifications -InstallMattPocockSkills -InstallPonytail -InstallCodexOrchestration -InstallSerena
+    $ownership = New-InstallationOwnershipManifest -EnableDefaultModeRequestUserInput -InstallWindowsNotifications -InstallMattPocockSkills -InstallPonytail -InstallCodexOrchestration -InstallSerena
     Save-InstallationManifest -Result $result -Transaction $transaction -External ([ordered]@{}) -Ownership $ownership
     $manifest = Get-Content -LiteralPath (Join-Path $testRoot '.codex-settings-manifest.json') -Raw | ConvertFrom-Json
-    foreach ($path in @('codexSettings', 'requestExecutionOptimizer', 'requestUserInput')) {
+    foreach ($path in @('codexSettings', 'requestUserInput')) {
         if ($manifest.personal.PSObject.Properties.Name -notcontains $path) { throw "manifest 缺少 Personal ownership：$path" }
     }
     foreach ($path in @('windowsUsageNotifications', 'mattpocockSkills', 'ponytail', 'codexOrchestration', 'serena')) {

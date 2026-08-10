@@ -28,8 +28,6 @@ function New-InstallerContext {
     if ($null -eq $InstallWindowsNotifications) {
         $InstallWindowsNotifications = Test-WindowsNotificationsInstalled -Root $globalRoot
     }
-    $skillsManifestPath = Join-Path $globalRoot 'skills\.codex-settings-manifest.json'
-
     return [pscustomobject]@{
         ScriptRoot = $SourceRoot
         SourceRoot = $SourceRoot
@@ -42,6 +40,5 @@ function New-InstallerContext {
         InstallStyle = $InstallStyle
         Force = $InstallStyle -eq 'Replace'
         InstallWindowsNotifications = [bool]$InstallWindowsNotifications
-        ExistingSkillsInstalled = Test-Path -LiteralPath $skillsManifestPath -PathType Leaf
     }
 }

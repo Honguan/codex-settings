@@ -39,19 +39,8 @@ $config = "x = 1`r`n`r`n[features]`r`ndefault_mode_request_user_input = true`r`n
 $removed = Remove-DefaultModeRequestUserInputFeature -Content $config
 if ($removed -match 'default_mode_request_user_input' -or $removed -notmatch 'other = true' -or (Remove-DefaultModeRequestUserInputFeature $removed) -ne $removed) { throw 'request_user_input uninstall is not owned/idempotent.' }
 
-$testRoot = Join-Path ([IO.Path]::GetTempPath()) ('codex-settings-lifecycle-' + [guid]::NewGuid().ToString('N'))
-try {
-    $managed = Join-Path $testRoot 'request-execution-optimizer'
-    New-Item -ItemType Directory -Path $managed -Force | Out-Null
-    [IO.File]::WriteAllText((Join-Path $managed 'SKILL.md'), 'managed')
-    $transaction = New-FileTransaction -Root (Join-Path $testRoot 'transaction') -Mode Lifecycle
-    if ((Remove-OptionalManagedDirectory -Path $managed -Transaction $transaction) -ne 'Uninstalled' -or (Test-Path $managed)) { throw 'Managed directory was not uninstalled.' }
-    Undo-FileTransaction $transaction | Out-Null
-    if ([IO.File]::ReadAllText((Join-Path $managed 'SKILL.md')) -ne 'managed') { throw 'Managed directory uninstall did not roll back.' }
-} finally { if (Test-Path $testRoot) { Remove-Item -LiteralPath $testRoot -Recurse -Force } }
-
 $manifest = New-InstallationOwnershipManifest
-foreach ($component in @($manifest.personal.requestExecutionOptimizer, $manifest.personal.requestUserInput, $manifest.otherSettings.longRunningAsyncWait, $manifest.community.windowsUsageNotifications, $manifest.community.mattpocockSkills, $manifest.community.ponytail, $manifest.community.codexOrchestration, $manifest.community.serena)) {
+foreach ($component in @($manifest.personal.requestUserInput, $manifest.otherSettings.longRunningAsyncWait, $manifest.community.windowsUsageNotifications, $manifest.community.mattpocockSkills, $manifest.community.ponytail, $manifest.community.codexOrchestration, $manifest.community.serena)) {
     foreach ($field in @('Action', 'DiscoveredState')) { if (-not $component.Contains($field)) { throw "Manifest component is missing $field." } }
 }
 

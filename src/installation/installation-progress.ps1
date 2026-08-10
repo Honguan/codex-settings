@@ -475,7 +475,6 @@ function Write-InstallationPlan {
         [Parameter(Mandatory = $true)]$Context,
         [Parameter(Mandatory = $true)][object[]]$Targets,
         $CcusageBefore,
-        [switch]$InstallRequestExecutionOptimizer,
         [switch]$InstallMattPocockSkills,
         [switch]$EnableDefaultModeRequestUserInput,
         [ValidateSet('Install', 'KeepCurrent', 'Update', 'Repair', 'Uninstall', 'SkipNotInstalled', 'LeaveUnchanged', 'Blocked')][string]$LongRunningAsyncWaitAction = 'Install',
@@ -484,7 +483,7 @@ function Write-InstallationPlan {
     )
 
     $ccusageStatus = if ($null -eq $CcusageBefore) { '待偵測' } elseif ([bool]$CcusageBefore.Installed) { "已存在，沿用 $($CcusageBefore.Version)" } else { '未安裝，將安裝' }
-    Write-InstallLog -Progress $Progress -Message ("PLAN environment={0}; style={1}; notifications={2}; targets={3}; skills={4}; defaultModeRequestUserInput={5}; longRunningAsyncWait={6}" -f $Context.DevelopmentEnvironment, $Context.InstallStyle, $Context.InstallWindowsNotifications, $Targets.Count, ($InstallRequestExecutionOptimizer -or $InstallMattPocockSkills), $EnableDefaultModeRequestUserInput, $LongRunningAsyncWaitAction)
+    Write-InstallLog -Progress $Progress -Message ("PLAN environment={0}; style={1}; notifications={2}; targets={3}; skills={4}; defaultModeRequestUserInput={5}; longRunningAsyncWait={6}" -f $Context.DevelopmentEnvironment, $Context.InstallStyle, $Context.InstallWindowsNotifications, $Targets.Count, $InstallMattPocockSkills, $EnableDefaultModeRequestUserInput, $LongRunningAsyncWaitAction)
     Write-InstallLog -Progress $Progress -Message "PLAN Other Settings; Long-running async wait policy=$LongRunningAsyncWaitAction"
     if ($OptionalComponentActions.Count -gt 0) { Write-InstallLog -Progress $Progress -Message ("PLAN optionalLifecycle=" + (@($OptionalComponentActions.Keys | Sort-Object | ForEach-Object { "$_=$($OptionalComponentActions[$_])" }) -join ';')) }
     Write-InstallLog -Progress $Progress -Message ("PLAN targetRoots={0}; ccusage={1}" -f ((@($Targets | ForEach-Object { $_.Root }) -join ',')), $ccusageStatus)

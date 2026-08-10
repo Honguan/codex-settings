@@ -5,3 +5,5 @@ interface:
 
 policy:
   allow_implicit_invocation: true
+
+# Archived: no longer installed by codex-settings.

@@ -3,7 +3,6 @@ param(
     [ValidateSet('Interactive', 'Global', 'Backup', 'Restore', 'Uninstall')]
     [string]$Mode = 'Interactive',
     [switch]$SkipCcusageInstall,
-    [switch]$InstallRequestExecutionOptimizer,
     [switch]$InstallMattPocockSkills,
     [switch]$InstallPonytail,
     [switch]$SkipPonytail,

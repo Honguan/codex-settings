@@ -71,13 +71,6 @@ function Invoke-MattPocockSkillsUninstall {
     return [pscustomobject]@{ Status = 'Uninstalled'; Names = $names; Output = $output }
 }
 
-function Remove-OptionalManagedDirectory([string]$Path, $Transaction) {
-    if (-not (Test-Path -LiteralPath $Path -PathType Container)) { return 'Unchanged' }
-    foreach ($file in @(Get-ChildItem -LiteralPath $Path -File -Recurse)) { Save-TransactionFile -Transaction $Transaction -Path $file.FullName }
-    Remove-Item -LiteralPath $Path -Recurse -Force
-    return 'Uninstalled'
-}
-
 function Get-PonytailInstallationComponents($Result) {
     return @(
         [pscustomobject]@{ Name = 'Ponytail marketplace'; Status = [string]$Result.MarketplaceStatus; Result = $script:PonytailMarketplaceSource }
