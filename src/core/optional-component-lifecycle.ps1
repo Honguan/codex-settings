@@ -1,14 +1,14 @@
-$script:OptionalComponentStates = @('NotInstalled', 'InstalledCurrent', 'InstalledUpdateAvailable', 'InstalledNeedsMigration', 'InstalledNeedsRepair', 'Conflict', 'Unknown')
+$script:OptionalComponentStates = @('NotInstalled', 'InstalledCurrent', 'InstalledUpdateAvailable', 'InstalledNeedsMigration', 'InstalledNeedsRepair', 'ManagedPartialState', 'ManagedDuplicateState', 'TrueUnmanagedConflict', 'MalformedUserOwnedState', 'Conflict', 'Unknown')
 $script:OptionalComponentActions = @('Install', 'CheckUpdate', 'KeepCurrent', 'Update', 'Repair', 'Uninstall', 'SkipNotInstalled', 'LeaveUnchanged', 'Blocked')
 
 function Resolve-OptionalComponentAction {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory = $true)][ValidateSet('NotInstalled', 'InstalledCurrent', 'InstalledUpdateAvailable', 'InstalledNeedsMigration', 'InstalledNeedsRepair', 'Conflict', 'Unknown')][string]$State,
+        [Parameter(Mandatory = $true)][ValidateSet('NotInstalled', 'InstalledCurrent', 'InstalledUpdateAvailable', 'InstalledNeedsMigration', 'InstalledNeedsRepair', 'ManagedPartialState', 'ManagedDuplicateState', 'TrueUnmanagedConflict', 'MalformedUserOwnedState', 'Conflict', 'Unknown')][string]$State,
         [ValidateSet('Default', 'Yes', 'No', 'LeaveUnchanged')][string]$Selection = 'Default'
     )
 
-    if ($State -in @('Conflict', 'Unknown')) { return 'Blocked' }
+    if ($State -in @('TrueUnmanagedConflict', 'MalformedUserOwnedState', 'Conflict', 'Unknown')) { return 'Blocked' }
     if ($Selection -eq 'LeaveUnchanged') { return $(if ($State -eq 'NotInstalled') { 'SkipNotInstalled' } else { 'LeaveUnchanged' }) }
     if ($Selection -eq 'No') { return $(if ($State -eq 'NotInstalled') { 'SkipNotInstalled' } else { 'Uninstall' }) }
     return $(switch ($State) {
@@ -17,6 +17,8 @@ function Resolve-OptionalComponentAction {
         'InstalledUpdateAvailable' { 'Update' }
         'InstalledNeedsMigration' { 'Update' }
         'InstalledNeedsRepair' { 'Repair' }
+        'ManagedPartialState' { 'Repair' }
+        'ManagedDuplicateState' { 'Repair' }
     })
 }
 

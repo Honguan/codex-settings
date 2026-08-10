@@ -45,7 +45,7 @@ function Invoke-InteractiveMode {
                 Write-Host ('=' * 60)
                 Write-Host '社區／開源元件'
                 Write-Host ('=' * 60)
-                $windowsNotificationsAction = Select-OptionalWindowsNotifications -State ([string](Get-WindowsNotificationLifecycleState -Root $GlobalRoot).State)
+                $windowsNotificationsAction = Select-OptionalWindowsNotifications -Lifecycle (Get-WindowsNotificationLifecycleState -Root $GlobalRoot)
                 $mattPocockSkillsAction = Select-OptionalMattPocockSkills
                 . (Get-OptionalInstallationScriptPath -Name Ponytail)
                 $ponytailState = Get-PonytailInstallationState -Root $GlobalRoot
@@ -155,13 +155,16 @@ function Invoke-WindowsUsageNotificationFiles {
 
     $manifest = Get-Manifest -Root $Root
     $fingerprints = @(Get-ManifestManagedHookFingerprints -Manifest $manifest -Kind Notification)
+    $lifecycle = Get-WindowsNotificationLifecycleState -Root $Root -ManagedNotificationFingerprints $fingerprints
+    if ($lifecycle.State -in @('TrueUnmanagedConflict', 'MalformedUserOwnedState', 'Unknown')) { throw (Format-WindowsNotificationLifecycleDiagnostic -Lifecycle $lifecycle) }
     $hooksPath = Join-Path $Root 'hooks.json'
     $configPath = Join-Path $Root 'config.toml'
     $scriptPath = Join-Path $Root 'hooks\show-codex-notification.ps1'
     $hooksState = Get-TextFileState -Path $hooksPath
     $changed = $false
     $configState = Get-TextFileState -Path $configPath
-    $desiredConfig = if ($Remove) { Remove-WindowsNotificationCommandConfig -Content $configState.Content } else { Merge-WindowsNotificationCommandConfig -Content $configState.Content -Root $Root -NewLine $configState.NewLine }
+    $repairableConfig = Remove-RepairableWindowsNotificationCommandConfig -Content $configState.Content -Root $Root
+    $desiredConfig = if ($Remove) { $repairableConfig } else { Merge-WindowsNotificationCommandConfig -Content $repairableConfig -Root $Root -NewLine $configState.NewLine }
     if (-not [string]::IsNullOrWhiteSpace($desiredConfig)) { $desiredConfig = $desiredConfig.TrimEnd() + $configState.NewLine }
     if ($desiredConfig -ne $configState.Content) {
         Save-TransactionFile -Transaction $Transaction -Path $configPath
@@ -317,12 +320,15 @@ function Invoke-GlobalInstallation {
     $context7Action = Get-OptionalComponentPlanAction -ExplicitAction ([string]$OptionalComponentActions.context7) -Installed $context7Installed -Requested (-not [bool]$SkipContext7Key)
     $requestOptimizerInstalled = Test-Path -LiteralPath (Join-Path $Context.GlobalRoot 'skills\request-execution-optimizer') -PathType Container
     $requestUserInputInstalled = Test-DefaultModeRequestUserInputInstalled -Root $Context.GlobalRoot
-    $windowsNotificationState = Get-WindowsNotificationLifecycleState -Root $Context.GlobalRoot
-    $windowsNotificationsInstalled = $windowsNotificationState.State -notin @('NotInstalled', 'Conflict', 'Unknown')
+    $notificationManifest = Get-Manifest -Root $Context.GlobalRoot
+    $notificationFingerprints = @(Get-ManifestManagedHookFingerprints -Manifest $notificationManifest -Kind Notification)
+    $windowsNotificationState = Get-WindowsNotificationLifecycleState -Root $Context.GlobalRoot -ManagedNotificationFingerprints $notificationFingerprints
+    $windowsNotificationsInstalled = $windowsNotificationState.State -notin @('NotInstalled', 'TrueUnmanagedConflict', 'MalformedUserOwnedState', 'Conflict', 'Unknown')
     $mattPocockSkillsInstalled = Test-MattPocockSkillsInstalled
     $requestExecutionOptimizerAction = Get-OptionalComponentPlanAction -ExplicitAction ([string]$OptionalComponentActions.requestExecutionOptimizer) -Installed $requestOptimizerInstalled -Requested ([bool]$InstallRequestExecutionOptimizer)
     $requestUserInputAction = Get-OptionalComponentPlanAction -ExplicitAction ([string]$OptionalComponentActions.requestUserInput) -Installed $requestUserInputInstalled -Requested ([bool]$EnableDefaultModeRequestUserInput)
     $windowsNotificationsAction = if ($OptionalComponentActions.ContainsKey('windowsUsageNotifications')) { [string]$OptionalComponentActions.windowsUsageNotifications } elseif ([bool]$Context.InstallWindowsNotifications) { Resolve-OptionalComponentAction -State ([string]$windowsNotificationState.State) } else { Get-OptionalComponentPlanAction -Installed $windowsNotificationsInstalled -Requested $false }
+    if ($windowsNotificationsAction -eq 'Blocked') { throw (Format-WindowsNotificationLifecycleDiagnostic -Lifecycle $windowsNotificationState) }
     $mattPocockSkillsAction = Get-OptionalComponentPlanAction -ExplicitAction ([string]$OptionalComponentActions.mattpocockSkills) -Installed $mattPocockSkillsInstalled -Requested ([bool]$InstallMattPocockSkills)
     $ponytailAction = Get-OptionalComponentPlanAction -ExplicitAction ([string]$OptionalComponentActions.ponytail) -Installed ([bool]$PonytailState.PluginPresent) -Requested ([bool]$InstallPonytail)
     $codexOrchestrationAction = Get-OptionalComponentPlanAction -ExplicitAction ([string]$OptionalComponentActions.codexOrchestration) -Installed ([bool]$codexOrchestrationState.PluginPresent) -Requested ([bool]$InstallCodexOrchestration)
@@ -387,8 +393,8 @@ function Invoke-GlobalInstallation {
         $serenaDashboardDiscovery = if ($InstallSerena) { $value = Get-SerenaConfigurationState; $value | Add-Member -NotePropertyName Selected -NotePropertyValue $true -PassThru } else { $null }
         $discovery = Get-InstallationDiscovery -Context $Context -Targets $targets -CcusageBefore $ccusageBefore -SerenaDashboard $serenaDashboardDiscovery
         Write-InstallationPlan -Progress $progress -Context $Context -Targets $targets -CcusageBefore $ccusageBefore -InstallRequestExecutionOptimizer:$InstallRequestExecutionOptimizer -InstallMattPocockSkills:$InstallMattPocockSkills -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput -LongRunningAsyncWaitAction $LongRunningAsyncWaitAction -OptionalComponentActions $componentActions -SkipContext7Key:$SkipContext7Key -SerenaDashboard $serenaDashboardDiscovery
-        $notificationMigrationPending = $windowsNotificationsAction -in @('Update', 'Repair') -and $windowsNotificationState.State -in @('InstalledNeedsMigration', 'InstalledUpdateAvailable', 'InstalledNeedsRepair')
-        Write-InstallLog -Progress $progress -Message ("NOTIFICATION notificationLifecycleState={0}; notificationSchemaVersion={1}; legacyCompletedStopDetected={2}; managedNotifyBlockPresent={3}; managedNotifyCommandCurrent={4}; plannedNotificationAction={5}; validationPhase=PreCommunity; migrationPending={6}" -f $windowsNotificationState.State, $windowsNotificationState.SchemaVersion, $windowsNotificationState.LegacyCompletedStopDetected, $windowsNotificationState.ManagedNotifyBlockPresent, $windowsNotificationState.ManagedNotifyCommandCurrent, $windowsNotificationsAction, $notificationMigrationPending)
+        $notificationMigrationPending = $windowsNotificationsAction -in @('Update', 'Repair') -and $windowsNotificationState.State -in @('InstalledNeedsMigration', 'InstalledUpdateAvailable', 'InstalledNeedsRepair', 'ManagedPartialState', 'ManagedDuplicateState')
+        Write-InstallLog -Progress $progress -Message ("NOTIFICATION {0} plannedNotificationAction={1} validationPhase=PreCommunity migrationPending={2}" -f (Format-WindowsNotificationLifecycleDiagnostic -Lifecycle $windowsNotificationState), $windowsNotificationsAction, $notificationMigrationPending)
         Complete-InstallStep -Progress $progress -Result ("已建立 $($targets.Count) 個目標")
 
         Set-InstallProgress -Progress $progress -StepId 'Prerequisites' -Detail '驗證 PowerShell、Node.js、Codex 與目標目錄'

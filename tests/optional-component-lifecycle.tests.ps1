@@ -9,8 +9,10 @@ $matrix = @(
     @('InstalledUpdateAvailable', 'Default', 'Update'), @('InstalledUpdateAvailable', 'Yes', 'Update'), @('InstalledUpdateAvailable', 'No', 'Uninstall'),
     @('InstalledNeedsMigration', 'Default', 'Update'), @('InstalledNeedsMigration', 'Yes', 'Update'), @('InstalledNeedsMigration', 'No', 'Uninstall'),
     @('InstalledNeedsRepair', 'Default', 'Repair'), @('InstalledNeedsRepair', 'Yes', 'Repair'), @('InstalledNeedsRepair', 'No', 'Uninstall'),
+    @('ManagedPartialState', 'Default', 'Repair'), @('ManagedPartialState', 'Yes', 'Repair'), @('ManagedPartialState', 'No', 'Uninstall'),
+    @('ManagedDuplicateState', 'Default', 'Repair'), @('ManagedDuplicateState', 'Yes', 'Repair'), @('ManagedDuplicateState', 'No', 'Uninstall'),
     @('InstalledCurrent', 'LeaveUnchanged', 'LeaveUnchanged'), @('NotInstalled', 'LeaveUnchanged', 'SkipNotInstalled'),
-    @('Conflict', 'Default', 'Blocked'), @('Unknown', 'No', 'Blocked')
+    @('TrueUnmanagedConflict', 'Default', 'Blocked'), @('MalformedUserOwnedState', 'No', 'Blocked'), @('Conflict', 'Default', 'Blocked'), @('Unknown', 'No', 'Blocked')
 )
 foreach ($case in $matrix) {
     $actual = Resolve-OptionalComponentAction -State $case[0] -Selection $case[1]
@@ -27,7 +29,7 @@ function Read-Host([string]$Prompt) { if ($script:answers.Count) { return $scrip
 if ((Select-OptionalComponentAction -Name Test -State NotInstalled) -ne 'Install') { throw 'First-install Enter did not install.' }
 $script:answers.Enqueue('y'); if ((Select-OptionalComponentAction -Name Test -State NotInstalled) -ne 'Install') { throw 'First-install Yes did not install.' }
 $script:answers.Enqueue('n'); if ((Select-OptionalComponentAction -Name Test -State NotInstalled) -ne 'SkipNotInstalled') { throw 'First-install No did not skip.' }
-foreach ($state in @('InstalledCurrent', 'InstalledUpdateAvailable', 'InstalledNeedsMigration', 'InstalledNeedsRepair')) {
+foreach ($state in @('InstalledCurrent', 'InstalledUpdateAvailable', 'InstalledNeedsMigration', 'InstalledNeedsRepair', 'ManagedPartialState', 'ManagedDuplicateState')) {
     $expected = Resolve-OptionalComponentAction -State $state
     if ((Select-OptionalComponentAction -Name Test -State $state) -ne $expected) { throw "$state Enter did not select $expected." }
     $script:answers.Enqueue('n'); if ((Select-OptionalComponentAction -Name Test -State $state) -ne 'Uninstall') { throw "$state No did not uninstall." }
