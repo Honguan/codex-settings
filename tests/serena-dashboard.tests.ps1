@@ -71,14 +71,18 @@ try {
 
     $script:stateCall = 0
     $script:freshScenario = $true
+    $script:toolFailure = $false
+    $script:upgradeFailureLeavesCliUsable = $true
     function Get-SerenaInstallationState {
         $script:stateCall++
         $beforeInstall = $script:stateCall -eq 1
-        return [pscustomobject]@{ UvAvailable = $true; UvVersion = '0.9.0'; ToolPresent = -not ($beforeInstall -and $script:freshScenario); CliPresent = -not $beforeInstall; Version = $(if ($beforeInstall) { '' } else { '1.2.3' }); Initialized = -not ($beforeInstall -and $script:freshScenario) }
+        $cliPresent = -not $beforeInstall -and (-not $script:toolFailure -or $script:upgradeFailureLeavesCliUsable)
+        return [pscustomobject]@{ UvAvailable = $true; UvVersion = '0.9.0'; ToolPresent = -not ($beforeInstall -and $script:freshScenario); CliPresent = $cliPresent; Version = $(if ($cliPresent) { '1.2.3' } else { '' }); Initialized = -not ($beforeInstall -and $script:freshScenario) }
     }
     function Invoke-SerenaCommand {
         param([string]$Command, [string[]]$Arguments)
         $operation = "$Command $($Arguments -join ' ')"
+        if ($script:toolFailure -and $operation -match '^uv tool (?:install|upgrade) ') { return [pscustomobject]@{ ExitCode = 1; Output = @('intentional tool failure') } }
         if ($operation -eq 'serena init') {
             Write-DashboardConfig "web_dashboard: true`nweb_dashboard_open_on_launch: true`n"
         } elseif ($operation -eq 'serena setup codex') {
@@ -100,6 +104,23 @@ try {
     $existing = Invoke-SerenaInstallation -Root $codexRoot -Transaction (New-DashboardTransaction existing)
     if ($existing.ToolStatus -ne 'Current' -or $existing.InitializationStatus -ne 'Existing' -or $existing.DashboardConfigStatus -ne 'Updated' -or (Get-SerenaConfigurationState).DashboardConfigStatus -ne 'Disabled') { throw 'Existing/current Serena flow skipped Dashboard reconciliation.' }
     if (-not (Test-SerenaCodexMcpConfiguration -ConfigPath (Join-Path $codexRoot 'config.toml'))) { throw 'Serena MCP configuration or required official arguments were not preserved.' }
+
+    $script:stateCall = 0
+    $script:toolFailure = $true
+    Write-DashboardConfig "web_dashboard: true`nweb_dashboard_open_on_launch: true`n"
+    $deferred = Invoke-SerenaInstallation -Root $codexRoot -Transaction (New-DashboardTransaction upgrade-deferred)
+    if ($deferred.ToolStatus -ne 'UpgradeDeferred' -or $deferred.UpdatedNow -or $deferred.DashboardAutoOpenStatus -ne 'Disabled' -or $deferred.CodexMcpStatus -ne 'Configured' -or (Get-SerenaConfigurationState).DashboardConfigStatus -ne 'Disabled') { throw 'Usable Serena CLI did not survive a deferred upgrade and complete Serena reconciliation.' }
+
+    $script:stateCall = 0
+    $script:upgradeFailureLeavesCliUsable = $false
+    Write-DashboardConfig "web_dashboard: true`nweb_dashboard_open_on_launch: true`n"
+    $unusableFailure = try { Invoke-SerenaInstallation -Root $codexRoot -Transaction (New-DashboardTransaction upgrade-unusable) | Out-Null; '' } catch { $_.Exception.Message }
+    if ($unusableFailure -notmatch 'Serena upgrade 失敗' -or (Get-SerenaConfigurationState).DashboardConfigStatus -ne 'Enabled') { throw 'Unusable Serena CLI did not retain the hard failure and untouched Dashboard config.' }
+
+    $script:stateCall = 0
+    $script:freshScenario = $true
+    $freshFailure = try { Invoke-SerenaInstallation -Root $codexRoot -Transaction (New-DashboardTransaction install-failure) | Out-Null; '' } catch { $_.Exception.Message }
+    if ($freshFailure -notmatch 'Serena install 失敗') { throw 'Fresh Serena install failure was incorrectly treated as deferred.' }
 
     $components = @(Get-SerenaInstallationComponents -Result $existing)
     if (@($components | Where-Object { $_.Name -eq 'Serena Dashboard' -and $_.Status -eq 'Enabled' }).Count -ne 1 -or @($components | Where-Object { $_.Name -eq 'Serena Dashboard auto-open' -and $_.Status -eq 'Disabled' }).Count -ne 1) { throw 'Serena summary does not distinguish Dashboard enabled from auto-open disabled.' }

@@ -228,8 +228,15 @@ function Invoke-SerenaInstallation {
     $action = if ($before.ToolPresent) { 'upgrade' } else { 'install' }
     $arguments = if ($action -eq 'upgrade') { @('tool', 'upgrade', $script:SerenaPackageName) } else { @('tool', 'install', '-p', '3.13', $script:SerenaPackageName) }
     $tool = Invoke-SerenaCommand -Command 'uv' -Arguments $arguments
-    if ($tool.ExitCode -ne 0) { throw "Serena $action 失敗：$($tool.Output -join [Environment]::NewLine)" }
-    $after = Get-SerenaInstallationState
+    $toolFailure = "Serena $action 失敗：$($tool.Output -join [Environment]::NewLine)"
+    $upgradeDeferred = $false
+    if ($tool.ExitCode -ne 0) {
+        $after = if ($action -eq 'upgrade') { try { Get-SerenaInstallationState } catch { $null } } else { $null }
+        if ($null -eq $after -or -not $after.ToolPresent -or -not $after.CliPresent -or [string]::IsNullOrWhiteSpace($after.Version)) { throw $toolFailure }
+        $upgradeDeferred = $true
+    } else {
+        $after = Get-SerenaInstallationState
+    }
     if (-not $after.CliPresent -or [string]::IsNullOrWhiteSpace($after.Version)) { throw 'Serena 安裝後驗證失敗：serena --version 無法成功執行或解析版本。' }
     $initializationStatus = if ($before.Initialized) { 'Existing' } else {
         $init = Invoke-SerenaCommand -Command 'serena' -Arguments @('init')
@@ -248,8 +255,8 @@ function Invoke-SerenaInstallation {
         VersionBefore = $before.Version
         VersionAfter = $after.Version
         InstalledNow = -not $before.ToolPresent
-        UpdatedNow = $before.ToolPresent -and (($tool.Output -join "`n") -notmatch '(?i)unchanged|already up.to.date|current')
-        ToolStatus = if (-not $before.ToolPresent) { 'Installed' } elseif (($tool.Output -join "`n") -match '(?i)unchanged|already up.to.date|current') { 'Current' } else { 'Updated' }
+        UpdatedNow = -not $upgradeDeferred -and $before.ToolPresent -and (($tool.Output -join "`n") -notmatch '(?i)unchanged|already up.to.date|current')
+        ToolStatus = if ($upgradeDeferred) { 'UpgradeDeferred' } elseif (-not $before.ToolPresent) { 'Installed' } elseif (($tool.Output -join "`n") -match '(?i)unchanged|already up.to.date|current') { 'Current' } else { 'Updated' }
         InitializationStatus = $initializationStatus
         DashboardStatus = 'Enabled'
         DashboardAutoOpenStatus = 'Disabled'
