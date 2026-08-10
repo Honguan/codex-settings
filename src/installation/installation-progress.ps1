@@ -493,7 +493,7 @@ function Write-InstallationPlan {
     if ($OptionalComponentActions.Count -gt 0) { Write-InstallLog -Progress $Progress -Message ("PLAN optionalLifecycle=" + (@($OptionalComponentActions.Keys | Sort-Object | ForEach-Object { "$_=$($OptionalComponentActions[$_])" }) -join ';')) }
     Write-InstallLog -Progress $Progress -Message ("PLAN targetRoots={0}; ccusage={1}; context7={2}" -f ((@($Targets | ForEach-Object { $_.Root }) -join ',')), $ccusageStatus, $(if ($SkipContext7Key) { 'skipped-by-user' } else { 'configure-or-existing' }))
     if ($null -ne $SerenaDashboard -and [bool]$SerenaDashboard.Selected) {
-        $dashboardAction = switch ([string]$SerenaDashboard.DashboardConfigStatus) { 'Disabled' { 'Already configured' }; 'Invalid' { 'ConfigurationConflict' }; default { 'Configure: do not auto-open' } }
+        $dashboardAction = switch ([string]$SerenaDashboard.DashboardConfigStatus) { 'Disabled' { 'Already configured' }; 'Invalid' { 'ConfigurationConflict' }; default { 'Configure: disable viewer' } }
         Write-InstallLog -Progress $Progress -Message "PLAN Serena=selected; Serena Dashboard=$dashboardAction"
     }
 }

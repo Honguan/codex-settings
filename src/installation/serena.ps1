@@ -22,8 +22,7 @@ function Test-SerenaUvAvailable {
     return $null -ne (Get-Command uv -ErrorAction SilentlyContinue)
 }
 
-$script:SerenaDashboardSetting = 'web_dashboard_open_on_launch'
-$script:SerenaDashboardSettingPattern = '(?m)^(?<key>web_dashboard_open_on_launch)[^\S\r\n]*:(?<body>[^\r\n]*)(?<lineEnding>\r?\n|$)'
+$script:SerenaDashboardSettings = @('web_dashboard', 'web_dashboard_open_on_launch')
 
 function Get-SerenaConfigurationState {
     [CmdletBinding()]
@@ -31,53 +30,66 @@ function Get-SerenaConfigurationState {
 
     $file = Get-TextFileState -Path $Path
     if (-not $file.Exists) {
-        return [pscustomobject]@{ Path = $Path; Exists = $false; DashboardConfigPresent = $false; DashboardOpenOnLaunch = $null; DashboardConfigStatus = 'Missing'; NeedsChange = $true; Conflict = $false }
+        return [pscustomobject]@{ Path = $Path; Exists = $false; DashboardConfigPresent = $false; DashboardEnabled = $null; DashboardOpenOnLaunch = $null; DashboardConfigStatus = 'Missing'; NeedsChange = $true; Conflict = $false }
     }
 
-    $matches = [regex]::Matches($file.Content, $script:SerenaDashboardSettingPattern)
-    if ($matches.Count -gt 1) {
-        return [pscustomobject]@{ Path = $Path; Exists = $true; DashboardConfigPresent = $true; DashboardOpenOnLaunch = $null; DashboardConfigStatus = 'Invalid'; NeedsChange = $false; Conflict = $true }
+    $values = @{}
+    $missing = $false
+    $conflict = $false
+    foreach ($setting in $script:SerenaDashboardSettings) {
+        $pattern = '(?m)^' + [regex]::Escape($setting) + '[^\S\r\n]*:(?<body>[^\r\n]*)(?<lineEnding>\r?\n|$)'
+        $matches = [regex]::Matches($file.Content, $pattern)
+        if ($matches.Count -eq 0) { $missing = $true; continue }
+        if ($matches.Count -gt 1) { $conflict = $true; continue }
+        $valueMatch = [regex]::Match($matches[0].Groups['body'].Value, '^(?<leading>[^\S\r\n]*)(?<value>true|false)(?<trailing>(?:[^\S\r\n]+#.*|[^\S\r\n]*))$', [Text.RegularExpressions.RegexOptions]::IgnoreCase)
+        if (-not $valueMatch.Success) { $conflict = $true; continue }
+        $values[$setting] = [string]::Equals($valueMatch.Groups['value'].Value, 'true', [StringComparison]::OrdinalIgnoreCase)
     }
-    if ($matches.Count -eq 0) {
-        $unsafeDocumentEnd = $file.Content -match '(?m)^\.\.\.[^\S\r\n]*(?:#.*)?$'
-        return [pscustomobject]@{ Path = $Path; Exists = $true; DashboardConfigPresent = $false; DashboardOpenOnLaunch = $null; DashboardConfigStatus = $(if ($unsafeDocumentEnd) { 'Invalid' } else { 'Missing' }); NeedsChange = -not $unsafeDocumentEnd; Conflict = $unsafeDocumentEnd }
+    if ($missing -and $file.Content -match '(?m)^\.\.\.[^\S\r\n]*(?:#.*)?$') { $conflict = $true }
+    $enabled = @($values.Values | Where-Object { $_ }).Count -gt 0
+    return [pscustomobject]@{
+        Path = $Path
+        Exists = $true
+        DashboardConfigPresent = -not $missing
+        DashboardEnabled = $values['web_dashboard']
+        DashboardOpenOnLaunch = $values['web_dashboard_open_on_launch']
+        DashboardConfigStatus = if ($conflict) { 'Invalid' } elseif ($missing) { 'Missing' } elseif ($enabled) { 'Enabled' } else { 'Disabled' }
+        NeedsChange = -not $conflict -and ($missing -or $enabled)
+        Conflict = $conflict
     }
-
-    $valueMatch = [regex]::Match($matches[0].Groups['body'].Value, '^(?<leading>[^\S\r\n]*)(?<value>true|false)(?<trailing>(?:[^\S\r\n]+#.*|[^\S\r\n]*))$', [Text.RegularExpressions.RegexOptions]::IgnoreCase)
-    if (-not $valueMatch.Success) {
-        return [pscustomobject]@{ Path = $Path; Exists = $true; DashboardConfigPresent = $true; DashboardOpenOnLaunch = $null; DashboardConfigStatus = 'Invalid'; NeedsChange = $false; Conflict = $true }
-    }
-    $enabled = [string]::Equals($valueMatch.Groups['value'].Value, 'true', [StringComparison]::OrdinalIgnoreCase)
-    return [pscustomobject]@{ Path = $Path; Exists = $true; DashboardConfigPresent = $true; DashboardOpenOnLaunch = $enabled; DashboardConfigStatus = $(if ($enabled) { 'Enabled' } else { 'Disabled' }); NeedsChange = $enabled; Conflict = $false }
 }
 
-function Set-SerenaDashboardAutoOpen {
+function Set-SerenaDashboardConfiguration {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)]$Transaction, [string]$Path = (Join-Path (Get-SerenaHome) 'serena_config.yml'))
 
     $state = Get-SerenaConfigurationState -Path $Path
     if ($state.Conflict) {
         Save-TransactionFile -Transaction $Transaction -Path $Path
-        throw "Serena Dashboard ConfigurationConflict：$Path 包含重複、非純量或不安全的 $script:SerenaDashboardSetting 設定。"
+        throw "Serena Dashboard ConfigurationConflict：$Path 包含重複、非純量或不安全的 Dashboard 設定。"
     }
     if (-not $state.NeedsChange) { return [pscustomobject]@{ Changed = $false; Status = 'Unchanged'; State = $state } }
 
     $before = Get-TextFileState -Path $Path
-    $match = [regex]::Match($before.Content, $script:SerenaDashboardSettingPattern)
-    if ($match.Success) {
-        $valueMatch = [regex]::Match($match.Groups['body'].Value, '^(?<leading>[^\S\r\n]*)(?<value>true|false)(?<trailing>(?:[^\S\r\n]+#.*|[^\S\r\n]*))$', [Text.RegularExpressions.RegexOptions]::IgnoreCase)
-        $body = $valueMatch.Groups['leading'].Value + 'false' + $valueMatch.Groups['trailing'].Value
-        $updated = $before.Content.Substring(0, $match.Groups['body'].Index) + $body + $before.Content.Substring($match.Groups['body'].Index + $match.Groups['body'].Length)
-    } else {
-        $separator = if ([string]::IsNullOrEmpty($before.Content) -or $before.Content.EndsWith($before.NewLine)) { '' } else { $before.NewLine }
-        $updated = $before.Content + $separator + $script:SerenaDashboardSetting + ': false' + $before.NewLine
+    $updated = $before.Content
+    foreach ($setting in $script:SerenaDashboardSettings) {
+        $pattern = '(?m)^' + [regex]::Escape($setting) + '[^\S\r\n]*:(?<body>[^\r\n]*)(?<lineEnding>\r?\n|$)'
+        $match = [regex]::Match($updated, $pattern)
+        if ($match.Success) {
+            $valueMatch = [regex]::Match($match.Groups['body'].Value, '^(?<leading>[^\S\r\n]*)(?<value>true|false)(?<trailing>(?:[^\S\r\n]+#.*|[^\S\r\n]*))$', [Text.RegularExpressions.RegexOptions]::IgnoreCase)
+            $body = $valueMatch.Groups['leading'].Value + 'false' + $valueMatch.Groups['trailing'].Value
+            $updated = $updated.Substring(0, $match.Groups['body'].Index) + $body + $updated.Substring($match.Groups['body'].Index + $match.Groups['body'].Length)
+        } else {
+            $separator = if ([string]::IsNullOrEmpty($updated) -or $updated.EndsWith($before.NewLine)) { '' } else { $before.NewLine }
+            $updated += $separator + $setting + ': false' + $before.NewLine
+        }
     }
 
     Save-TransactionFile -Transaction $Transaction -Path $Path
     try {
         Write-TextFileState -Path $Path -Content $updated -Encoding $before.Encoding
         $after = Get-SerenaConfigurationState -Path $Path
-        if ($after.Conflict -or $after.DashboardConfigStatus -ne 'Disabled') { throw 'Serena Dashboard auto-open 設定驗證失敗。' }
+        if ($after.Conflict -or $after.DashboardConfigStatus -ne 'Disabled') { throw 'Serena Dashboard 設定驗證失敗。' }
     } catch {
         if ($before.Exists) { Write-TextFileState -Path $Path -Content $before.Content -Encoding $before.Encoding }
         else { Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue }
@@ -154,6 +166,20 @@ function Set-SerenaMcpSection {
     return $Content + $separator + $normalizedSection
 }
 
+function Set-SerenaMcpTimeouts {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$Section, [Parameter(Mandatory = $true)][string]$NewLine)
+
+    $updated = $Section.TrimEnd("`r", "`n")
+    foreach ($entry in ([ordered]@{ startup_timeout_sec = 30; tool_timeout_sec = 120 }).GetEnumerator()) {
+        $pattern = '(?m)^\s*' + [regex]::Escape($entry.Key) + '\s*=.*$'
+        if ([regex]::Matches($updated, $pattern).Count -gt 1) { throw "Serena MCP 設定包含重複的 $($entry.Key)。" }
+        if ([regex]::IsMatch($updated, $pattern)) { $updated = [regex]::Replace($updated, $pattern, "$($entry.Key) = $($entry.Value)") }
+        else { $updated += $NewLine + "$($entry.Key) = $($entry.Value)" }
+    }
+    return $updated + $NewLine
+}
+
 function Test-SerenaCodexMcpContent {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Content)
@@ -161,7 +187,10 @@ function Test-SerenaCodexMcpContent {
     $shape = Get-TomlShape -Content $Content
     if ($shape.Duplicates.Count -gt 0 -or -not $shape.Sections.Contains($script:SerenaMcpSection)) { return $false }
     $section = Get-SerenaMcpSection -Content $Content
-    return $section -match '(?m)^\s*command\s*=\s*"serena"\s*$' -and $section -match '(?m)^\s*args\s*=\s*\[.*"start-mcp-server".*"--context=codex".*"--project-from-cwd".*\]'
+    return $section -match '(?m)^\s*command\s*=\s*"serena"\s*$' -and
+        $section -match '(?m)^\s*args\s*=\s*\[.*"start-mcp-server".*"--context=codex".*"--project-from-cwd".*\]' -and
+        $section -match '(?m)^\s*startup_timeout_sec\s*=\s*30\s*$' -and
+        $section -match '(?m)^\s*tool_timeout_sec\s*=\s*120\s*$'
 }
 
 function Test-SerenaCodexMcpConfiguration {
@@ -188,8 +217,9 @@ function Invoke-SerenaCodexSetupInStagingHome {
         }
         if ($setup.ExitCode -ne 0) { throw "Serena Codex MCP 設定失敗：$($setup.Output -join [Environment]::NewLine)" }
         $stagedConfigPath = Join-Path $stagingRoot 'config.toml'
-        if (-not (Test-SerenaCodexMcpConfiguration -ConfigPath $stagedConfigPath)) { throw 'Serena MCP 設定驗證失敗：缺少官方 Codex 啟動參數或 TOML 結構無效。' }
-        return Get-SerenaMcpSection -Content ([IO.File]::ReadAllText($stagedConfigPath))
+        $section = Set-SerenaMcpTimeouts -Section (Get-SerenaMcpSection -Content ([IO.File]::ReadAllText($stagedConfigPath))) -NewLine "`n"
+        if (-not (Test-SerenaCodexMcpContent -Content $section)) { throw 'Serena MCP 設定驗證失敗：缺少官方 Codex 啟動參數、timeout 或 TOML 結構無效。' }
+        return $section
     } finally {
         if (Test-Path -LiteralPath $stagingRoot) { [IO.Directory]::Delete($stagingRoot, $true) }
     }
@@ -244,9 +274,9 @@ function Invoke-SerenaInstallation {
         if (-not (Test-Path -LiteralPath (Join-Path (Get-SerenaHome) 'serena_config.yml') -PathType Leaf)) { throw 'Serena init 未建立預期的全域設定檔。' }
         'Initialized'
     }
-    $dashboard = Set-SerenaDashboardAutoOpen -Transaction $Transaction
+    $dashboard = Set-SerenaDashboardConfiguration -Transaction $Transaction
     $mcpStatus = Invoke-SerenaCodexSetup -Root $Root -Transaction $Transaction
-    if ((Get-SerenaConfigurationState).DashboardConfigStatus -ne 'Disabled') { throw 'Serena Codex MCP 設定後，Dashboard auto-open 不再是 Disabled。' }
+    if ((Get-SerenaConfigurationState).DashboardConfigStatus -ne 'Disabled') { throw 'Serena Codex MCP 設定後，Dashboard 不再是 Disabled。' }
     return [pscustomobject]@{
         Managed = $true
         SelectedByUser = $true
@@ -258,7 +288,7 @@ function Invoke-SerenaInstallation {
         UpdatedNow = -not $upgradeDeferred -and $before.ToolPresent -and (($tool.Output -join "`n") -notmatch '(?i)unchanged|already up.to.date|current')
         ToolStatus = if ($upgradeDeferred) { 'UpgradeDeferred' } elseif (-not $before.ToolPresent) { 'Installed' } elseif (($tool.Output -join "`n") -match '(?i)unchanged|already up.to.date|current') { 'Current' } else { 'Updated' }
         InitializationStatus = $initializationStatus
-        DashboardStatus = 'Enabled'
+        DashboardStatus = 'Disabled'
         DashboardAutoOpenStatus = 'Disabled'
         DashboardConfigStatus = $dashboard.Status
         CodexMcpStatus = $mcpStatus
