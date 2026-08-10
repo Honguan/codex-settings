@@ -109,13 +109,20 @@ function New-CodexOrchestrationRole([string]$Name, [bool]$Enabled) {
     }
 }
 
-function ConvertTo-CodexOrchestrationSetupPrompt($Roles) {
+function ConvertTo-CodexOrchestrationSetupPrompt {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]$Roles,
+        [Parameter(Mandatory = $true)][string]$Root
+    )
+
     $parts = New-Object 'System.Collections.Generic.List[string]'
     foreach ($role in @('Planner', 'Advisor', 'Designer', 'Executor')) {
         $entry = $Roles.$role
         if ([bool]$entry.Enabled) { [void]$parts.Add(('{0}: {1} {2}' -f $role.ToLowerInvariant(), $entry.Model, $entry.Effort)) }
     }
-    return '$codex-orchestration:codex-orchestration setup ' + ($parts -join ', ')
+    $configPath = [IO.Path]::GetFullPath((Join-Path $Root 'config.toml'))
+    return '$codex-orchestration:codex-orchestration setup ' + ($parts -join ', ') + "`n套用 setup 前，確認 Config 路徑完全等於「$configPath」。若不同或包含 CodexSandboxOffline，請停止、回報路徑不一致，且不得寫入 routing policy。"
 }
 
 function Write-CodexOrchestrationPreview($Roles) {
@@ -132,6 +139,9 @@ function Write-CodexOrchestrationPreview($Roles) {
 }
 
 function Select-CodexOrchestrationWorkflow {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$Root)
+
     Write-Host ''
     Write-Host 'Codex-Orchestration 已安裝。'
     Write-Host '工作流設定必須在安裝後的新 Codex Task 中完成。'
@@ -177,14 +187,17 @@ function Select-CodexOrchestrationWorkflow {
         }
         Write-CodexOrchestrationPreview -Roles $roles
         if (Read-YesNoChoice -Prompt '要產生這個 workflow Setup Prompt 嗎？[Y/n]' -Default $true) {
-            return [pscustomobject]@{ Requested = $true; Status = 'ActionRequired'; SetupPrompt = ConvertTo-CodexOrchestrationSetupPrompt -Roles $roles; Roles = $roles }
+            return [pscustomobject]@{ Requested = $true; Status = 'ActionRequired'; SetupPrompt = ConvertTo-CodexOrchestrationSetupPrompt -Roles $roles -Root $Root; Roles = $roles }
         }
     }
 }
 
 function Invoke-CodexOrchestrationInstallation {
     [CmdletBinding()]
-    param([bool]$InteractiveWorkflow = $false)
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [bool]$InteractiveWorkflow = $false
+    )
 
     $before = Get-CodexOrchestrationInstallationState
     $action = if ($before.PluginPresent -and $InteractiveWorkflow) { Select-CodexOrchestrationExistingAction } elseif ($before.PluginPresent) { 'UpdatePreserve' } else { 'Install' }
@@ -205,7 +218,7 @@ function Invoke-CodexOrchestrationInstallation {
 
     $pluginStatus = if (-not $before.PluginPresent) { 'Installed' } elseif (($plugin.Output -join "`n") -match '(?i)unchanged|current|already installed') { 'Current' } else { 'Updated' }
     $shouldConfigure = $InteractiveWorkflow -and (-not $before.PluginPresent -or $action -eq 'UpdateReconfigure')
-    $workflow = if ($shouldConfigure) { Select-CodexOrchestrationWorkflow } else { [pscustomobject]@{ Requested = $false; Status = $(if ($before.PluginPresent) { 'Preserved' } else { 'NotConfigured' }); SetupPrompt = ''; Roles = $null } }
+    $workflow = if ($shouldConfigure) { Select-CodexOrchestrationWorkflow -Root $Root } else { [pscustomobject]@{ Requested = $false; Status = $(if ($before.PluginPresent) { 'Preserved' } else { 'NotConfigured' }); SetupPrompt = ''; Roles = $null } }
     $summary = if ($null -ne $workflow.Roles) {
         "Planner=$(if ($workflow.Roles.Planner.Enabled) { $workflow.Roles.Planner.Model + ' ' + $workflow.Roles.Planner.Effort } else { 'Root current model' }); Advisor=$(if ($workflow.Roles.Advisor.Enabled) { $workflow.Roles.Advisor.Model + ' ' + $workflow.Roles.Advisor.Effort } else { 'Off' }); Designer=$(if ($workflow.Roles.Designer.Enabled) { $workflow.Roles.Designer.Model + ' ' + $workflow.Roles.Designer.Effort } else { 'Off' }); Executor=$($workflow.Roles.Executor.Model) $($workflow.Roles.Executor.Effort)"
     } else { $(if ($workflow.Status -eq 'Preserved') { 'Existing workflow preserved' } else { 'Workflow not configured' }) }
