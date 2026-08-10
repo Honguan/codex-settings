@@ -74,7 +74,7 @@ jobs:
           $env:PATH = $smokeBin + [IO.Path]::PathSeparator + $env:PATH
           try {
             $installer = Join-Path $PWD "dist/CodexSettings-Setup-$env:INSTALLER_VERSION.cmd"
-            $arguments = @('-Mode', 'Global', '-DevelopmentEnvironment', 'Git', '-InstallStyle', 'Merge', '-InstallWindowsNotifications:$false', '-SkipContext7Key', '-SkipCcusageInstall', '-SkipPonytail', '-SkipCodexOrchestration', '-SkipSerena', '-LongRunningAsyncWaitAction', 'SkipNotInstalled', '-NoPause')
+            $arguments = @('-Mode', 'Global', '-DevelopmentEnvironment', 'Git', '-InstallStyle', 'Merge', '-InstallWindowsNotifications:$false', '-SkipCcusageInstall', '-SkipPonytail', '-SkipCodexOrchestration', '-SkipSerena', '-LongRunningAsyncWaitAction', 'SkipNotInstalled', '-NoPause')
             $output = @(& $installer @arguments 2>&1)
             $exitCode = $LASTEXITCODE
             $text = $output -join [Environment]::NewLine
