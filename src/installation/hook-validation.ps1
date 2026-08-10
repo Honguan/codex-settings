@@ -123,48 +123,7 @@ function Find-CvsProjectRoot([string]$StartPath) {
     return $null
 }
 
-function Normalize-ManagedProjectLineEndingHooksJson([string]$Content) {
-    if ([string]::IsNullOrWhiteSpace($Content)) { return '' }
-    $object = $Content | ConvertFrom-Json -ErrorAction Stop
-    if ($null -eq $object.hooks) { return $Content }
-    $templatePath = Join-Path (Split-Path -Parent $PSScriptRoot) 'templates\environments\cvs\hooks.json'
-    $template = Get-Content -LiteralPath $templatePath -Raw | ConvertFrom-Json -ErrorAction Stop
-    $hasManagedLineEndingHook = $false
-    foreach ($eventName in @('PreToolUse', 'PostToolUse', 'Stop')) {
-        $property = $object.hooks.PSObject.Properties[$eventName]
-        if ($null -eq $property) { continue }
-        foreach ($group in @($property.Value)) {
-            if (@(Get-ManagedHookEntries -Entry $group -SignaturePattern $script:ManagedLineEndingHookSignaturePattern).Count -gt 0) { $hasManagedLineEndingHook = $true; break }
-        }
-        if ($hasManagedLineEndingHook) { break }
-    }
-    foreach ($eventName in @('PreToolUse', 'PostToolUse', 'Stop')) {
-        $property = $object.hooks.PSObject.Properties[$eventName]
-        $managedCount = 0
-        $unmanagedGroups = New-Object 'System.Collections.Generic.List[object]'
-        $groups = if ($null -eq $property) { @() } else { @($property.Value) }
-        foreach ($group in $groups) {
-            $hookProperty = $group.PSObject.Properties['hooks']
-            if ($null -eq $hookProperty) {
-                if (-not (Test-ManagedLineEndingHookEntry $group)) { [void]$unmanagedGroups.Add($group) }
-                continue
-            }
-            $unmanagedHooks = @($hookProperty.Value | Where-Object {
-                if (Test-ManagedLineEndingHookEntry $_) { $managedCount = $managedCount + 1; $false } else { $true }
-            })
-            if ($unmanagedHooks.Count -gt 0) {
-                $group | Add-Member -NotePropertyName hooks -NotePropertyValue $unmanagedHooks -Force
-                [void]$unmanagedGroups.Add($group)
-            }
-        }
-        if ($managedCount -eq 0 -and -not $hasManagedLineEndingHook) { continue }
-        $canonical = @($template.hooks.$eventName)[0] | ConvertTo-Json -Depth 20 | ConvertFrom-Json -ErrorAction Stop
-        $object.hooks | Add-Member -NotePropertyName $eventName -NotePropertyValue ($unmanagedGroups.ToArray() + @($canonical)) -Force
-    }
-    return ($object | ConvertTo-Json -Depth 30)
-}
-
-function Remove-ManagedProjectHooks([string]$StartPath, $Transaction, [switch]$KeepCvsLineEndingHooks, [switch]$PreserveNotifications, [string[]]$ManagedHookFingerprints = @()) {
+function Remove-ManagedProjectHooks([string]$StartPath, $Transaction, [switch]$PreserveNotifications, [string[]]$ManagedHookFingerprints = @()) {
     $projectRoot = Find-CvsProjectRoot -StartPath $StartPath
     if ([string]::IsNullOrWhiteSpace($projectRoot)) { return $null }
 
@@ -175,7 +134,7 @@ function Remove-ManagedProjectHooks([string]$StartPath, $Transaction, [switch]$K
         $state = Get-TextFileState $hooksPath
         $referencedScripts = if ($PreserveNotifications) { @() } else { @(Get-ManagedHookScriptPaths -Content $state.Content -Root $codexRoot -ManagedHookFingerprints $ManagedHookFingerprints) }
         $cleaned = if ($PreserveNotifications) { $state.Content } else { Remove-ManagedGlobalHooksJson -Content $state.Content -ManagedHookFingerprints $ManagedHookFingerprints }
-        $cleaned = if ($KeepCvsLineEndingHooks) { Normalize-ManagedProjectLineEndingHooksJson -Content $cleaned } else { Remove-ManagedLineEndingHooksJson -Content $cleaned }
+        $cleaned = Remove-ManagedLineEndingHooksJson -Content $cleaned
         if ($cleaned -ne $state.Content) {
             Save-TransactionFile -Transaction $Transaction -Path $hooksPath
             Write-TextFileState -Path $hooksPath -Content $cleaned -Encoding $state.Encoding
@@ -370,13 +329,8 @@ function Assert-GlobalLineEndingHook([ValidateSet('Git', 'CVS')][string]$Develop
     if (-not $transitionPending -and $effectiveCompletedNotificationHookCount -ne $expectedEffectiveNotificationCount) {
         throw "有效 Completed 通知 Hook 數量錯誤：Expected=$expectedEffectiveNotificationCount Global=$notificationCompletedHookCount Project=$projectNotificationStopHookCount Effective=$effectiveCompletedNotificationHookCount"
     }
-    $projectHasLineEndingHooks = $projectLineEndingPreToolUseHookCount -eq 1 -and $projectLineEndingPostToolUseHookCount -eq 1 -and $projectLineEndingStopHookCount -in @(0, 1)
     if ($DevelopmentEnvironment -eq 'CVS') {
-        if ($projectHasLineEndingHooks) {
-            if ($trackHookCount -ne 0 -or $restoreHookCount -ne 0 -or $finalizeHookCount -ne 0 -or $preserveScriptCount -ne 1 -or $legacyHookCount -ne 0) { throw 'CVS 專案 Hook 已接管換行保護，但全域仍保留重複或不完整的換行 Hook。' }
-        } elseif ($trackHookCount -ne 1 -or $restoreHookCount -ne 1 -or $finalizeHookCount -ne 1 -or $preserveScriptCount -ne 1 -or $legacyHookCount -ne 0) {
-            throw "CVS 換行保護安裝檢查失敗：TrackHookCount=$trackHookCount RestoreHookCount=$restoreHookCount FinalizeHookCount=$finalizeHookCount PreserveLineEndingScriptCount=$preserveScriptCount LegacyCrlfHookCount=$legacyHookCount"
-        }
+        if ($projectLineEndingPreToolUseHookCount -ne 0 -or $projectLineEndingPostToolUseHookCount -ne 0 -or $projectLineEndingStopHookCount -ne 0 -or $trackHookCount -ne 1 -or $restoreHookCount -ne 1 -or $finalizeHookCount -ne 1 -or $preserveScriptCount -ne 1 -or $legacyHookCount -ne 0) { throw "CVS 換行保護安裝檢查失敗：ProjectTrackHookCount=$projectLineEndingPreToolUseHookCount ProjectRestoreHookCount=$projectLineEndingPostToolUseHookCount ProjectFinalizeHookCount=$projectLineEndingStopHookCount TrackHookCount=$trackHookCount RestoreHookCount=$restoreHookCount FinalizeHookCount=$finalizeHookCount PreserveLineEndingScriptCount=$preserveScriptCount LegacyCrlfHookCount=$legacyHookCount" }
     } elseif ($trackHookCount -ne 0 -or $restoreHookCount -ne 0 -or $finalizeHookCount -ne 0 -or $preserveScriptCount -ne 0 -or $legacyHookCount -ne 0) {
         throw 'Git 全域設定仍包含 CVS 換行保護 Hook。'
     }
