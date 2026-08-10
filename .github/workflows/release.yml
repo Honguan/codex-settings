@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -16,11 +17,14 @@ jobs:
   build:
     runs-on: windows-latest
     timeout-minutes: 15
+    env:
+      INSTALLER_VERSION: ${{ github.event_name == 'push' && github.ref_name || 'v0.0.0' }}
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 1
       - name: Validate release tag
+        if: github.event_name == 'push'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -47,16 +51,55 @@ jobs:
           Write-Host "Release-blocking correctness tests passed: $($releaseTests.Count). Deferred non-blocking checks: $($nonBlocking -join ', ')."
       - name: Build single-file installer
         shell: pwsh
-        run: ./tools/build-installer.ps1 -Version $env:GITHUB_REF_NAME
+        run: ./tools/build-installer.ps1 -Version $env:INSTALLER_VERSION
+      - name: Smoke test built installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $smokeRoot = Join-Path $env:RUNNER_TEMP ('codex-settings-smoke-' + [guid]::NewGuid().ToString('N'))
+          $smokeHome = Join-Path $smokeRoot 'home'
+          $smokeLocalAppData = Join-Path $smokeRoot 'local-app-data'
+          $smokeBin = Join-Path $smokeRoot 'bin'
+          New-Item -ItemType Directory -Path $smokeHome, $smokeLocalAppData, $smokeBin -Force | Out-Null
+          [IO.File]::WriteAllText((Join-Path $smokeBin 'codex.cmd'), "@echo off`r`necho {`"marketplaces`":[],`"installed`":[],`"available`":[]}`r`nexit /b 0`r`n", [Text.ASCIIEncoding]::new())
+          $env:HOME = $smokeHome
+          $env:USERPROFILE = $smokeHome
+          $env:LOCALAPPDATA = $smokeLocalAppData
+          $env:CODEX_HOME = Join-Path $smokeHome '.codex'
+          $env:SERENA_HOME = Join-Path $smokeHome '.serena'
+          $env:UV_TOOL_DIR = Join-Path $smokeRoot 'uv-tools'
+          $env:UV_TOOL_BIN_DIR = Join-Path $smokeRoot 'uv-bin'
+          $env:CODEX_SETTINGS_APP_SERVER_TEST_COMMAND = Join-Path $PWD 'tests/fixtures/successful-app-server.ps1'
+          $env:CODEX_SETTINGS_NO_PAUSE = '1'
+          $env:PATH = $smokeBin + [IO.Path]::PathSeparator + $env:PATH
+          try {
+            $installer = Join-Path $PWD "dist/CodexSettings-Setup-$env:INSTALLER_VERSION.cmd"
+            $arguments = @('-Mode', 'Global', '-DevelopmentEnvironment', 'Git', '-InstallStyle', 'Merge', '-InstallWindowsNotifications:$false', '-SkipContext7Key', '-SkipCcusageInstall', '-SkipPonytail', '-SkipCodexOrchestration', '-SkipSerena', '-LongRunningAsyncWaitAction', 'SkipNotInstalled', '-NoPause')
+            $output = @(& $installer @arguments 2>&1)
+            $exitCode = $LASTEXITCODE
+            $text = $output -join [Environment]::NewLine
+            $installedRoot = Join-Path $smokeHome '.codex'
+            $succeeded = $exitCode -eq 0 -and $text -match '(?m)^Result: SUCCESS\s*$' -and $text -match '(?m)^OverallResult: SUCCESS\s*$' -and $text -notmatch '(?m)^Result: (?:FAILED|PARTIAL SUCCESS)\s*$' -and (Test-Path -LiteralPath (Join-Path $installedRoot 'AGENTS.md') -PathType Leaf) -and (Test-Path -LiteralPath (Join-Path $installedRoot 'config.toml') -PathType Leaf) -and (Test-Path -LiteralPath (Join-Path $installedRoot '.codex-settings-manifest.json') -PathType Leaf)
+            if (-not $succeeded) {
+              $output | Write-Host
+              $log = Get-ChildItem -LiteralPath (Join-Path $installedRoot 'logs\installer') -Filter 'install-*.log' -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+              if ($null -ne $log) { Write-Host 'Installer log:'; Get-Content -LiteralPath $log.FullName }
+              throw "Windows installer smoke test failed with exit code $exitCode."
+            }
+            Write-Host 'Windows installer smoke test passed: one isolated installation completed successfully.'
+          } finally {
+            Remove-Item -LiteralPath $smokeRoot -Recurse -Force -ErrorAction SilentlyContinue
+          }
       - name: Publish installer
+        if: github.event_name == 'push'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $asset = "dist/CodexSettings-Setup-$env:GITHUB_REF_NAME.cmd"
-          gh release view $env:GITHUB_REF_NAME 2>$null
+          $asset = "dist/CodexSettings-Setup-$env:INSTALLER_VERSION.cmd"
+          gh release view $env:INSTALLER_VERSION 2>$null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $env:GITHUB_REF_NAME $asset --clobber
+            gh release upload $env:INSTALLER_VERSION $asset --clobber
           } else {
-            gh release create $env:GITHUB_REF_NAME $asset --generate-notes
+            gh release create $env:INSTALLER_VERSION $asset --generate-notes
           }

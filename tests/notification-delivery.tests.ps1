@@ -34,8 +34,9 @@ $releaseWorkflow = [IO.File]::ReadAllText((Join-Path $repositoryRoot '.github\wo
 if ($releaseWorkflow -match "nonBlocking\s*=.*notification-delivery\.tests\.ps1") { throw 'Notification delivery regression test must remain release-blocking.' }
 $validateIndex = $releaseWorkflow.IndexOf('- name: Validate installer', [StringComparison]::Ordinal)
 $buildIndex = $releaseWorkflow.IndexOf('- name: Build single-file installer', [StringComparison]::Ordinal)
+$smokeIndex = $releaseWorkflow.IndexOf('- name: Smoke test built installer', [StringComparison]::Ordinal)
 $publishIndex = $releaseWorkflow.IndexOf('- name: Publish installer', [StringComparison]::Ordinal)
-if ($validateIndex -lt 0 -or $buildIndex -le $validateIndex -or $publishIndex -le $buildIndex) { throw 'Release build and publish steps must follow blocking installer validation.' }
+if ($validateIndex -lt 0 -or $buildIndex -le $validateIndex -or $smokeIndex -le $buildIndex -or $publishIndex -le $smokeIndex) { throw 'Release build, Windows smoke test, and publish steps must follow blocking installer validation in order.' }
 
 try {
     New-Item -ItemType Directory -Path (Join-Path $testRoot 'hooks'), (Join-Path $testRoot 'notification'), (Join-Path $testRoot 'token'), (Join-Path $testRoot 'logs'), (Join-Path $testRoot 'invocations') -Force | Out-Null
