@@ -10,7 +10,7 @@ Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 - 可選安裝全域 Windows 通知 Hook，提示任務完成、等待權限與等待回答；通知不查詢 Token／Cost 用量。
 - 在全域安裝流程選擇 Git 或 CVS，合併對應的全域 AGENTS 與 Rules。
 - 安裝 Playwright MCP 設定。
-- 安裝或更新 `ccusage`，並新增或更新 `ccsessions`（Session 用量）與 `cdaily`（每日用量）指令。
+- 可獨立選擇安裝或更新 `ccusage`，並新增或更新 `ccsessions`（Session 用量）與 `cdaily`（每日用量）指令；用量指令不由通知 Hook 自動執行。
 - 選用 `mattpocock/skills`。
 - 安全合併既有設定，並提供交易備份、中斷回復、備份、還原及移除。
 - 安裝時顯示動態階段、百分比、耗時與永久結果列，並將詳細 timing 寫入 `~/.codex/logs/installer/`。
@@ -51,7 +51,7 @@ Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 
 安裝或更新時會清理全域與目前 CVS 專案中的受管理通知、Token、舊 CRLF 腳本與重複換行 Hook；會以安全的舊版簽章與 manifest fingerprint 清理 codex-settings 過去版本，未受管理的自訂 Hook 不會被刪除。通知 Hook 不再使用 Codex `statusMessage`，Toast 主程序與 60 秒背景清理程序也會隔離標準輸入、輸出與錯誤管線，避免 Hook 卡住或重複閃爍。全域 manifest 會記錄 `managedId`、`managedVersion`、`handlerId` 與 Handler fingerprint；安裝後會驗證全域與 CVS 專案合併後只有一個有效 Completed 通知。每次執行會將事件、來源、命令、Session／turn、程序、耗時、結束碼與全域／專案 Hook 計數寫入 `~/.codex/logs/hooks/<session-id>.log`；CVS 狀態則依「專案路徑＋Session」隔離。
 
-安裝器會單獨詢問是否安裝 Windows 通知：首次安裝預設為否，已安裝時預設保留並更新；選擇不安裝會移除受管理通知，但保留其他自訂 Hook。通知使用 `PermissionRequest`、`request_user_input` 的 `PreToolUse` 與 `notify` 完成事件；Claim 儲存在 `~/.codex/state/notifications/claims/<hash>.json`，同一事件以跨程序 mutex 原子宣告，`showing`／`shown` Claim 會立即略過後續觸發。完成通知只顯示工作完成狀態，不會呼叫 `ccsessions`、讀寫 Token baseline 或顯示 Token／Cost；用量仍可透過 `ccusage`、`ccsessions` 與 `cdaily` 手動查詢。Native Toast 已成功後，後續 active-toast 儲存或 cleanup 失敗不會觸發 Balloon fallback；執行結果寫入 `~/.codex/logs/hooks/<session-id>.log`，其中包含 Claim、Native/Fallback 與 finality 診斷欄位。Toast 優先使用 `long`／`urgent` 與 High priority，系統不支援時降級為 `long`；聲音預設開啟，可在通知設定的 `sound` 設為 `false` 靜音；Toast 項目最多保留 60 秒，背景清理不阻塞主 Hook。安裝器仍會清理過往由 codex-settings 管理的獨立 Token Hook，且只信任本工具管理的通知及換行保護 Hook。
+安裝器會分開詢問 Windows 通知與用量指令：首次安裝各自預設為是（`[Y/n]`），已安裝時預設保留並更新；選擇不安裝通知會移除受管理通知，但保留其他自訂 Hook。通知使用 `PermissionRequest`、`request_user_input` 的 `PreToolUse` 與 `notify` 完成事件；Claim 儲存在 `~/.codex/state/notifications/claims/<hash>.json`，同一事件以跨程序 mutex 原子宣告，`showing`／`shown` Claim 會立即略過後續觸發。完成通知只顯示工作完成狀態，不會呼叫 `ccsessions`、讀寫 Token baseline 或顯示 Token／Cost；用量仍可透過 `ccusage`、`ccsessions` 與 `cdaily` 手動查詢。Native Toast 已成功後，後續 active-toast 儲存或 cleanup 失敗不會觸發 Balloon fallback；執行結果寫入 `~/.codex/logs/hooks/<session-id>.log`，其中包含 Claim、Native/Fallback 與 finality 診斷欄位。Toast 優先使用 `long`／`urgent` 與 High priority，系統不支援時降級為 `long`；聲音預設開啟，可在通知設定的 `sound` 設為 `false` 靜音；Toast 項目最多保留 60 秒，背景清理不阻塞主 Hook。安裝器仍會清理過往由 codex-settings 管理的獨立 Token Hook，且只信任本工具管理的通知及換行保護 Hook。
 
 安裝成功後會將選擇記錄為預設專案體系。下次互動安裝按 Enter，或非互動安裝未提供 `-DevelopmentEnvironment` 時，會沿用上次的 Git／CVS 選擇。
 
@@ -65,13 +65,15 @@ Codex-Orchestration 是預設不安裝的選用 plugin。只有選擇安裝後�
 .\Install.cmd -Mode Global -DevelopmentEnvironment CVS
 .\Install.cmd -Mode Global -InstallWindowsNotifications $true
 .\Install.cmd -Mode Global -InstallWindowsNotifications $false
+.\Install.cmd -Mode Global -InstallUsageTools $true
+.\Install.cmd -Mode Global -InstallUsageTools $false
 ```
 
 常用參數：
 
 ```powershell
-# ccusage 已安裝時只更新 ccsessions、cdaily 指令
-.\Install.cmd -Mode Global -SkipCcusageInstall
+# 選用用量指令；ccusage 已安裝時只更新 ccsessions、cdaily 指令
+.\Install.cmd -Mode Global -InstallUsageTools $true -SkipCcusageInstall
 
 # 安裝或更新 mattpocock/skills 的 10 個預設全域技能
 .\Install.cmd -Mode Global -InstallMattPocockSkills
@@ -166,11 +168,11 @@ npx --yes skills@latest add mattpocock/skills -g -a codex -y --skill setup-matt-
 
 ## ccusage、ccsessions、cdaily
 
-安裝器會先檢查 `ccusage`：
+選用用量指令後，安裝器會先檢查 `ccusage`：
 
 - 尚未安裝：安裝最新版。
 - 已安裝：沿用現有套件，不重複安裝。
-- 使用 `-SkipCcusageInstall`：不安裝套件，只新增或更新 Profile 指令。
+- 使用 `-InstallUsageTools $true -SkipCcusageInstall`：不安裝套件，只新增或更新 Profile 指令。
 
 ```powershell
 ccsessions                       # 顯示最近 10 筆 Session

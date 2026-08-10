@@ -10,8 +10,8 @@ try {
         throw '未選用的選配階段不應佔用安裝進度。'
     }
 
-    $fullSteps = @(New-InstallationProgressSteps -TargetCount 2 -IncludeSkills -IncludeCodexOrchestration -IncludeSerena -IncludeNotifications)
-    foreach ($requiredId in @('Prerequisites', 'Plan', 'Lock', 'Backup', 'Targets', 'Hooks', 'PersonalCheckpoint', 'Skills', 'CodexOrchestration', 'Serena', 'Notifications', 'Final')) {
+$fullSteps = @(New-InstallationProgressSteps -TargetCount 2 -IncludeSkills -IncludeCodexOrchestration -IncludeSerena -IncludeNotifications -IncludeUsageTools)
+    foreach ($requiredId in @('Prerequisites', 'Plan', 'Lock', 'Backup', 'Targets', 'Hooks', 'PersonalCheckpoint', 'Skills', 'CodexOrchestration', 'Serena', 'Notifications', 'UsageTools', 'Final')) {
         if ($fullSteps.Id -notcontains $requiredId) { throw "缺少安裝進度階段：$requiredId" }
     }
     if (@($fullSteps | Where-Object Id -eq 'Targets')[0].TargetCount -ne 2) { throw '安裝進度未記錄目標數量。' }
@@ -81,10 +81,10 @@ try {
     $ccusage = [pscustomobject]@{ PackageInstalledNow = $false; CommandsUpdated = $true; PackageAfter = [pscustomobject]@{ Version = '20.0.19' } }
     $hookTrust = [pscustomobject]@{ Skipped = $false; TrustedCount = 3; UpdatedCount = 1 }
     $runnerOutput = (& {
-        Write-InstallationSummary -InstallStyle Merge -DevelopmentEnvironment Git -Results $installationResults -Ccusage $ccusage -CcusageBefore $ccusageBefore -HookTrust $hookTrust -TransactionRoot 'C:\backup' -InstallWindowsNotifications $true -Progress $runnerProgress -NotificationStatus '測試通知已顯示' -SkippedCount 0 -InstallMattPocockSkills $false -EnableDefaultModeRequestUserInput $true
+        Write-InstallationSummary -InstallStyle Merge -DevelopmentEnvironment Git -Results $installationResults -Ccusage $ccusage -CcusageBefore $ccusageBefore -HookTrust $hookTrust -TransactionRoot 'C:\backup' -InstallWindowsNotifications $true -InstallUsageTools $true -Progress $runnerProgress -NotificationStatus '測試通知已顯示' -UsageStatus '已更新用量指令' -SkippedCount 0 -InstallMattPocockSkills $false -EnableDefaultModeRequestUserInput $true
     } 6>&1 | Out-String)
     if (@([regex]::Matches($runnerOutput, '(?m)^安裝完成')).Count -ne 1) { throw 'runner 不應先輸出舊摘要再輸出第二份最終摘要。' }
-    foreach ($expected in @('config.toml', 'hooks.json', '個人 Codex Settings', 'Other Settings', 'Long-running async wait policy', '社區／開源元件', 'Codex Settings', 'mattpocock/skills', 'request_user_input feature', 'Windows 開發狀態通知與用量指令')) {
+    foreach ($expected in @('config.toml', 'hooks.json', '個人 Codex Settings', 'Other Settings', 'Long-running async wait policy', '社區／開源元件', 'Codex Settings', 'mattpocock/skills', 'request_user_input feature', 'Windows 開發狀態通知', 'ccusage、ccsessions、cdaily 用量指令')) {
         if (-not $runnerOutput.Contains($expected)) { throw "runner 最終摘要缺少處理結果：$expected" }
     }
     foreach ($expected in @('PersonalResult: SUCCESS', 'CommunityResult: SUCCESS', 'OverallResult: SUCCESS', 'Personal', 'Community')) {
@@ -92,12 +92,13 @@ try {
     }
 
     $planProgress = Start-InstallProgress -Steps @(New-InstallationProgressSteps) -Root (Join-Path $testRoot 'plan-output') -RendererMode Interactive
-    $planContext = [pscustomobject]@{ DevelopmentEnvironment = 'Git'; InstallStyle = 'Merge'; GlobalRoot = 'C:\Users\tester\.codex'; InstallWindowsNotifications = $true }
+    $planContext = [pscustomobject]@{ DevelopmentEnvironment = 'Git'; InstallStyle = 'Merge'; GlobalRoot = 'C:\Users\tester\.codex'; InstallWindowsNotifications = $true; InstallUsageTools = $false }
     $planTargets = @([pscustomobject]@{ Mode = 'Global'; Root = $planContext.GlobalRoot })
     $planOutput = (& { Write-InstallationPlan -Progress $planProgress -Context $planContext -Targets $planTargets -CcusageBefore $ccusageBefore } 6>&1 | Out-String)
     if (-not [string]::IsNullOrWhiteSpace($planOutput)) { throw '安裝計畫不得在互動執行期間繞過單一 progress renderer 輸出歷史內容。' }
     $planLog = Get-Content -LiteralPath $planProgress.LogPath -Raw
-    if ($planLog -notmatch 'PLAN environment=Git; style=Merge; notifications=True; targets=1') { throw '精簡 console 後 installer log 仍須保留完整 PLAN。' }
+    if ($planLog -notmatch 'PLAN environment=Git; style=Merge; notifications=True; usageTools=False; targets=1') { throw '精簡 console 後 installer log 仍須保留完整 PLAN。' }
+    if ($planLog -notmatch 'PLAN targetRoots=.*; ccusage=未選用，略過') { throw '未選用 usage tools 時不應規劃 ccusage 安裝。' }
     if ($planLog -notmatch 'PLAN Other Settings; Long-running async wait policy=Install') { throw '安裝計畫未獨立列出 async-wait Other Setting。' }
 
     $lineProgress = Start-InstallProgress -Steps @(New-InstallationProgressSteps) -Root (Join-Path $testRoot 'line-mode') -RendererMode Line

@@ -7,7 +7,8 @@ function New-InstallerContext {
         [ValidateSet('Merge', 'Replace')]
         [string]$InstallStyle = 'Merge',
         [switch]$Force,
-        [Nullable[bool]]$InstallWindowsNotifications
+        [Nullable[bool]]$InstallWindowsNotifications,
+        [Nullable[bool]]$InstallUsageTools
     )
 
     if ([string]::IsNullOrWhiteSpace($SourceRoot)) { $SourceRoot = [string]$ScriptRoot }
@@ -28,6 +29,9 @@ function New-InstallerContext {
     if ($null -eq $InstallWindowsNotifications) {
         $InstallWindowsNotifications = Test-WindowsNotificationsInstalled -Root $globalRoot
     }
+    if ($null -eq $InstallUsageTools) {
+        $InstallUsageTools = Test-UsageToolsInstalled -SourceRoot $SourceRoot
+    }
     return [pscustomobject]@{
         ScriptRoot = $SourceRoot
         SourceRoot = $SourceRoot
@@ -40,5 +44,6 @@ function New-InstallerContext {
         InstallStyle = $InstallStyle
         Force = $InstallStyle -eq 'Replace'
         InstallWindowsNotifications = [bool]$InstallWindowsNotifications
+        InstallUsageTools = [bool]$InstallUsageTools
     }
 }

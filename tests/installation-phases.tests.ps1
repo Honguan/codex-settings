@@ -3,9 +3,9 @@ $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $script:ScriptRoot = Join-Path $repositoryRoot 'src'
 . (Join-Path $script:ScriptRoot 'load-installation.ps1')
 
-$steps = @(New-InstallationProgressSteps -IncludeSkills -IncludePonytail -IncludeCodexOrchestration -IncludeSerena -IncludeNotifications)
+$steps = @(New-InstallationProgressSteps -IncludeSkills -IncludePonytail -IncludeCodexOrchestration -IncludeSerena -IncludeNotifications -IncludeUsageTools)
 if (@($steps | Where-Object Id -eq 'Ccusage').Count -ne 0) { throw 'ccusage / ccsessions / cdaily 不得再是頂層 progress component。' }
-if (@($steps | Where-Object Component -eq 'WindowsUsageNotifications').Count -ne 1) { throw 'Windows notification + usage tools 必須是單一 Community component。' }
+if (@($steps | Where-Object Component -eq 'WindowsUsageNotifications').Count -ne 1 -or @($steps | Where-Object Component -eq 'UsageTools').Count -ne 1) { throw 'Windows notification 與 usage tools 必須是獨立 Community components。' }
 if (@($steps | Where-Object { [string]::IsNullOrWhiteSpace([string]$_.Category) -or [string]::IsNullOrWhiteSpace([string]$_.Component) }).Count -ne 0) {
     throw '每個 progress step 都必須宣告 Category 與 Component ownership。'
 }
@@ -15,7 +15,7 @@ if ($personalLast -ge $communityFirst) { throw '所有 Personal steps 必須在 
 
 $communitySteps = @($steps | Where-Object Category -eq 'Community')
 $status = Format-InstallProgressStatus -Profile (New-InstallRendererProfile -RendererMode Interactive -OutputEncoding ([Text.UTF8Encoding]::new($false)) -WindowWidth 120) -Step $communitySteps[0] -Total $steps.Count -Percent 50 -Detail '驗證 component ownership' -Elapsed '00:00:02'
-if ($status -notmatch '^Community 1/5') { throw "progress 未顯示 Community component index：$status" }
+if ($status -notmatch '^Community 1/6') { throw "progress 未顯示 Community component index：$status" }
 
 $installerContextImplementation = (Get-Command New-InstallerContext -CommandType Function).ScriptBlock
 $globalInstallationImplementation = (Get-Command Invoke-GlobalInstallation -CommandType Function).ScriptBlock
@@ -56,18 +56,18 @@ $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('codex-settings-ownership-' + 
 try {
     $result = New-InstallationResult -Mode Global -Root $testRoot -DevelopmentEnvironment Git
     $transaction = New-FileTransaction -Root (Join-Path $testRoot 'transaction') -Mode TestOwnership
-    $ownership = New-InstallationOwnershipManifest -EnableDefaultModeRequestUserInput -InstallWindowsNotifications -InstallMattPocockSkills -InstallPonytail -InstallCodexOrchestration -InstallSerena
+    $ownership = New-InstallationOwnershipManifest -EnableDefaultModeRequestUserInput -InstallWindowsNotifications -InstallUsageTools -InstallMattPocockSkills -InstallPonytail -InstallCodexOrchestration -InstallSerena
     Save-InstallationManifest -Result $result -Transaction $transaction -External ([ordered]@{}) -Ownership $ownership
     $manifest = Get-Content -LiteralPath (Join-Path $testRoot '.codex-settings-manifest.json') -Raw | ConvertFrom-Json
     foreach ($path in @('codexSettings', 'requestUserInput')) {
         if ($manifest.personal.PSObject.Properties.Name -notcontains $path) { throw "manifest 缺少 Personal ownership：$path" }
     }
-    foreach ($path in @('windowsUsageNotifications', 'mattpocockSkills', 'ponytail', 'codexOrchestration', 'serena')) {
+    foreach ($path in @('windowsUsageNotifications', 'usageTools', 'mattpocockSkills', 'ponytail', 'codexOrchestration', 'serena')) {
         if ($manifest.community.PSObject.Properties.Name -notcontains $path) { throw "manifest 缺少 Community ownership：$path" }
     }
     if ($manifest.otherSettings.longRunningAsyncWait.Category -ne 'Other Settings' -or @($manifest.otherSettings.longRunningAsyncWait.ManagedPaths) -notcontains 'AGENTS.md') { throw 'manifest 缺少獨立的 async-wait Other Settings ownership。' }
-    if ($manifest.community.PSObject.Properties.Name -contains 'windowsStatusNotifications' -or $manifest.community.PSObject.Properties.Name -contains 'tokenCostNotifications') {
-        throw 'manifest 不得拆分 Windows status 與 Token / Cost notification ownership。'
+    if ($manifest.community.usageTools.Owner -ne 'UsageTools' -or @($manifest.community.usageTools.ManagedExternalState) -notcontains 'ccusage' -or @($manifest.community.windowsUsageNotifications.ManagedExternalState).Count -ne 0) {
+        throw 'usage tools 與 Windows notification ownership 未分離。'
     }
     if ($manifest.community.windowsUsageNotifications.Owner -ne 'WindowsUsageNotifications' -or @($manifest.community.windowsUsageNotifications.ManagedHooks).Count -ne 3) {
         throw 'WindowsUsageNotifications ownership 未涵蓋單一 bundle 的三類 lifecycle hooks。'
