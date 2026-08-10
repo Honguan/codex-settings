@@ -271,7 +271,7 @@ function Write-InstallationSummary {
             [pscustomobject]@{ Category = 'Personal'; Name = 'request-execution-optimizer'; Status = [string]$Ownership.personal.requestExecutionOptimizer.Status; Result = [string]$Ownership.personal.requestExecutionOptimizer.Action }
             [pscustomobject]@{ Category = 'Personal'; Name = 'request_user_input feature'; Status = [string]$Ownership.personal.requestUserInput.Status; Result = [string]$Ownership.personal.requestUserInput.Action }
             [pscustomobject]@{ Category = 'Other Settings'; Name = 'Long-running async wait policy'; Status = [string]$LongRunningAsyncWait.Status; Result = [string]$LongRunningAsyncWait.Result }
-            [pscustomobject]@{ Category = 'Community'; Name = 'Windows 開發狀態與使用量通知'; Status = $(if ($failedNames -contains 'WindowsUsageNotifications') { 'Failed' } else { $notificationComponentStatus }); Result = $(if ($InstallWindowsNotifications) { $NotificationStatus + '（ccusage / ccsessions / cdaily）' } else { '未安裝' }) }
+            [pscustomobject]@{ Category = 'Community'; Name = 'Windows 開發狀態通知與用量指令'; Status = $(if ($failedNames -contains 'WindowsUsageNotifications') { 'Failed' } else { $notificationComponentStatus }); Result = $(if ($InstallWindowsNotifications) { $NotificationStatus + '（ccusage / ccsessions / cdaily 僅供手動查詢）' } else { '未安裝' }) }
             [pscustomobject]@{ Category = 'Community'; Name = 'mattpocock/skills'; Status = $(if ($failedNames -contains 'MattPocockSkills') { 'Failed' } else { [string]$Ownership.community.mattpocockSkills.Status }); Result = [string]$Ownership.community.mattpocockSkills.Action }
         )
         $components += @(Get-PonytailInstallationComponents -Result $Ponytail | ForEach-Object { $_ | Add-Member -NotePropertyName Category -NotePropertyValue Community -PassThru })
@@ -520,7 +520,7 @@ function Invoke-GlobalInstallation {
                 $ownership.community.windowsUsageNotifications.Status = $(if ($component.Status -eq 'SUCCESS') { 'Uninstalled' } else { 'FAILED' })
                 if ($component.Status -eq 'SUCCESS') { $notificationStatus = 'Uninstalled'; Complete-InstallStep -Progress $progress -Result 'Uninstalled' } else { Fail-InstallStep -Progress $progress -Reason $component.Error -Continue }
             } elseif ($Context.InstallWindowsNotifications) {
-                Set-InstallProgress -Progress $progress -StepId 'Notifications' -Detail '安裝單一所有權的通知、ccusage、ccsessions 與 cdaily'
+                Set-InstallProgress -Progress $progress -StepId 'Notifications' -Detail '安裝狀態通知與手動用量查詢指令'
                 $component = Invoke-IsolatedCommunityComponent -Name WindowsUsageNotifications -BackupRoot $Context.BackupRoot -Operation {
                     param($componentTransaction)
                     $files = Invoke-WindowsUsageNotificationFiles -Root $Context.GlobalRoot -SourceRoot $Context.ScriptRoot -Transaction $componentTransaction

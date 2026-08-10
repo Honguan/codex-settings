@@ -177,16 +177,15 @@ function Test-WindowsNotificationsInstalled([string]$Root = (Join-Path $HOME '.c
 
 function Select-OptionalWindowsNotifications([bool]$AlreadyInstalled = (Test-WindowsNotificationsInstalled), [string]$State = '', $Lifecycle = $null) {
     Write-Host ''
-    Write-Host '選用社區功能：Windows 開發狀態與使用量通知'
+    Write-Host '選用社區功能：Windows 開發狀態通知與用量指令'
     Write-Host '此功能會安裝／管理：'
     Write-Host '- 任務完成、等待權限、等待回答等 Codex 狀態提醒'
-    Write-Host '- 每輪完成後的 Token / Cost 使用量通知'
-    Write-Host '- ccusage、ccsessions、cdaily'
-    Write-Host '使用量顯示：Session、Model、Input、Output、Think、Cache、Total、Cost、Time'
+    Write-Host '- ccusage、ccsessions、cdaily 用量查詢指令（不由 Hook 自動執行）'
+    Write-Host '手動用量指令欄位：Session、Model、Input、Output、Think、Cache、Total、Cost、Time'
     if ($null -ne $Lifecycle) { $State = [string]$Lifecycle.State }
     if ([string]::IsNullOrWhiteSpace($State)) { $State = Get-OptionalComponentState -Installed $AlreadyInstalled }
     if ($State -in @('TrueUnmanagedConflict', 'MalformedUserOwnedState', 'Unknown') -and $null -ne $Lifecycle) { throw (Format-WindowsNotificationLifecycleDiagnostic -Lifecycle $Lifecycle) }
-    return Select-OptionalComponentAction -Name 'Windows 開發狀態與使用量通知' -State $State
+    return Select-OptionalComponentAction -Name 'Windows 開發狀態通知與用量指令' -State $State
 }
 
 function Test-DefaultModeRequestUserInputInstalled([string]$Root = (Join-Path $HOME '.codex')) {

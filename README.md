@@ -7,7 +7,7 @@ Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 ## 主要功能
 
 - 安裝或更新全域 `AGENTS.md`、`config.toml` 與權限規則。
-- 可選安裝全域 Windows 通知 Hook，提示任務完成、等待權限與等待回答；完成通知整合本輪 Token 用量。
+- 可選安裝全域 Windows 通知 Hook，提示任務完成、等待權限與等待回答；通知不查詢 Token／Cost 用量。
 - 在全域安裝流程選擇 Git 或 CVS，合併對應的全域 AGENTS 與 Rules。
 - 安裝 Playwright MCP 設定。
 - 安裝或更新 `ccusage`，並新增或更新 `ccsessions`（Session 用量）與 `cdaily`（每日用量）指令。
@@ -51,7 +51,7 @@ Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 
 安裝或更新時會清理全域與目前 CVS 專案中的受管理通知、Token、舊 CRLF 腳本與重複換行 Hook；會以安全的舊版簽章與 manifest fingerprint 清理 codex-settings 過去版本，未受管理的自訂 Hook 不會被刪除。通知 Hook 不再使用 Codex `statusMessage`，Toast 主程序與 60 秒背景清理程序也會隔離標準輸入、輸出與錯誤管線，避免 Hook 卡住或重複閃爍。全域 manifest 會記錄 `managedId`、`managedVersion`、`handlerId` 與 Handler fingerprint；安裝後會驗證全域與 CVS 專案合併後只有一個有效 Completed 通知。每次執行會將事件、來源、命令、Session／turn、程序、耗時、結束碼與全域／專案 Hook 計數寫入 `~/.codex/logs/hooks/<session-id>.log`；CVS 狀態則依「專案路徑＋Session」隔離。
 
-安裝器會單獨詢問是否安裝 Windows 通知：首次安裝預設為否，已安裝時預設保留並更新；選擇不安裝會移除受管理通知與完成用量顯示，但保留其他自訂 Hook。通知使用 `PermissionRequest`、`request_user_input` 的 `PreToolUse` 與 `Stop` 官方事件；Claim 儲存在 `~/.codex/state/notifications/claims/<hash>.json`，同一 `session_id + turn_id + Completed` 在 Token 計算前以跨程序 mutex 原子宣告，`showing`／`shown` Claim 會立即略過後續觸發。完成通知呼叫同一 Session 的 `ccsessions -Json` 作為唯一累積統計基準；若資料尚未落盤會依序重試，只有 `ccsessions` 無法取得或重試後仍未更新時才使用 realtime fallback，且 fallback 不會覆寫 `ccsessions` baseline。通知固定顯示 `Session ID`、`Model`、`Input`、`Output`、`Think`、`Cache`、`Total`、`Cost` 與 `Time`；完成通知採標題加固定左右雙欄排版，其他通知使用單段訊息。第一個有效 `ccsessions` 快照顯示 Session 累積值，後續有效快照與同一 Session 的上一個 baseline 相減後顯示 `+` 差值；`Total`、`Cache` 與 `Cost` 直接沿用 `ccsessions` 語意，不自行重算。Token 以 K／M／B 縮寫，缺少欄位顯示 `N/A`。狀態仍依 Session 分開儲存在 `~/.codex/state/token-usage`，原有 Token `settings.json` 設定格式也會保留。Token 統計失敗時仍顯示完成通知並記錄原始錯誤，不會讓 Stop Hook 失敗；Native Toast 已成功後，後續 active-toast 儲存或 cleanup 失敗不會觸發 Balloon fallback；執行結果寫入 `~/.codex/logs/hooks/<session-id>.log`，其中包含 Claim、Native/Fallback 與 `StopKind` 診斷欄位。Toast 優先使用 `long`／`urgent` 與 High priority，系統不支援時降級為 `long`；聲音預設開啟，可在通知設定的 `sound` 設為 `false` 靜音；彈出時間由 Windows Shell 決定，Toast 項目最多保留 60 秒，新通知成功出現後上一則自發送起最多保留 60 秒；背景清理不阻塞主 Hook。安裝器會透過 Codex `app-server` 取得目前 Hook 雜湊，只信任並驗證本工具管理的通知及換行保護 Hook，不會信任使用者自訂 Hook。
+安裝器會單獨詢問是否安裝 Windows 通知：首次安裝預設為否，已安裝時預設保留並更新；選擇不安裝會移除受管理通知，但保留其他自訂 Hook。通知使用 `PermissionRequest`、`request_user_input` 的 `PreToolUse` 與 `notify` 完成事件；Claim 儲存在 `~/.codex/state/notifications/claims/<hash>.json`，同一事件以跨程序 mutex 原子宣告，`showing`／`shown` Claim 會立即略過後續觸發。完成通知只顯示工作完成狀態，不會呼叫 `ccsessions`、讀寫 Token baseline 或顯示 Token／Cost；用量仍可透過 `ccusage`、`ccsessions` 與 `cdaily` 手動查詢。Native Toast 已成功後，後續 active-toast 儲存或 cleanup 失敗不會觸發 Balloon fallback；執行結果寫入 `~/.codex/logs/hooks/<session-id>.log`，其中包含 Claim、Native/Fallback 與 finality 診斷欄位。Toast 優先使用 `long`／`urgent` 與 High priority，系統不支援時降級為 `long`；聲音預設開啟，可在通知設定的 `sound` 設為 `false` 靜音；Toast 項目最多保留 60 秒，背景清理不阻塞主 Hook。安裝器仍會清理過往由 codex-settings 管理的獨立 Token Hook，且只信任本工具管理的通知及換行保護 Hook。
 
 安裝成功後會將選擇記錄為預設專案體系。下次互動安裝按 Enter，或非互動安裝未提供 `-DevelopmentEnvironment` 時，會沿用上次的 Git／CVS 選擇。
 
@@ -179,7 +179,7 @@ npx --yes skills@latest add mattpocock/skills -g -a codex -y --skill setup-matt-
 ccsessions                       # 顯示最近 10 筆 Session
 ccsessions 20                    # 顯示最近 20 筆 Session
 ccsessions 019fd1f8...4a87a2     # 顯示指定 Session
-ccsessions -Json <Session ID>    # 輸出完成通知使用的機器可讀 JSON
+ccsessions -Json <Session ID>    # 輸出機器可讀 JSON
 cdaily                           # 顯示最近 7 天的每日統計
 cdaily 30                        # 顯示最近 30 天的每日統計
 ```

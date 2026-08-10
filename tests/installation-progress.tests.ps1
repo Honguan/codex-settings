@@ -84,7 +84,7 @@ try {
         Write-InstallationSummary -InstallStyle Merge -DevelopmentEnvironment Git -Results $installationResults -Ccusage $ccusage -CcusageBefore $ccusageBefore -HookTrust $hookTrust -TransactionRoot 'C:\backup' -InstallWindowsNotifications $true -Progress $runnerProgress -NotificationStatus '測試通知已顯示' -SkippedCount 0 -InstallMattPocockSkills $false -InstallRequestExecutionOptimizer $false -EnableDefaultModeRequestUserInput $true
     } 6>&1 | Out-String)
     if (@([regex]::Matches($runnerOutput, '(?m)^安裝完成')).Count -ne 1) { throw 'runner 不應先輸出舊摘要再輸出第二份最終摘要。' }
-    foreach ($expected in @('config.toml', 'hooks.json', '個人 Codex Settings', 'Other Settings', 'Long-running async wait policy', '社區／開源元件', 'Codex Settings', 'request-execution-optimizer', 'mattpocock/skills', 'request_user_input feature', 'Windows 開發狀態與使用量通知')) {
+    foreach ($expected in @('config.toml', 'hooks.json', '個人 Codex Settings', 'Other Settings', 'Long-running async wait policy', '社區／開源元件', 'Codex Settings', 'request-execution-optimizer', 'mattpocock/skills', 'request_user_input feature', 'Windows 開發狀態通知與用量指令')) {
         if (-not $runnerOutput.Contains($expected)) { throw "runner 最終摘要缺少處理結果：$expected" }
     }
     foreach ($expected in @('PersonalResult: SUCCESS', 'CommunityResult: SUCCESS', 'OverallResult: SUCCESS', 'Personal', 'Community')) {

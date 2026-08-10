@@ -22,7 +22,7 @@ function New-InstallationProgressSteps {
     $steps[$steps.Count - 1] | Add-Member -NotePropertyName TargetCount -NotePropertyValue $TargetCount
     & $addStep 'Hooks' 'Hook 去重與信任驗證' 'Personal' 'CodexSettings'
     & $addStep 'PersonalCheckpoint' '個人設定 checkpoint' 'Personal' 'CodexSettings'
-    if ($IncludeNotifications) { & $addStep 'Notifications' 'Windows 開發狀態與使用量通知' 'Community' 'WindowsUsageNotifications' }
+    if ($IncludeNotifications) { & $addStep 'Notifications' 'Windows 開發狀態通知與用量指令' 'Community' 'WindowsUsageNotifications' }
     if ($IncludeSkills) { & $addStep 'Skills' '選用 Skills' 'Community' 'MattPocockSkills' }
     if ($IncludePonytail) { & $addStep 'Ponytail' 'Ponytail plugin 與 lifecycle hooks' 'Community' 'Ponytail' }
     if ($IncludeCodexOrchestration) { & $addStep 'CodexOrchestration' 'Codex-Orchestration plugin 與 workflow' 'Community' 'CodexOrchestration' }
