@@ -31,7 +31,7 @@ Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 .\CodexSettings-Setup-v1.8.6.cmd
 ```
 
-安裝器會在 `%TEMP%` 解開內嵌程式、執行後立即清理；全域安裝成功或失敗後會保留結果畫面，按任意鍵才關閉。自動化可使用 `-NoPause` 或設定 `CODEX_SETTINGS_NO_PAUSE=1`。安裝或更新 Hook 後必須完全關閉並重新啟動 VS Code、Codex 與 PowerShell，既有 Session 不會載入新 Hook。從原始碼執行時則使用根目錄的 `Install.cmd`。
+安裝器會在 `%TEMP%` 解開內嵌程式、執行後立即清理；全域安裝成功或失敗後會保留結果畫面，按任意鍵才關閉。自動化可使用 `-NoPause` 或設定 `CODEX_SETTINGS_NO_PAUSE=1`。安裝或更新後必須完全關閉並重新啟動 VS Code、Codex 與 PowerShell；config.toml／MCP 與 Hook 可能由既有程序快取，在舊 App 中建立新對話仍可能沿用修復前設定。從原始碼執行時則使用根目錄的 `Install.cmd`。
 
 主選單只有四項：
 
