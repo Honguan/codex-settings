@@ -95,13 +95,6 @@ function Get-CompletionClassification($InputObject) {
         }
         return [pscustomobject]@{ Classification = 'Unknown'; Evidence = 'agent-turn-complete-missing-identity'; Compaction = $false; Continuation = $false; IsFinal = $false }
     }
-    if ($eventType -eq 'task_complete') {
-        $turnId = [string](Get-NotificationInputValue -InputObject $InputObject -Names @('turn_id') -Default '')
-        if (-not [string]::IsNullOrWhiteSpace($turnId)) {
-            return [pscustomobject]@{ Classification = 'FinalTurnCompletion'; Evidence = 'explicit-task-complete'; Compaction = $false; Continuation = $false; IsFinal = $true }
-        }
-        return [pscustomobject]@{ Classification = 'Unknown'; Evidence = 'task-complete-missing-identity'; Compaction = $false; Continuation = $false; IsFinal = $false }
-    }
     if ($eventType -in @('contextCompaction', 'thread/compacted') -or $eventName -in @('PreCompact', 'PostCompact')) {
         return [pscustomobject]@{ Classification = 'ContextCompaction'; Evidence = 'context-compaction'; Compaction = $true; Continuation = $true; IsFinal = $false }
     }
@@ -113,18 +106,6 @@ function Get-CompletionClassification($InputObject) {
 
 function ConvertTo-CompletedNotificationInput($InputObject) {
     $eventType = [string]$InputObject.type
-    if ($eventType -eq 'task_complete') {
-        return [pscustomobject][ordered]@{
-            session_id = [string](Get-NotificationInputValue -InputObject $InputObject -Names @('session_id', 'thread_id') -Default 'task-complete')
-            turn_id = [string]$InputObject.turn_id
-            cwd = [string]$InputObject.cwd
-            hook_event_name = 'task_complete'
-            last_assistant_message = [string]$InputObject.last_agent_message
-            originator = [string]$InputObject.client
-            source = 'notify'
-            is_main_session = $true
-        }
-    }
     if ($eventType -ne 'agent-turn-complete') { return $InputObject }
     $normalized = [ordered]@{
         session_id = [string]$InputObject.'thread-id'
@@ -644,7 +625,7 @@ try {
         $script:IsFinalTurn = [bool]$completion.IsFinal
         $script:LifecyclePhase = if ($script:IsFinalTurn) { 'turn-completed' } elseif ($script:CompactionDetected) { 'compaction' } else { 'non-final' }
         $script:Originator = [string](Get-NotificationInputValue -InputObject $inputObject -Names @('client', 'originator') -Default '')
-        $script:InvocationClient = if ([string]$inputObject.type -in @('agent-turn-complete', 'task_complete')) { 'notify' } else { [string](Get-NotificationInputValue -InputObject $inputObject -Names @('source') -Default 'hook') }
+        $script:InvocationClient = if ([string]$inputObject.type -eq 'agent-turn-complete') { 'notify' } else { [string](Get-NotificationInputValue -InputObject $inputObject -Names @('source') -Default 'hook') }
         $inputObject = ConvertTo-CompletedNotificationInput -InputObject $inputObject
     }
 
