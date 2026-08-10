@@ -44,7 +44,8 @@ function Invoke-InteractiveMode {
                 Write-Host ('=' * 60)
                 Write-Host '社區／開源元件'
                 Write-Host ('=' * 60)
-                $windowsNotificationsAction = Select-OptionalWindowsNotifications -Lifecycle (Get-WindowsNotificationLifecycleState -Root $GlobalRoot)
+                $windowsNotificationState = Get-WindowsNotificationLifecycleState -Root $GlobalRoot
+                $windowsNotificationsAction = if ($windowsNotificationState.State -notin @('NotInstalled', 'TrueUnmanagedConflict', 'MalformedUserOwnedState', 'Conflict', 'Unknown')) { 'Uninstall' } else { 'SkipNotInstalled' }
                 $usageToolsAction = Select-OptionalUsageTools -SourceRoot $SourceRoot
                 $mattPocockSkillsAction = Select-OptionalMattPocockSkills
                 . (Get-OptionalInstallationScriptPath -Name Ponytail)
@@ -178,18 +179,7 @@ function Invoke-WindowsUsageNotificationFiles {
     $hooksState = Get-TextFileState -Path $hooksPath
     $changed = $false
     $configState = Get-TextFileState -Path $configPath
-    $repairableConfig = Remove-RepairableWindowsNotificationCommandConfig -Content $configState.Content -Root $Root
-    $desiredConfig = if ($Remove) {
-        Remove-WindowsNotificationCommandConfig -Content $configState.Content -RestorePrevious
-    } elseif ($lifecycle.ConfigState -eq 'CurrentManagedBlock') {
-        $configState.Content
-    } elseif ($lifecycle.ExternalNotifyCoexistence) {
-        Merge-WindowsNotificationCommandConfig -Content $configState.Content -Root $Root -NewLine $configState.NewLine
-    } elseif (-not [string]::IsNullOrWhiteSpace((Get-PreviousWindowsNotificationCommandLine -Content $configState.Content))) {
-        Merge-WindowsNotificationCommandConfig -Content $configState.Content -Root $Root -NewLine $configState.NewLine
-    } else {
-        Merge-WindowsNotificationCommandConfig -Content $repairableConfig -Root $Root -NewLine $configState.NewLine
-    }
+    $desiredConfig = Remove-WindowsNotificationCommandConfig -Content $configState.Content -RestorePrevious
     if (-not [string]::IsNullOrWhiteSpace($desiredConfig)) { $desiredConfig = $desiredConfig.TrimEnd() + $configState.NewLine }
     if ($desiredConfig -ne $configState.Content) {
         Save-TransactionFile -Transaction $Transaction -Path $configPath
@@ -198,10 +188,6 @@ function Invoke-WindowsUsageNotificationFiles {
     }
     $unownedBefore = Remove-ManagedNotificationHooksJson -Content $hooksState.Content -ManagedHookFingerprints $fingerprints
     $desiredHooks = $unownedBefore
-    if (-not $Remove) {
-        $template = [IO.File]::ReadAllText((Join-Path $SourceRoot 'templates\core\hooks.json'))
-        $desiredHooks = Merge-HooksJson -ExistingContent $unownedBefore -TemplateContent $template
-    }
     $desiredHooks = [regex]::Replace($desiredHooks, "`r`n|`r|`n", $hooksState.NewLine)
     if ($desiredHooks -ne $hooksState.Content) {
         Save-TransactionFile -Transaction $Transaction -Path $hooksPath
@@ -209,22 +195,10 @@ function Invoke-WindowsUsageNotificationFiles {
         $changed = $true
     }
 
-    if ($Remove) {
-        if (Test-Path -LiteralPath $scriptPath -PathType Leaf) {
-            Save-TransactionFile -Transaction $Transaction -Path $scriptPath
-            Remove-Item -LiteralPath $scriptPath -Force
-            $changed = $true
-        }
-    } else {
-        $scriptState = Get-TextFileState -Path $scriptPath
-        $scriptContent = [IO.File]::ReadAllText((Join-Path $SourceRoot 'templates\core\hooks\show-codex-notification.ps1'))
-        $scriptContent = [regex]::Replace($scriptContent, "`r`n|`r|`n", $scriptState.NewLine)
-        if (-not $scriptState.Exists -or $scriptState.Content -ne $scriptContent) {
-            Save-TransactionFile -Transaction $Transaction -Path $scriptPath
-            $encoding = if ($scriptState.Exists) { $scriptState.Encoding } else { [Text.UTF8Encoding]::new($true, $true) }
-            Write-TextFileState -Path $scriptPath -Content $scriptContent -Encoding $encoding
-            $changed = $true
-        }
+    if (Test-Path -LiteralPath $scriptPath -PathType Leaf) {
+        Save-TransactionFile -Transaction $Transaction -Path $scriptPath
+        Remove-Item -LiteralPath $scriptPath -Force
+        $changed = $true
     }
 
     $hooksAfter = (Get-TextFileState -Path $hooksPath).Content
@@ -239,7 +213,7 @@ function Invoke-WindowsUsageNotificationFiles {
     $unownedFingerprintsAfter = @(& $getUnownedFingerprints $unownedAfter) -join "`n"
     if ($unownedFingerprintsBefore -ne $unownedFingerprintsAfter) { throw 'WindowsUsageNotifications 嘗試修改非自身擁有的 Hook。' }
 
-    return [pscustomobject]@{ Managed = -not $Remove; HookCount = $(if ($Remove) { 0 } else { 2 }); ScriptPath = $scriptPath; Removed = [bool]$Remove; Changed = $changed }
+    return [pscustomobject]@{ Managed = $false; HookCount = 0; ScriptPath = $scriptPath; Removed = $true; Changed = $changed }
 }
 
 function Write-InstallationSummary {
@@ -346,8 +320,7 @@ function Invoke-GlobalInstallation {
     $usageToolsInstalled = $usageToolsState -ne 'NotInstalled'
     $mattPocockSkillsInstalled = Test-MattPocockSkillsInstalled
     $requestUserInputAction = Get-OptionalComponentPlanAction -ExplicitAction ([string]$OptionalComponentActions.requestUserInput) -Installed $requestUserInputInstalled -Requested ([bool]$EnableDefaultModeRequestUserInput)
-    $windowsNotificationsAction = if ($OptionalComponentActions.ContainsKey('windowsUsageNotifications')) { [string]$OptionalComponentActions.windowsUsageNotifications } elseif ([bool]$Context.InstallWindowsNotifications) { Resolve-OptionalComponentAction -State ([string]$windowsNotificationState.State) } else { Get-OptionalComponentPlanAction -Installed $windowsNotificationsInstalled -Requested $false }
-    if ($windowsNotificationsAction -eq 'Blocked') { throw (Format-WindowsNotificationLifecycleDiagnostic -Lifecycle $windowsNotificationState) }
+    $windowsNotificationsAction = if ($windowsNotificationsInstalled) { 'Uninstall' } else { 'SkipNotInstalled' }
     $usageToolsAction = if ($OptionalComponentActions.ContainsKey('usageTools')) { [string]$OptionalComponentActions.usageTools } elseif ([bool]$Context.InstallUsageTools) { Resolve-OptionalComponentAction -State $usageToolsState } else { Get-OptionalComponentPlanAction -Installed $usageToolsInstalled -Requested $false }
     $mattPocockSkillsAction = Get-OptionalComponentPlanAction -ExplicitAction ([string]$OptionalComponentActions.mattpocockSkills) -Installed $mattPocockSkillsInstalled -Requested ([bool]$InstallMattPocockSkills)
     $ponytailAction = Get-OptionalComponentPlanAction -ExplicitAction ([string]$OptionalComponentActions.ponytail) -Installed ([bool]$PonytailState.PluginPresent) -Requested ([bool]$InstallPonytail)
@@ -355,7 +328,7 @@ function Invoke-GlobalInstallation {
     $serenaAction = Get-OptionalComponentPlanAction -ExplicitAction ([string]$OptionalComponentActions.serena) -Installed ([bool]$serenaState.ToolPresent) -Requested ([bool]$InstallSerena)
     if ($OptionalComponentActions.ContainsKey('longRunningAsyncWait')) { $LongRunningAsyncWaitAction = [string]$OptionalComponentActions.longRunningAsyncWait }
     $EnableDefaultModeRequestUserInput = Test-OptionalComponentKeepAction $requestUserInputAction
-    $Context.InstallWindowsNotifications = Test-OptionalComponentKeepAction $windowsNotificationsAction
+    $Context.InstallWindowsNotifications = $false
     $Context.InstallUsageTools = Test-OptionalComponentKeepAction $usageToolsAction
     $InstallMattPocockSkills = Test-OptionalComponentKeepAction $mattPocockSkillsAction
     $InstallPonytail = Test-OptionalComponentKeepAction $ponytailAction
@@ -368,7 +341,7 @@ function Invoke-GlobalInstallation {
         $policyLifecycleState = switch ($policyBefore.Status) { 'NotInstalled' { 'NotInstalled' }; 'InstalledCurrent' { 'InstalledCurrent' }; 'InstalledNeedsUpdate' { 'InstalledUpdateAvailable' }; default { 'Conflict' } }
         $LongRunningAsyncWaitAction = Resolve-OptionalComponentAction -State $policyLifecycleState
     }
-    $targets = @(New-InstallationPlan -DevelopmentEnvironment $Context.DevelopmentEnvironment -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput -RequestUserInputAction $requestUserInputAction -LongRunningAsyncWaitAction $LongRunningAsyncWaitAction -InstallWindowsNotifications $false -ManageWindowsNotifications $false -WindowsNotificationAction $windowsNotificationsAction -SourceRoot $Context.ScriptRoot)
+    $targets = @(New-InstallationPlan -DevelopmentEnvironment $Context.DevelopmentEnvironment -EnableDefaultModeRequestUserInput:$EnableDefaultModeRequestUserInput -RequestUserInputAction $requestUserInputAction -LongRunningAsyncWaitAction $LongRunningAsyncWaitAction -InstallWindowsNotifications $false -ManageWindowsNotifications $true -WindowsNotificationAction $windowsNotificationsAction -SourceRoot $Context.ScriptRoot)
     $steps = New-InstallationProgressSteps -TargetCount $targets.Count -IncludeSkills:($mattPocockSkillsAction -notin @('SkipNotInstalled', 'LeaveUnchanged', 'Blocked')) -IncludePonytail:($ponytailAction -notin @('SkipNotInstalled', 'LeaveUnchanged', 'Blocked')) -IncludeCodexOrchestration:($codexOrchestrationAction -notin @('SkipNotInstalled', 'LeaveUnchanged', 'Blocked')) -IncludeSerena:($serenaAction -notin @('SkipNotInstalled', 'LeaveUnchanged', 'Blocked')) -IncludeNotifications:($windowsNotificationsAction -notin @('SkipNotInstalled', 'LeaveUnchanged', 'Blocked')) -IncludeUsageTools:($usageToolsAction -notin @('SkipNotInstalled', 'LeaveUnchanged', 'Blocked'))
     $progress = Start-InstallProgress -Steps $steps -Root $Context.GlobalRoot -Metadata @{
         Mode = 'Global'
@@ -523,43 +496,6 @@ function Invoke-GlobalInstallation {
                 [void]$communityResults.Add($component)
                 $ownership.community.windowsUsageNotifications.Status = $(if ($component.Status -eq 'SUCCESS') { 'Uninstalled' } else { 'FAILED' })
                 if ($component.Status -eq 'SUCCESS') { $notificationStatus = 'Uninstalled'; Complete-InstallStep -Progress $progress -Result 'Uninstalled' } else { Fail-InstallStep -Progress $progress -Reason $component.Error -Continue }
-            } elseif ($Context.InstallWindowsNotifications) {
-                Set-InstallProgress -Progress $progress -StepId 'Notifications' -Detail '安裝狀態通知'
-                $component = Invoke-IsolatedCommunityComponent -Name WindowsUsageNotifications -BackupRoot $Context.BackupRoot -Operation {
-                    param($componentTransaction)
-                    $files = Invoke-WindowsUsageNotificationFiles -Root $Context.GlobalRoot -SourceRoot $Context.ScriptRoot -Transaction $componentTransaction
-                    $finalNotificationState = Get-WindowsNotificationLifecycleState -Root $Context.GlobalRoot
-                    if ($finalNotificationState.State -ne 'InstalledCurrent') { throw "Windows 通知元件最終驗證失敗：notificationLifecycleState=$($finalNotificationState.State) notificationSchemaVersion=$($finalNotificationState.SchemaVersion) legacyCompletedStopDetected=$($finalNotificationState.LegacyCompletedStopDetected) managedNotifyBlockPresent=$($finalNotificationState.ManagedNotifyBlockPresent) managedNotifyCommandCurrent=$($finalNotificationState.ManagedNotifyCommandCurrent) plannedNotificationAction=$windowsNotificationsAction validationPhase=Final migrationPending=False" }
-                    $trust = Set-CodexSettingsHookTrust -Root $Context.GlobalRoot -Cwd $Context.GlobalRoot -Kind Notification
-                    $status = '腳本與 Hook 未變更'
-                    $notificationProbe = $null
-                    if ($files.Changed -or (Test-CodexWorkflowDecision -Plan $changePlan -Operation NotificationTest)) {
-                        $diagnosticRoot = if ([string]::IsNullOrWhiteSpace($env:CODEX_SETTINGS_HOOK_LOG_ROOT)) { Join-Path $Context.GlobalRoot 'logs\hooks' } else { $env:CODEX_SETTINGS_HOOK_LOG_ROOT }
-                        $diagnosticPath = Join-Path $diagnosticRoot 'notification-test.log'
-                        $diagnosticLength = if (Test-Path -LiteralPath $diagnosticPath -PathType Leaf) { (Get-Item -LiteralPath $diagnosticPath).Length } else { 0 }
-                        $notificationOutput = & pwsh -NoLogo -NoProfile -NonInteractive -File $files.ScriptPath -Type Completed -Test 2>&1
-                        if ($LASTEXITCODE -ne 0) { throw "Windows 通知測試失敗，結束碼：$LASTEXITCODE" }
-                        if (-not (Test-Path -LiteralPath $diagnosticPath -PathType Leaf) -or (Get-Item -LiteralPath $diagnosticPath).Length -le $diagnosticLength) { throw 'Windows 通知測試未產生 delivery 診斷。' }
-                        $notificationProbe = Get-Content -LiteralPath $diagnosticPath | Select-Object -Last 1 | ConvertFrom-Json -ErrorAction Stop
-                        if ($notificationProbe.result -ne 'success' -or (-not [bool]$notificationProbe.nativeToastShown -and -not [bool]$notificationProbe.fallbackShown -and $notificationProbe.resultReason -ne 'shown-test')) { throw "Windows 通知未顯示：$($notificationProbe.resultReason)" }
-                        $status = '測試通知已顯示'
-                    }
-                    [pscustomobject]@{ Files = $files; HookTrust = $trust; NotificationProbe = $notificationProbe; NotificationStatus = $status }
-                }
-                [void]$communityResults.Add($component)
-                $ownership.community.windowsUsageNotifications.Status = $component.Status
-                if ($component.Status -eq 'SUCCESS') {
-                    $notificationStatus = $component.Result.NotificationStatus
-                    $notificationOwner = $ownership.community.windowsUsageNotifications
-                    $notificationOwner.scriptPresent = Test-Path -LiteralPath (Join-Path $Context.GlobalRoot 'hooks\show-codex-notification.ps1') -PathType Leaf
-                    $notificationOwner.hookConfigured = @($component.Result.HookTrust.Hooks).Count -eq 3
-                    $notificationOwner.hookTrusted = @($component.Result.HookTrust.Hooks | Where-Object Trusted).Count -eq 3
-                    $notificationOwner.hookEffective = @($component.Result.HookTrust.Hooks | Where-Object Effective).Count -eq 3
-                    $notificationOwner.directToastShown = $null -ne $component.Result.NotificationProbe -and ([bool]$component.Result.NotificationProbe.nativeToastShown -or [bool]$component.Result.NotificationProbe.fallbackShown)
-                    $notificationOwner.lastInvocation = if ($null -ne $component.Result.NotificationProbe) { [string]$component.Result.NotificationProbe.timestamp } else { $null }
-                    $notificationOwner.lastResult = if ($null -ne $component.Result.NotificationProbe) { [string]$component.Result.NotificationProbe.resultReason } else { 'not-tested' }
-                    Complete-InstallStep -Progress $progress -Result $notificationStatus
-                } else { Fail-InstallStep -Progress $progress -Reason $component.Error -Continue }
             }
 
             if ($usageToolsAction -eq 'Uninstall') {

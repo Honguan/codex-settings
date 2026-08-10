@@ -52,35 +52,7 @@ try {
     $recovered = Read-CodexSettingsState -Kind 'corrupt-state' -Key 'one' -Root $testRoot -DefaultPayload ([ordered]@{ recovered = $true })
     if (-not [bool]$recovered.payload.recovered) { throw 'Corrupt state recovery failed.' }
 
-    $hooks = Get-Content -LiteralPath (Join-Path $script:ScriptRoot 'templates\core\hooks.json') -Raw | ConvertFrom-Json
-    if ($null -ne $hooks.hooks.PSObject.Properties['Stop']) { throw 'Completed notification must not use generic Stop.' }
-    $notificationConfig = Merge-WindowsNotificationCommandConfig -Content '' -Root 'C:\Users\fixture\.codex'
-    if (-not (Test-WindowsNotificationCommandConfig -Content $notificationConfig -Root 'C:\Users\fixture\.codex') -or $notificationConfig -notmatch 'notify\s*=.*Completed') { throw 'Canonical agent-turn-complete notification config is invalid.' }
-    $formattedNotificationConfig = $notificationConfig.Replace('notify = [', 'notify = [ ').Replace(']`r`n', ' ]`r`n')
-    $notificationConfigStates = @(
-        @('', 'MissingManagedBlock'),
-        @($formattedNotificationConfig, 'CurrentManagedBlock'),
-        @(($notificationConfig -replace '"Completed"', '"OldCompleted"'), 'OutdatedManagedBlock'),
-        @(($notificationConfig -replace [regex]::Escape($script:WindowsNotificationConfigEndMarker), ''), 'MalformedManagedBlock'),
-        @('notify = ["custom.exe"]', 'UnmanagedNotifyConflict')
-    )
-    foreach ($case in $notificationConfigStates) {
-        $actual = Get-WindowsNotificationCommandConfigState -Content $case[0] -Root 'C:\Users\fixture\.codex'
-        if ($actual -ne $case[1]) { throw "Notification config state mismatch: expected=$($case[1]) actual=$actual" }
-    }
-
-    $runtimeCore = Get-Content -LiteralPath (Join-Path $script:ScriptRoot 'templates\core\hooks\runtime-core.ps1') -Raw
-    $notificationSource = Get-Content -LiteralPath (Join-Path $script:ScriptRoot 'templates\core\hooks\show-codex-notification.ps1') -Raw
-    $lineEndingSource = Get-Content -LiteralPath (Join-Path $script:ScriptRoot 'templates\environments\cvs\hooks\preserve-line-endings.ps1') -Raw
     $usageSource = Get-Content -LiteralPath (Join-Path $script:ScriptRoot 'templates\profile\usage-commands.ps1') -Raw
-    foreach ($expected in @('Read-CodexHookInvocation', 'Write-CodexHookState', 'Get-CodexHookInvocationCounts', 'Get-CodexToolImpactClassification', 'Test-CodexMainSession')) {
-        if ($runtimeCore -notmatch [regex]::Escape($expected)) { throw "Runtime core 缺少函式：$expected" }
-    }
-    if ($notificationSource -notmatch 'runtime-core\.ps1' -or $lineEndingSource -notmatch 'runtime-core\.ps1') { throw 'Hook entrypoint 未載入共用 runtime core。' }
-    . (Join-Path $script:ScriptRoot 'templates\core\hooks\runtime-core.ps1')
-    $hookState = Write-CodexHookState -Kind 'contract-hook-state' -Key 'one' -Root (Join-Path $testRoot 'hook-state') -Payload ([ordered]@{ value = 1 })
-    $hookStateRead = Read-CodexHookState -Kind 'contract-hook-state' -Key 'one' -Root (Join-Path $testRoot 'hook-state')
-    if ($hookState.payload.value -ne 1 -or $hookStateRead.payload.value -ne 1) { throw 'Lazy Hook state runtime read/write failed.' }
     foreach ($expected in @('New-CodexUsageQuery', 'Invoke-CodexUsageQuery', 'Resolve-CodexUsageBackend')) {
         if ($usageSource -notmatch [regex]::Escape($expected)) { throw "Usage query layer 缺少函式：$expected" }
     }

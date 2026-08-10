@@ -155,31 +155,6 @@ function Select-LongRunningAsyncWaitPolicy([string]$Root, [string]$SourceRoot) {
     return Select-OptionalComponentAction -Name 'Long-running async wait policy' -State $lifecycleState
 }
 
-function Test-WindowsNotificationsInstalled([string]$Root = (Join-Path $HOME '.codex')) {
-    $configPath = Join-Path $Root 'config.toml'
-    if ((Test-Path -LiteralPath (Join-Path $Root 'hooks\show-codex-notification.ps1') -PathType Leaf) -and (Test-Path -LiteralPath $configPath -PathType Leaf) -and (Test-WindowsNotificationCommandConfig -Content ([IO.File]::ReadAllText($configPath)) -Root $Root)) { return $true }
-    $hooksPath = Join-Path $Root 'hooks.json'
-    if (-not (Test-Path -LiteralPath $hooksPath -PathType Leaf)) { return $false }
-    try {
-        $hooksObject = Get-Content -LiteralPath $hooksPath -Raw | ConvertFrom-Json -ErrorAction Stop
-        foreach ($property in @($hooksObject.hooks.PSObject.Properties)) {
-            if (@($property.Value | Where-Object { Test-ManagedNotificationHookEntry $_ }).Count -gt 0) { return $true }
-        }
-    } catch { return $false }
-    return $false
-}
-
-function Select-OptionalWindowsNotifications([bool]$AlreadyInstalled = (Test-WindowsNotificationsInstalled), [string]$State = '', $Lifecycle = $null) {
-    Write-Host ''
-    Write-Host '選用社區功能：Windows 開發狀態通知'
-    Write-Host '此功能會安裝／管理：'
-    Write-Host '- 任務完成、等待權限、等待回答等 Codex 狀態提醒'
-    if ($null -ne $Lifecycle) { $State = [string]$Lifecycle.State }
-    if ([string]::IsNullOrWhiteSpace($State)) { $State = Get-OptionalComponentState -Installed $AlreadyInstalled }
-    if ($State -in @('TrueUnmanagedConflict', 'MalformedUserOwnedState', 'Unknown') -and $null -ne $Lifecycle) { throw (Format-WindowsNotificationLifecycleDiagnostic -Lifecycle $Lifecycle) }
-    return Select-OptionalComponentAction -Name 'Windows 開發狀態通知' -State $State
-}
-
 function Get-UsageToolsLifecycleState([string]$SourceRoot = '') {
     if ([string]::IsNullOrWhiteSpace($SourceRoot)) { $SourceRoot = Split-Path -Parent $PSScriptRoot }
     $templatePath = Join-Path $SourceRoot 'templates\profile\usage-commands.ps1'

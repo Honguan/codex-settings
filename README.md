@@ -7,7 +7,7 @@ Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 ## 主要功能
 
 - 安裝或更新全域 `AGENTS.md`、`config.toml` 與權限規則。
-- 可選安裝全域 Windows 通知 Hook，提示任務完成、等待權限與等待回答；通知不查詢 Token／Cost 用量。
+- 不安裝任何 Codex Settings Hook；舊 Windows 通知與 CVS 換行 Hook 已封存至 `old/`。
 - 在全域安裝流程選擇 Git 或 CVS，合併對應的全域 AGENTS 與 Rules。
 - 安裝 Playwright MCP 設定。
 - 可獨立選擇安裝或更新 `ccusage`，並新增或更新 `ccsessions`（Session 用量）與 `cdaily`（每日用量）指令；用量指令不由通知 Hook 自動執行。
@@ -45,13 +45,9 @@ Windows 上的 Codex 全域設定一鍵安裝與管理工具。
 選擇「全域安裝／更新」後會選擇開發環境：
 
 - Git（首次安裝預設）：加入 Git 專屬 AGENTS、Rules 與 Issue 完成工作流；修正必須從最新 `main` 建立 `issue/<N>-<slug>` 分支，先驗證再提交，透過 PR 合併並驗證 `main` 後才能關閉 Issue。
-- CVS：加入 CVS 專屬 AGENTS、Rules 與全域／專案換行保護 Hooks。`PreToolUse` 依「專案路徑＋Session」記錄 CVS 追蹤檔的原始狀態，`PostToolUse` 在每次工具完成後立即恢復，`Stop` 負責最終補漏與清理。
+- CVS：加入 CVS 專屬 AGENTS 與 Rules，不安裝換行 Hook。
 
-換行保護使用 wildcard matcher，因此直接 `apply_patch`、code mode 的 `exec → tools.apply_patch`、Shell、MCP 與其他本機工具都使用同一份修改前基準。它以檔案大小與最後寫入時間略過已驗證且未變更的檔案，只對實際變更內容讀取位元組與計算雜湊，精確恢復原本的 CRLF／LF、檔尾換行與 BOM，不會重新編碼文字；若修改前快照缺失，`PostToolUse` 仍會辨識 patch 指向的 CVS 追蹤檔並修復混合換行。`Stop` 保留最終補漏能力並在完成後清除 session 狀態，不再於對話結束時重讀所有未變更內容。Codex 的檔案修改卡片是工具執行當下的靜態 diff，PostToolUse 修復後不會回寫卡片；請以 Hook 診斷與最終 `cvs diff`／`cvs status` 判定實際結果。
-
-安裝或更新時會清理全域與目前 CVS 專案中的受管理通知、Token、舊 CRLF 腳本與重複換行 Hook；會以安全的舊版簽章與 manifest fingerprint 清理 codex-settings 過去版本，未受管理的自訂 Hook 不會被刪除。通知 Hook 不再使用 Codex `statusMessage`，Toast 主程序與 60 秒背景清理程序也會隔離標準輸入、輸出與錯誤管線，避免 Hook 卡住或重複閃爍。全域 manifest 會記錄 `managedId`、`managedVersion`、`handlerId` 與 Handler fingerprint；安裝後會驗證全域與 CVS 專案合併後只有一個有效 Completed 通知。每次執行會將事件、來源、命令、Session／turn、程序、耗時、結束碼與全域／專案 Hook 計數寫入 `~/.codex/logs/hooks/<session-id>.log`；CVS 狀態則依「專案路徑＋Session」隔離。
-
-安裝器會分開詢問 Windows 通知與用量指令：首次安裝各自預設為是（`[Y/n]`），已安裝時預設保留並更新；選擇不安裝通知會移除受管理通知，但保留其他自訂 Hook。通知使用 `PermissionRequest`、`request_user_input` 的 `PreToolUse` 與 `notify` 完成事件；Claim 儲存在 `~/.codex/state/notifications/claims/<hash>.json`，同一事件以跨程序 mutex 原子宣告，`showing`／`shown` Claim 會立即略過後續觸發。完成通知只顯示工作完成狀態，不會呼叫 `ccsessions`、讀寫 Token baseline 或顯示 Token／Cost；用量仍可透過 `ccusage`、`ccsessions` 與 `cdaily` 手動查詢。Native Toast 已成功後，後續 active-toast 儲存或 cleanup 失敗不會觸發 Balloon fallback；執行結果寫入 `~/.codex/logs/hooks/<session-id>.log`，其中包含 Claim、Native/Fallback 與 finality 診斷欄位。Toast 優先使用 `long`／`urgent` 與 High priority，系統不支援時降級為 `long`；聲音預設開啟，可在通知設定的 `sound` 設為 `false` 靜音；Toast 項目最多保留 60 秒，背景清理不阻塞主 Hook。安裝器仍會清理過往由 codex-settings 管理的獨立 Token Hook，且只信任本工具管理的通知及換行保護 Hook。
+安裝或更新時會移除過去由 codex-settings 管理的 Windows 通知、Token 與 CVS 換行 Hook／腳本，並保留其他自訂 Hook 與外部 `notify`。封存實作與歷史測試位於 `old/windows-notification/`、`old/cvs-line-endings/` 與 `old/hooks/`，不納入安裝與現役測試。
 
 安裝成功後會將選擇記錄為預設專案體系。下次互動安裝按 Enter，或非互動安裝未提供 `-DevelopmentEnvironment` 時，會沿用上次的 Git／CVS 選擇。
 
@@ -63,8 +59,6 @@ Codex-Orchestration 是預設不安裝的選用 plugin。只有選擇安裝後�
 .\Install.cmd -Mode Global
 .\Install.cmd -Mode Global -DevelopmentEnvironment Git
 .\Install.cmd -Mode Global -DevelopmentEnvironment CVS
-.\Install.cmd -Mode Global -InstallWindowsNotifications $true
-.\Install.cmd -Mode Global -InstallWindowsNotifications $false
 .\Install.cmd -Mode Global -InstallUsageTools $true
 .\Install.cmd -Mode Global -InstallUsageTools $false
 ```
@@ -90,14 +84,14 @@ Codex-Orchestration 是預設不安裝的選用 plugin。只有選擇安裝後�
 # 完整覆蓋受管理目標
 .\Install.cmd -Mode Global -InstallStyle Replace
 
-# 強制執行既有 ccusage 的 runtime validation 與通知測試
-.\Install.cmd -Mode Global -ForceValidation -ForceNotificationTest
+# 強制執行既有 ccusage 的 runtime validation
+.\Install.cmd -Mode Global -ForceValidation
 
 # CI / 自動化不等待按鍵
 .\Install.cmd -Mode Global -NoPause
 ```
 
-第二次安裝若目標內容、Hook 與通知腳本都未變更，會走 `Unchanged`／`Skipped` 快速路徑；必要的交易備份、Hook 安全驗證與 rollback 不會被移除。
+第二次安裝若目標內容未變更，會走 `Unchanged`／`Skipped` 快速路徑；必要的交易備份與 rollback 不會被移除。
 
 ## 設定位置
 
@@ -108,8 +102,6 @@ Codex-Orchestration 是預設不安裝的選用 plugin。只有選擇安裝後�
 ├─ AGENTS.md
 ├─ config.toml
 ├─ rules\default.rules
-├─ hooks.json                         # 僅 CVS
-├─ hooks\preserve-line-endings.ps1   # 僅 CVS
 └─ .codex-settings-manifest.json
 ```
 
@@ -140,7 +132,7 @@ npx --yes skills@latest add mattpocock/skills -g -a codex -y --skill setup-matt-
 
 - `AGENTS.md`、Rules：只更新受管理區塊。
 - `config.toml`：保留既有鍵值與區段，只加入缺少的設定。
-- `hooks.json`：只更新本工具管理的換行 Hook，保留其他使用者 Hook。
+- `hooks.json`：只清除本工具過去管理的 Hook，保留其他使用者 Hook。
 - 其他檔案：只覆寫本工具擁有的版本；遇到未受管理的同名檔案會停止。
 
 安裝前會建立交易備份：

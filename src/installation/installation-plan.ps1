@@ -1,7 +1,7 @@
 function New-InstallationPlan([ValidateSet('Git', 'CVS')][string]$DevelopmentEnvironment, [switch]$EnableDefaultModeRequestUserInput, [ValidateSet('Install', 'KeepCurrent', 'Update', 'Repair', 'Uninstall', 'SkipNotInstalled', 'LeaveUnchanged', 'Blocked')][string]$RequestUserInputAction = 'LeaveUnchanged', [ValidateSet('Install', 'KeepCurrent', 'Update', 'Repair', 'Uninstall', 'SkipNotInstalled', 'LeaveUnchanged', 'Blocked')][string]$LongRunningAsyncWaitAction = 'LeaveUnchanged', [bool]$InstallWindowsNotifications, [bool]$ManageWindowsNotifications = $true, [string]$WindowsNotificationAction = 'LeaveUnchanged', [string]$Cwd = (Get-Location).Path, [string]$SourceRoot = '') {
     if ([string]::IsNullOrWhiteSpace($SourceRoot)) { $SourceRoot = [string]$ScriptRoot }
     $targets = New-Object 'System.Collections.Generic.List[object]'
-    [void]$targets.Add((New-InstallTarget -Id 'global' -Mode 'Global' -TemplateRoot (Join-Path $SourceRoot 'templates\core') -EnvironmentTemplateRoot (Join-Path $SourceRoot ("templates\environments\{0}" -f $DevelopmentEnvironment.ToLowerInvariant())) -DevelopmentEnvironment $DevelopmentEnvironment -Root (Join-Path $HOME '.codex') -Cwd $Cwd -EnableDefaultModeRequestUserInput ([bool]$EnableDefaultModeRequestUserInput) -RequestUserInputAction $RequestUserInputAction -LongRunningAsyncWaitAction $LongRunningAsyncWaitAction -InstallWindowsNotifications $InstallWindowsNotifications -ManageWindowsNotifications $ManageWindowsNotifications -WindowsNotificationAction $WindowsNotificationAction -SourceRoot $SourceRoot))
+    [void]$targets.Add((New-InstallTarget -Id 'global' -Mode 'Global' -TemplateRoot (Join-Path $SourceRoot 'templates\core') -EnvironmentTemplateRoot (Join-Path $SourceRoot ("templates\environments\{0}" -f $DevelopmentEnvironment.ToLowerInvariant())) -DevelopmentEnvironment $DevelopmentEnvironment -Root (Join-Path $HOME '.codex') -Cwd $Cwd -EnableDefaultModeRequestUserInput ([bool]$EnableDefaultModeRequestUserInput) -RequestUserInputAction $RequestUserInputAction -LongRunningAsyncWaitAction $LongRunningAsyncWaitAction -InstallWindowsNotifications $false -ManageWindowsNotifications $true -WindowsNotificationAction $WindowsNotificationAction -SourceRoot $SourceRoot))
     return $targets.ToArray()
 }
 
@@ -10,14 +10,9 @@ function Get-InstallTemplateEntries($Target) {
     $globalPaths = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
     foreach ($source in Get-ChildItem -LiteralPath $Target.TemplateRoot -Recurse -File) {
         $relative = $source.FullName.Substring($Target.TemplateRoot.Length).TrimStart([char[]]'\/')
-        if ($Target.Mode -eq 'Global' -and -not [bool]$Target.InstallWindowsNotifications -and $relative.Replace('\', '/') -eq 'hooks/show-codex-notification.ps1') { continue }
         [void]$globalPaths.Add($relative)
         $content = [IO.File]::ReadAllText($source.FullName)
-        if ($relative.Replace('\', '/') -eq 'hooks/show-codex-notification.ps1') { $content = [char]0xFEFF + $content }
         if ($Target.Mode -eq 'Global') {
-            if (-not [bool]$Target.InstallWindowsNotifications -and $relative.Replace('\', '/') -eq 'hooks.json') {
-                $content = Remove-ManagedNotificationHooksJson -Content $content
-            }
             $environmentSource = Join-Path $Target.EnvironmentTemplateRoot $relative
             if (Test-Path -LiteralPath $environmentSource -PathType Leaf) {
                 if ($relative.Replace('\', '/') -eq 'hooks.json') {
@@ -35,11 +30,6 @@ function Get-InstallTemplateEntries($Target) {
             $relative = $source.FullName.Substring($Target.EnvironmentTemplateRoot.Length).TrimStart([char[]]'\/')
             if ($globalPaths.Contains($relative)) { continue }
             [void]$entries.Add([pscustomobject]@{ RelativePath = $relative; Content = [IO.File]::ReadAllText($source.FullName) })
-        }
-        $lineEndingRelativePath = 'hooks\preserve-line-endings.ps1'
-        if (@($entries | Where-Object RelativePath -eq $lineEndingRelativePath).Count -eq 0) {
-            $lineEndingSource = Join-Path $Target.SourceRoot 'templates\environments\cvs\hooks\preserve-line-endings.ps1'
-            [void]$entries.Add([pscustomobject]@{ RelativePath = $lineEndingRelativePath; Content = [IO.File]::ReadAllText($lineEndingSource) })
         }
     }
     return $entries.ToArray()

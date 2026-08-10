@@ -41,7 +41,7 @@ jobs:
         shell: pwsh
         run: |
           $failed = @()
-          $nonBlocking = @('cvs-finalize-performance.tests.ps1', 'issue-workflow.tests.ps1')
+          $nonBlocking = @('issue-workflow.tests.ps1')
           $releaseTests = Get-ChildItem ./tests/*.tests.ps1 | Where-Object { $_.Name -notin $nonBlocking } | Sort-Object Name
           $releaseTests | ForEach-Object {
               & pwsh -NoLogo -NoProfile -File $_.FullName

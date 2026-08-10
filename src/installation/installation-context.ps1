@@ -26,9 +26,7 @@ function New-InstallerContext {
         $DevelopmentEnvironment = Get-DefaultDevelopmentEnvironment -Root $globalRoot
     }
     if ($Force) { $InstallStyle = 'Replace' }
-    if ($null -eq $InstallWindowsNotifications) {
-        $InstallWindowsNotifications = Test-WindowsNotificationsInstalled -Root $globalRoot
-    }
+    $InstallWindowsNotifications = $false
     if ($null -eq $InstallUsageTools) {
         $InstallUsageTools = Test-UsageToolsInstalled -SourceRoot $SourceRoot
     }

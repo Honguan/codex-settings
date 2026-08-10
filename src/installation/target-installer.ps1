@@ -9,10 +9,10 @@ function Invoke-TargetInstallation($Target, $Transaction, [switch]$Force, $Previ
     $projectRoot = $null
     if ($Target.Mode -eq 'Global') {
         Remove-GlobalLineEndingHooks -Root $Target.Root -Transaction $Transaction
-        if ([bool]$Target.ManageWindowsNotifications) { Remove-ManagedGlobalNotificationHooks -Root $Target.Root -Transaction $Transaction -ManagedHookFingerprints $managedHookFingerprints }
+        Remove-ManagedGlobalNotificationHooks -Root $Target.Root -Transaction $Transaction -ManagedHookFingerprints $managedHookFingerprints
         $targetCwd = if ($Target.PSObject.Properties.Name -contains 'Cwd') { [string]$Target.Cwd } else { (Get-Location).Path }
         $projectRoot = Find-CvsProjectRoot -StartPath $targetCwd
-        if (-not [string]::IsNullOrWhiteSpace($projectRoot)) { Remove-ManagedProjectHooks -StartPath $projectRoot -Transaction $Transaction -KeepCvsLineEndingHooks:($Target.DevelopmentEnvironment -eq 'CVS') -PreserveNotifications:(-not [bool]$Target.ManageWindowsNotifications) -ManagedHookFingerprints $managedHookFingerprints | Out-Null }
+        if (-not [string]::IsNullOrWhiteSpace($projectRoot)) { Remove-ManagedProjectHooks -StartPath $projectRoot -Transaction $Transaction -ManagedHookFingerprints $managedHookFingerprints | Out-Null }
     }
     $hookCleanupChanged = $Transaction.Entries.Count -gt $transactionEntriesBeforeCleanup
     $entries = New-Object 'System.Collections.Generic.List[object]'
@@ -79,11 +79,7 @@ function Invoke-TargetInstallation($Target, $Transaction, [switch]$Force, $Previ
             elseif ($Target.Mode -eq 'Global' -and $relative -eq 'config.toml' -and $Target.RequestUserInputAction -eq 'Uninstall') { $desiredContent = Remove-DefaultModeRequestUserInputFeature -Content $desiredContent }
         }
         if ($Target.Mode -eq 'Global' -and $relative.Replace('\', '/') -eq 'config.toml') {
-            if ([bool]$Target.ManageWindowsNotifications) {
-                $desiredContent = if ([bool]$Target.InstallWindowsNotifications) { Merge-WindowsNotificationCommandConfig -Content $desiredContent -Root $Target.Root -NewLine $state.NewLine } else { Remove-WindowsNotificationCommandConfig -Content $desiredContent }
-            } elseif (Test-WindowsNotificationCommandConfig -Content $state.Content -Root $Target.Root) {
-                $desiredContent = Merge-WindowsNotificationCommandConfig -Content $desiredContent -Root $Target.Root -NewLine $state.NewLine
-            }
+            $desiredContent = Remove-WindowsNotificationCommandConfig -Content $desiredContent -RestorePrevious
         }
         if ($Target.Mode -eq 'Global' -and $relative.Replace('\', '/') -eq 'AGENTS.md') {
             $policyTemplate = Get-LongRunningAsyncWaitPolicyTemplate -SourceRoot $Target.SourceRoot
@@ -135,8 +131,7 @@ function Invoke-TargetInstallation($Target, $Transaction, [switch]$Force, $Previ
     }
 
     if ($Target.Mode -eq 'Global') {
-        $notificationsExpected = if ([bool]$Target.ManageWindowsNotifications) { [bool]$Target.InstallWindowsNotifications } else { Test-WindowsNotificationsInstalled -Root $Target.Root }
-        Assert-GlobalLineEndingHook -DevelopmentEnvironment $Target.DevelopmentEnvironment -Root $Target.Root -InstallWindowsNotifications $notificationsExpected -ProjectRoot $projectRoot -ManagedNotificationFingerprints $managedNotificationFingerprints -ManagedTokenFingerprints $managedTokenFingerprints -ValidationPhase PreCommunity -PlannedNotificationAction ([string]$Target.WindowsNotificationAction) | Out-Null
+        Assert-GlobalLineEndingHook -DevelopmentEnvironment $Target.DevelopmentEnvironment -Root $Target.Root -InstallWindowsNotifications $false -ProjectRoot $projectRoot -ManagedNotificationFingerprints $managedNotificationFingerprints -ManagedTokenFingerprints $managedTokenFingerprints -ValidationPhase PreCommunity -PlannedNotificationAction ([string]$Target.WindowsNotificationAction) | Out-Null
     }
 
     $hookPathsChanged = @($entries | Where-Object { $_.Changed -and ([string]$_.Path -eq 'hooks.json' -or [string]$_.Path -like 'hooks\*') }).Count -gt 0

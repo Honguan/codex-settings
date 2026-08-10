@@ -9,7 +9,7 @@ function Remove-GlobalLineEndingHooks([string]$Root, $Transaction) {
         }
     }
 
-    foreach ($scriptName in @('crlf-updated-files.ps1', 'normalize-cvs-crlf.ps1')) {
+    foreach ($scriptName in @('crlf-updated-files.ps1', 'normalize-cvs-crlf.ps1', 'preserve-line-endings.ps1')) {
         $scriptPath = Join-Path $Root ("hooks\$scriptName")
         if (Test-Path -LiteralPath $scriptPath -PathType Leaf) {
             Save-TransactionFile -Transaction $Transaction -Path $scriptPath
@@ -332,14 +332,12 @@ function Assert-GlobalLineEndingHook([ValidateSet('Git', 'CVS')][string]$Develop
     $notificationCompletedHookCount = [int]$globalCounts.NotificationStop
     $preserveScriptCount = if (Test-Path -LiteralPath (Join-Path $Root 'hooks\preserve-line-endings.ps1') -PathType Leaf) { 1 } else { 0 }
     $notificationScriptCount = if (Test-Path -LiteralPath (Join-Path $Root 'hooks\show-codex-notification.ps1') -PathType Leaf) { 1 } else { 0 }
-    $expectedNotificationCount = if ($InstallWindowsNotifications) { 1 } else { 0 }
+    $expectedNotificationCount = 0
     $notificationLifecycle = Get-WindowsNotificationLifecycleState -Root $Root -ManagedNotificationFingerprints $ManagedNotificationFingerprints
-    $completionNotificationConfigured = $notificationCommandConfigured -or [bool]$notificationLifecycle.ExternalNotifyCoexistence
-    $migrationPending = $ValidationPhase -eq 'PreCommunity' -and $PlannedNotificationAction -in @('Update', 'Repair') -and $notificationLifecycle.State -in @('InstalledNeedsMigration', 'InstalledUpdateAvailable', 'InstalledNeedsRepair', 'ManagedPartialState', 'ManagedDuplicateState')
-    $installationPending = $ValidationPhase -eq 'PreCommunity' -and $PlannedNotificationAction -eq 'Install' -and $notificationLifecycle.State -eq 'NotInstalled'
-    $transitionPending = $migrationPending -or $installationPending -or ($ValidationPhase -eq 'PreCommunity' -and $PlannedNotificationAction -eq 'Uninstall' -and $notificationLifecycle.State -notin @('NotInstalled', 'TrueUnmanagedConflict', 'MalformedUserOwnedState', 'Conflict', 'Unknown'))
-    if (-not $transitionPending -and ($notificationQuestionHookCount -ne $expectedNotificationCount -or $notificationPermissionHookCount -ne $expectedNotificationCount -or $notificationCompletedHookCount -ne 0 -or [int]$completionNotificationConfigured -ne $expectedNotificationCount -or $notificationScriptCount -ne $expectedNotificationCount)) {
-        throw "Windows 通知安裝檢查失敗：notificationLifecycleState=$($notificationLifecycle.State) notificationSchemaVersion=$($notificationLifecycle.SchemaVersion) legacyCompletedStopDetected=$($notificationLifecycle.LegacyCompletedStopDetected) managedNotifyBlockPresent=$($notificationLifecycle.ManagedNotifyBlockPresent) managedNotifyCommandCurrent=$($notificationLifecycle.ManagedNotifyCommandCurrent) plannedNotificationAction=$PlannedNotificationAction validationPhase=$ValidationPhase migrationPending=$migrationPending Expected=$expectedNotificationCount QuestionHookCount=$notificationQuestionHookCount PermissionHookCount=$notificationPermissionHookCount CompletedStopHookCount=$notificationCompletedHookCount NotificationCommandConfigured=$notificationCommandConfigured NotificationScriptCount=$notificationScriptCount"
+    $completionNotificationConfigured = $notificationCommandConfigured
+    $transitionPending = $false
+    if ($notificationQuestionHookCount -ne 0 -or $notificationPermissionHookCount -ne 0 -or $notificationCompletedHookCount -ne 0 -or $notificationCommandConfigured -or $notificationScriptCount -ne 0) {
+        throw "封存的 Windows 通知 Hook 仍存在：QuestionHookCount=$notificationQuestionHookCount PermissionHookCount=$notificationPermissionHookCount CompletedStopHookCount=$notificationCompletedHookCount NotificationCommandConfigured=$notificationCommandConfigured NotificationScriptCount=$notificationScriptCount"
     }
     $projectCounts = [pscustomobject]@{ NotificationStop = 0; LegacyNotificationStop = 0; Token = 0; LineEndingPreToolUse = 0; LineEndingPostToolUse = 0; LineEndingStop = 0; LegacyCrlf = 0 }
     if (-not [string]::IsNullOrWhiteSpace($ProjectRoot)) {
@@ -353,39 +351,20 @@ function Assert-GlobalLineEndingHook([ValidateSet('Git', 'CVS')][string]$Develop
     $projectLegacyCrlfHookCount = [int]$projectCounts.LegacyCrlf
     $projectLegacyTokenHookCount = [int]$projectCounts.Token
 
-    $notificationScriptPath = Join-Path $Root 'hooks\show-codex-notification.ps1'
-    $detachedToastCleanup = -not $InstallWindowsNotifications
-    if (Test-Path -LiteralPath $notificationScriptPath -PathType Leaf) {
-        $notificationSource = [IO.File]::ReadAllText($notificationScriptPath)
-        $detachedToastCleanup = $notificationSource -match '\$startInfo\.UseShellExecute\s*=\s*\$false' -and $notificationSource -match '\$startInfo\.CreateNoWindow\s*=\s*\$true' -and $notificationSource -match 'RedirectStandardInput' -and $notificationSource -match 'RedirectStandardOutput' -and $notificationSource -match 'RedirectStandardError'
-    }
+    $detachedToastCleanup = $true
 
     $globalNotificationStopHookCount = $notificationCompletedHookCount
     $legacyTokenHookCount = [int]$globalCounts.Token + $projectLegacyTokenHookCount
     $legacyCompletedNotificationHookCount = [int]$globalCounts.LegacyNotificationStop + [int]$projectCounts.LegacyNotificationStop
-    $effectiveCompletedNotificationHookCount = [int]$completionNotificationConfigured + $notificationCompletedHookCount + $projectNotificationStopHookCount
+    $effectiveCompletedNotificationHookCount = $notificationCompletedHookCount + $projectNotificationStopHookCount
     $legacyCrlfHookCount += $projectLegacyCrlfHookCount
     if ((-not $transitionPending -and $legacyCompletedNotificationHookCount -ne 0) -or ($transitionPending -and [int]$projectCounts.LegacyNotificationStop -ne 0) -or $projectLegacyCrlfHookCount -ne 0 -or $legacyTokenHookCount -ne 0) {
         throw "仍包含受管理的舊 Hook：LegacyCompletedNotification=$legacyCompletedNotificationHookCount LegacyCrlf=$legacyCrlfHookCount LegacyToken=$legacyTokenHookCount"
     }
-    $expectedEffectiveNotificationCount = if ($InstallWindowsNotifications) { 1 } else { 0 }
-    if (-not $transitionPending -and $effectiveCompletedNotificationHookCount -ne $expectedEffectiveNotificationCount) {
-        throw "有效 Completed 通知 Hook 數量錯誤：Expected=$expectedEffectiveNotificationCount Global=$notificationCompletedHookCount Project=$projectNotificationStopHookCount Effective=$effectiveCompletedNotificationHookCount"
+    if ($effectiveCompletedNotificationHookCount -ne 0) { throw "專案仍包含封存的 Windows 通知 Hook：Global=$notificationCompletedHookCount Project=$projectNotificationStopHookCount" }
+    if ($trackHookCount -ne 0 -or $restoreHookCount -ne 0 -or $finalizeHookCount -ne 0 -or $preserveScriptCount -ne 0 -or $legacyHookCount -ne 0 -or $projectLineEndingPreToolUseHookCount -ne 0 -or $projectLineEndingPostToolUseHookCount -ne 0 -or $projectLineEndingStopHookCount -ne 0) {
+        throw '仍包含封存的 CVS 換行保護 Hook。'
     }
-    $projectHasLineEndingHooks = $projectLineEndingPreToolUseHookCount -eq 1 -and $projectLineEndingPostToolUseHookCount -eq 1 -and $projectLineEndingStopHookCount -in @(0, 1)
-    if ($DevelopmentEnvironment -eq 'CVS') {
-        if ($projectHasLineEndingHooks) {
-            if ($trackHookCount -ne 0 -or $restoreHookCount -ne 0 -or $finalizeHookCount -ne 0 -or $preserveScriptCount -ne 1 -or $legacyHookCount -ne 0) { throw 'CVS 專案 Hook 已接管換行保護，但全域仍保留重複或不完整的換行 Hook。' }
-        } elseif ($trackHookCount -ne 1 -or $restoreHookCount -ne 1 -or $finalizeHookCount -ne 1 -or $preserveScriptCount -ne 1 -or $legacyHookCount -ne 0) {
-            throw "CVS 換行保護安裝檢查失敗：TrackHookCount=$trackHookCount RestoreHookCount=$restoreHookCount FinalizeHookCount=$finalizeHookCount PreserveLineEndingScriptCount=$preserveScriptCount LegacyCrlfHookCount=$legacyHookCount"
-        }
-    } elseif ($trackHookCount -ne 0 -or $restoreHookCount -ne 0 -or $finalizeHookCount -ne 0 -or $preserveScriptCount -notin @(0, 1) -or $legacyHookCount -ne 0) {
-        throw 'Git 全域設定仍包含 CVS 換行保護 Hook。'
-    }
-    if ($DevelopmentEnvironment -eq 'Git' -and ($projectLineEndingPostToolUseHookCount -ne 0 -or $projectLineEndingStopHookCount -ne 0)) {
-        throw 'Git 專案仍包含 CVS 換行保護 Hook。'
-    }
-    if (-not $detachedToastCleanup) { throw 'Windows 通知 Toast 子程序未完成獨立輸入輸出設定。' }
     return [pscustomobject]@{
         GlobalNotificationStopHookCount = $globalNotificationStopHookCount
         ProjectNotificationStopHookCount = $projectNotificationStopHookCount

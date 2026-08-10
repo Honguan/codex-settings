@@ -69,8 +69,8 @@ try {
     if ($manifest.community.usageTools.Owner -ne 'UsageTools' -or @($manifest.community.usageTools.ManagedExternalState) -notcontains 'ccusage' -or @($manifest.community.windowsUsageNotifications.ManagedExternalState).Count -ne 0) {
         throw 'usage tools 與 Windows notification ownership 未分離。'
     }
-    if ($manifest.community.windowsUsageNotifications.Owner -ne 'WindowsUsageNotifications' -or @($manifest.community.windowsUsageNotifications.ManagedHooks).Count -ne 3) {
-        throw 'WindowsUsageNotifications ownership 未涵蓋單一 bundle 的三類 lifecycle hooks。'
+    if ($manifest.community.windowsUsageNotifications.Owner -ne 'WindowsUsageNotifications' -or $manifest.community.windowsUsageNotifications.Selected -or $manifest.community.windowsUsageNotifications.DiscoveredState -ne 'Archived' -or @($manifest.community.windowsUsageNotifications.ManagedHooks).Count -ne 0) {
+        throw '封存後的 WindowsUsageNotifications ownership 仍宣告安裝內容。'
     }
     foreach ($field in @('pluginStatus', 'workflowRequested', 'workflowStatus', 'setupPrompt', 'actionRequired', 'lastVerified')) {
         if ($manifest.community.codexOrchestration.PSObject.Properties.Name -notcontains $field) { throw "Codex-Orchestration ownership 缺少狀態欄位：$field" }
@@ -140,8 +140,10 @@ $notificationRoot = Join-Path ([IO.Path]::GetTempPath()) ('codex-settings-notifi
 try {
     New-Item -ItemType Directory -Path $notificationRoot -Force | Out-Null
     $hooksPath = Join-Path $notificationRoot 'hooks.json'
-    $thirdPartyHook = '{"description":"third party","hooks":{"Stop":[{"hooks":[{"type":"command","command":"ponytail lifecycle"}]}]}}'
+    $thirdPartyHook = '{"description":"third party","hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"pwsh show-codex-notification.ps1 -Type QuestionRequired"}]}],"Stop":[{"hooks":[{"type":"command","command":"ponytail lifecycle"}]}]}}'
     [IO.File]::WriteAllText($hooksPath, $thirdPartyHook, [Text.UTF8Encoding]::new($false))
+    New-Item -ItemType Directory -Path (Join-Path $notificationRoot 'hooks') -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $notificationRoot 'hooks\show-codex-notification.ps1'), '# archived', [Text.UTF8Encoding]::new($false))
     foreach ($run in 1..2) {
         $transaction = New-FileTransaction -Root (Join-Path $notificationRoot "install-$run") -Mode WindowsUsageNotificationTransaction
         Invoke-WindowsUsageNotificationFiles -Root $notificationRoot -SourceRoot $script:ScriptRoot -Transaction $transaction | Out-Null
@@ -149,28 +151,8 @@ try {
     }
     $hooks = Get-Content -LiteralPath $hooksPath -Raw | ConvertFrom-Json
     if (@($hooks.hooks.Stop | Where-Object { (Get-HookEntryText $_) -match 'ponytail lifecycle' }).Count -ne 1) { throw 'WindowsUsageNotifications 修改了第三方 Hook。' }
-    foreach ($event in @('PreToolUse', 'PermissionRequest')) {
-        if (@($hooks.hooks.$event | Where-Object { Test-ManagedNotificationHookEntry $_ }).Count -ne 1) { throw "notification bundle 未對 $event 保持唯一 Hook。" }
-    }
-    if (@($hooks.hooks.Stop | Where-Object { Test-ManagedNotificationHookEntry $_ }).Count -ne 0 -or -not (Test-WindowsNotificationCommandConfig -Content (Get-Content -LiteralPath (Join-Path $notificationRoot 'config.toml') -Raw) -Root $notificationRoot)) { throw 'notification bundle 未使用唯一的原生完成通知。' }
-    if (-not (Test-Path (Join-Path $notificationRoot 'hooks\show-codex-notification.ps1'))) { throw 'notification bundle 未安裝自己的腳本。' }
-    $scriptHash = (Get-FileHash (Join-Path $notificationRoot 'hooks\show-codex-notification.ps1') -Algorithm SHA256).Hash
-    $personalTarget = New-InstallTarget -Id personal -Mode Global -TemplateRoot (Join-Path $script:ScriptRoot 'templates\core') -EnvironmentTemplateRoot (Join-Path $script:ScriptRoot 'templates\environments\git') -DevelopmentEnvironment Git -Root $notificationRoot -Cwd $notificationRoot -InstallWindowsNotifications:$false -ManageWindowsNotifications:$false -SourceRoot $script:ScriptRoot
-    $personalTransaction = New-FileTransaction -Root (Join-Path $notificationRoot 'personal') -Mode PersonalTransaction
-    Invoke-TargetInstallation -Target $personalTarget -Transaction $personalTransaction | Out-Null
-    $hooksAfterPersonal = Get-Content -LiteralPath $hooksPath -Raw | ConvertFrom-Json
-    if (@($hooksAfterPersonal.hooks.Stop | Where-Object { Test-ManagedNotificationHookEntry $_ }).Count -ne 0 -or -not (Test-WindowsNotificationCommandConfig -Content (Get-Content -LiteralPath (Join-Path $notificationRoot 'config.toml') -Raw) -Root $notificationRoot) -or (Get-FileHash (Join-Path $notificationRoot 'hooks\show-codex-notification.ps1') -Algorithm SHA256).Hash -ne $scriptHash) {
-        throw 'Personal phase 修改了 WindowsUsageNotifications 擁有的 Hook 或腳本。'
-    }
-
-    $removeTransaction = New-FileTransaction -Root (Join-Path $notificationRoot 'remove') -Mode WindowsUsageNotificationTransaction
-    Invoke-WindowsUsageNotificationFiles -Root $notificationRoot -SourceRoot $script:ScriptRoot -Transaction $removeTransaction -Remove | Out-Null
-    $hooksAfterRemove = Get-Content -LiteralPath $hooksPath -Raw | ConvertFrom-Json
-    if (@($hooksAfterRemove.hooks.Stop | Where-Object { (Get-HookEntryText $_) -match 'ponytail lifecycle' }).Count -ne 1 -or @($hooksAfterRemove.hooks.PSObject.Properties.Value | ForEach-Object { @($_) } | Where-Object { Test-ManagedNotificationHookEntry $_ }).Count -ne 0) {
-        throw '移除 notification bundle 時修改了第三方 Hook 或保留受管理通知。'
-    }
-    if (Test-Path (Join-Path $notificationRoot 'hooks\show-codex-notification.ps1')) { throw '移除 notification bundle 後仍保留受管理腳本。' }
-    if ((Test-Path (Join-Path $notificationRoot 'config.toml')) -and (Get-Content -LiteralPath (Join-Path $notificationRoot 'config.toml') -Raw) -match 'CODEX-SETTINGS:WINDOWS-NOTIFICATIONS:CONFIG') { throw '移除 notification bundle 後仍保留受管理 notify 設定。' }
+    if (@($hooks.hooks.PSObject.Properties.Value | ForEach-Object { @($_) } | Where-Object { Test-ManagedNotificationHookEntry $_ }).Count -ne 0) { throw '封存後仍安裝受管理通知 Hook。' }
+    if (Test-Path (Join-Path $notificationRoot 'hooks\show-codex-notification.ps1')) { throw '封存後仍保留受管理通知腳本。' }
 } finally {
     Remove-Item -LiteralPath $notificationRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
