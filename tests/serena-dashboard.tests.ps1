@@ -22,23 +22,23 @@ try {
 
     foreach ($value in @('true', 'True', 'TRUE')) {
         Write-DashboardConfig "web_dashboard: true`nweb_dashboard_open_on_launch: $value  # keep comment`nlog_level: 20`n"
-        $result = Set-SerenaDashboardAutoOpen -Transaction (New-DashboardTransaction $value)
+        $result = Set-SerenaDashboardConfiguration -Transaction (New-DashboardTransaction $value)
         $content = [IO.File]::ReadAllText($configPath)
-        if (-not $result.Changed -or $content -ne "web_dashboard: true`nweb_dashboard_open_on_launch: false  # keep comment`nlog_level: 20`n") { throw "True variant $value was not minimally reconciled." }
+        if (-not $result.Changed -or $content -ne "web_dashboard: false`nweb_dashboard_open_on_launch: false  # keep comment`nlog_level: 20`n") { throw "True variant $value was not minimally reconciled." }
     }
 
     foreach ($value in @('false', 'False', 'FALSE')) {
-        Write-DashboardConfig "web_dashboard: true`r`nweb_dashboard_open_on_launch: $value`r`n" -Bom $true
+        Write-DashboardConfig "web_dashboard: false`r`nweb_dashboard_open_on_launch: $value`r`n" -Bom $true
         $before = [IO.File]::ReadAllBytes($configPath)
-        $result = Set-SerenaDashboardAutoOpen -Transaction (New-DashboardTransaction $value)
+        $result = Set-SerenaDashboardConfiguration -Transaction (New-DashboardTransaction $value)
         if ($result.Changed -or [Convert]::ToHexString([IO.File]::ReadAllBytes($configPath)) -ne [Convert]::ToHexString($before)) { throw "False variant $value should remain byte-for-byte unchanged." }
     }
 
     Write-DashboardConfig "# user comment`r`nweb_dashboard: true`r`ncustom_setting: keep`r`n" -Bom $true
-    [void](Set-SerenaDashboardAutoOpen -Transaction (New-DashboardTransaction missing))
+    [void](Set-SerenaDashboardConfiguration -Transaction (New-DashboardTransaction missing))
     $bytes = [IO.File]::ReadAllBytes($configPath)
     $content = (Get-TextFileState -Path $configPath).Content
-    if ($bytes[0] -ne 0xEF -or $content -ne "# user comment`r`nweb_dashboard: true`r`ncustom_setting: keep`r`nweb_dashboard_open_on_launch: false`r`n") { throw 'Missing key reconciliation did not preserve CRLF, BOM, or unrelated settings.' }
+    if ($bytes[0] -ne 0xEF -or $content -ne "# user comment`r`nweb_dashboard: false`r`ncustom_setting: keep`r`nweb_dashboard_open_on_launch: false`r`n") { throw 'Missing key reconciliation did not preserve CRLF, BOM, or unrelated settings.' }
 
     foreach ($unsafe in @(
         "web_dashboard_open_on_launch: true`nweb_dashboard_open_on_launch: false`n",
@@ -51,22 +51,23 @@ try {
         $before = [IO.File]::ReadAllBytes($configPath)
         $conflictTransaction = New-DashboardTransaction conflict
         $message = ''
-        try { [void](Set-SerenaDashboardAutoOpen -Transaction $conflictTransaction) } catch { $message = $_.Exception.Message }
+        try { [void](Set-SerenaDashboardConfiguration -Transaction $conflictTransaction) } catch { $message = $_.Exception.Message }
         if ($message -notmatch 'ConfigurationConflict' -or $conflictTransaction.Entries.Count -ne 1 -or [Convert]::ToHexString([IO.File]::ReadAllBytes($configPath)) -ne [Convert]::ToHexString($before)) { throw 'Unsafe YAML did not produce a backed-up, non-destructive ConfigurationConflict.' }
     }
 
     Write-DashboardConfig "web_dashboard: true`nweb_dashboard_open_on_launch: true`n"
     $transaction = New-DashboardTransaction rollback
     $before = [IO.File]::ReadAllBytes($configPath)
-    [void](Set-SerenaDashboardAutoOpen -Transaction $transaction)
+    [void](Set-SerenaDashboardConfiguration -Transaction $transaction)
     Undo-FileTransaction -Transaction $transaction
     if ([Convert]::ToHexString([IO.File]::ReadAllBytes($configPath)) -ne [Convert]::ToHexString($before)) { throw 'Serena configuration rollback did not restore the exact original bytes.' }
 
     Write-DashboardConfig "web_dashboard: true`n"
-    for ($run = 1; $run -le 10; $run++) { [void](Set-SerenaDashboardAutoOpen -Transaction (New-DashboardTransaction "repeat-$run")) }
+    for ($run = 1; $run -le 10; $run++) { [void](Set-SerenaDashboardConfiguration -Transaction (New-DashboardTransaction "repeat-$run")) }
     $stable = [IO.File]::ReadAllBytes($configPath)
-    if ([regex]::Matches([IO.File]::ReadAllText($configPath), '(?m)^web_dashboard_open_on_launch:').Count -ne 1) { throw 'Repeated reconciliation duplicated the Dashboard key.' }
-    [void](Set-SerenaDashboardAutoOpen -Transaction (New-DashboardTransaction stable))
+    $repeatedContent = [IO.File]::ReadAllText($configPath)
+    if ([regex]::Matches($repeatedContent, '(?m)^web_dashboard:').Count -ne 1 -or [regex]::Matches($repeatedContent, '(?m)^web_dashboard_open_on_launch:').Count -ne 1) { throw 'Repeated reconciliation duplicated a Dashboard key.' }
+    [void](Set-SerenaDashboardConfiguration -Transaction (New-DashboardTransaction stable))
     if ([Convert]::ToHexString([IO.File]::ReadAllBytes($configPath)) -ne [Convert]::ToHexString($stable)) { throw 'Repeated reconciliation unnecessarily rewrote an already configured file.' }
 
     $script:stateCall = 0
@@ -123,7 +124,7 @@ try {
     if ($freshFailure -notmatch 'Serena install 失敗') { throw 'Fresh Serena install failure was incorrectly treated as deferred.' }
 
     $components = @(Get-SerenaInstallationComponents -Result $existing)
-    if (@($components | Where-Object { $_.Name -eq 'Serena Dashboard' -and $_.Status -eq 'Enabled' }).Count -ne 1 -or @($components | Where-Object { $_.Name -eq 'Serena Dashboard auto-open' -and $_.Status -eq 'Disabled' }).Count -ne 1) { throw 'Serena summary does not distinguish Dashboard enabled from auto-open disabled.' }
+    if (@($components | Where-Object { $_.Name -eq 'Serena Dashboard' -and $_.Status -eq 'Disabled' }).Count -ne 1 -or @($components | Where-Object { $_.Name -eq 'Serena Dashboard auto-open' -and $_.Status -eq 'Disabled' }).Count -ne 1) { throw 'Serena summary does not report the disabled Dashboard and auto-open settings.' }
     $beforeSkip = [IO.File]::ReadAllBytes($configPath)
     $skipped = New-SerenaSkippedResult
     if ($skipped.SelectedByUser -or [Convert]::ToHexString([IO.File]::ReadAllBytes($configPath)) -ne [Convert]::ToHexString($beforeSkip)) { throw 'Skipping Serena modified its configuration.' }

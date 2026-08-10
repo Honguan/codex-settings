@@ -65,7 +65,7 @@ args = ["start-mcp-server", "--context=codex", "--project-from-cwd"]
     if ($env:CODEX_HOME -ne 'original-codex-home') { throw 'CODEX_HOME was not restored after Serena setup.' }
     if (Test-Path -LiteralPath $script:setupCodexHome) { throw 'Serena staging CODEX_HOME was not removed after success.' }
 
-    $expected = $original.TrimEnd("`r", "`n") + "`n`n[mcp_servers.serena]`ncommand = `"serena`"`nargs = [`"start-mcp-server`", `"--context=codex`", `"--project-from-cwd`"]`n"
+    $expected = $original.TrimEnd("`r", "`n") + "`n`n[mcp_servers.serena]`ncommand = `"serena`"`nargs = [`"start-mcp-server`", `"--context=codex`", `"--project-from-cwd`"]`nstartup_timeout_sec = 30`ntool_timeout_sec = 120`n"
     $actual = [IO.File]::ReadAllText($configPath)
     if ($actual -ne $expected) { throw 'Serena setup changed non-Serena config content.' }
 
@@ -78,7 +78,7 @@ args = ["start-mcp-server", "--context=codex", "--project-from-cwd"]
     $updatedBytes = [IO.File]::ReadAllBytes($configPath)
     if ($updatedBytes[0] -ne 0xEF -or $updatedBytes[1] -ne 0xBB -or $updatedBytes[2] -ne 0xBF) { throw 'Serena setup removed the UTF-8 BOM.' }
     $updated = (Get-TextFileState -Path $configPath).Content
-    $expectedUpdate = $prefix + "[mcp_servers.serena]`r`ncommand = `"serena`"`r`nargs = [`"start-mcp-server`", `"--context=codex`", `"--project-from-cwd`"]`r`n" + $suffix
+    $expectedUpdate = $prefix + "[mcp_servers.serena]`r`ncommand = `"serena`"`r`nargs = [`"start-mcp-server`", `"--context=codex`", `"--project-from-cwd`"]`r`nstartup_timeout_sec = 30`r`ntool_timeout_sec = 120`r`n" + $suffix
     if ($updated -ne $expectedUpdate) { throw 'Updating an existing Serena section changed surrounding CRLF content.' }
     if ([regex]::Matches($updated, '(?m)^\[mcp_servers\.serena\]\s*$').Count -ne 1) { throw 'Serena setup created a duplicate section.' }
     if (Test-Path -LiteralPath $script:setupCodexHome) { throw 'Serena staging CODEX_HOME was not removed after update.' }
