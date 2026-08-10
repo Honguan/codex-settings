@@ -34,7 +34,7 @@ function New-InstallationChangePlan {
     $fullValidation = $Force -or $ForceValidation -or $previousMissing
     $validationLevel = if ($fullValidation) { 'Full' } elseif ($changedPaths.Count -eq 0 -and -not $usageToolsChanged) { 'Fast' } else { 'ChangedOnly' }
     $targetChanged = @($Results | Where-Object { $_.Summary.Created -gt 0 -or $_.Summary.Updated -gt 0 }).Count -gt 0
-    $runHookTrust = $fullValidation -or $hooksChanged
+    $runHookTrust = $fullValidation -or $hooksChanged -or $configChanged
     $runHookValidation = $fullValidation -or $hooksChanged
     $runConfigValidation = $fullValidation -or $configChanged
     $runUsageRuntimeValidation = $fullValidation -or $externalPackageChanged

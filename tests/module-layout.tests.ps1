@@ -85,6 +85,8 @@ foreach ($commandName in @(
     'Read-CodexSettingsState',
     'Write-CodexSettingsState',
     'Set-Context7EnvironmentState',
+    'Get-Context7McpTransportState',
+    'Merge-Context7McpTemplate',
     'Save-InstallationManifest',
     'Invoke-Installer'
 )) {
