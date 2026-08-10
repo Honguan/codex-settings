@@ -59,6 +59,7 @@ function Uninstall-ManagedTarget {
     $skippedCount = 0
     $remainingEntries = New-Object 'System.Collections.Generic.List[object]'
     $ownsWindowsNotifications = $null -ne $manifest.Community -and $null -ne $manifest.Community.windowsUsageNotifications -and ([bool]$manifest.Community.windowsUsageNotifications.Selected -or [bool]$manifest.Community.windowsUsageNotifications.managedByInstaller)
+    $ownsLongRunningAsyncWait = $null -ne $manifest.OtherSettings -and $null -ne $manifest.OtherSettings.longRunningAsyncWait -and [bool]$manifest.OtherSettings.longRunningAsyncWait.managedBlockPresent
     $notificationFingerprints = if ($ownsWindowsNotifications) { @(Get-ManifestManagedHookFingerprints -Manifest $manifest -Kind Notification) } else { @() }
 
     try {
@@ -128,6 +129,20 @@ function Uninstall-ManagedTarget {
 
             Remove-Item -LiteralPath $managedPath -Force
             $removedCount++
+        }
+
+        if ($ownsLongRunningAsyncWait) {
+            $agentsPath = Join-Path $TargetRoot 'AGENTS.md'
+            if (Test-Path -LiteralPath $agentsPath -PathType Leaf) {
+                $state = Get-TextFileState -Path $agentsPath
+                $template = Get-LongRunningAsyncWaitPolicyTemplate -SourceRoot $SourceRoot
+                $newContent = Set-LongRunningAsyncWaitPolicy -Content $state.Content -ManagedContent $template -Action Remove -NewLine $state.NewLine
+                if ($newContent -ne $state.Content) {
+                    Save-TransactionFile -Transaction $transaction -Path $agentsPath
+                    if ([string]::IsNullOrWhiteSpace($newContent)) { Remove-Item -LiteralPath $agentsPath -Force; $removedCount++ }
+                    else { Write-TextFileState -Path $agentsPath -Content ($newContent.TrimEnd() + $state.NewLine) -Encoding $state.Encoding; $updatedCount++ }
+                }
+            }
         }
 
         if ($ownsWindowsNotifications) {

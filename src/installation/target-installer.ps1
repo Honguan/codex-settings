@@ -84,6 +84,17 @@ function Invoke-TargetInstallation($Target, $Transaction, [switch]$Force, $Previ
                 $desiredContent = Merge-WindowsNotificationCommandConfig -Content $desiredContent -Root $Target.Root -NewLine $state.NewLine
             }
         }
+        if ($Target.Mode -eq 'Global' -and $relative.Replace('\', '/') -eq 'AGENTS.md') {
+            $policyTemplate = Get-LongRunningAsyncWaitPolicyTemplate -SourceRoot $Target.SourceRoot
+            $policyState = Get-LongRunningAsyncWaitPolicyState -Content $state.Content -ManagedContent $policyTemplate
+            if ($Target.LongRunningAsyncWaitAction -in @('Install', 'Remove')) {
+                $desiredContent = Set-LongRunningAsyncWaitPolicy -Content $desiredContent -ManagedContent $policyTemplate -Action $Target.LongRunningAsyncWaitAction -NewLine $state.NewLine
+            } elseif ($policyState.ManagedBlockPresent) {
+                $desiredContent = Set-LongRunningAsyncWaitPolicy -Content $desiredContent -ManagedContent $policyState.Content -Action Install -NewLine $state.NewLine
+            } elseif ($policyState.Status -eq 'Conflict' -and $Force) {
+                $desiredContent = $state.Content
+            }
+        }
 
         $changed = -not $state.Exists -or $state.Content -ne $desiredContent
         if ($changed) {

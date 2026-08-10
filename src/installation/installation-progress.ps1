@@ -354,7 +354,7 @@ function Get-InstallResultSymbol([string]$Status, $Glyphs) {
         '^(?:Installed|Created|Enabled)$' { return '+' }
         '^Updated$' { return '~' }
         '^(?:Existing|Unchanged|Current|Validated)$' { return '=' }
-        '^(?:Skipped|SkippedByUser|SkippedUnchanged|NotConfigured)$' { return '-' }
+        '^(?:Skipped|SkippedByUser|SkippedUnchanged|NotConfigured|Removed)$' { return '-' }
         '^ActionRequired$' { return '!' }
         '^Failed$' { return $(if ($null -ne $Glyphs) { $Glyphs.Failure } else { '✗' }) }
         default { return '=' }
@@ -406,11 +406,11 @@ function Write-InstallResult {
     }
     if (@($Components).Count -gt 0) {
         Write-Host ''
-        Write-Host '外部元件'
-        foreach ($category in @('Personal', 'Community')) {
+        Write-Host '設定與元件'
+        foreach ($category in @('Personal', 'Other Settings', 'Community')) {
             $categoryComponents = @($Components | Where-Object { $_.Category -eq $category -or ($category -eq 'Community' -and [string]::IsNullOrWhiteSpace([string]$_.Category)) })
             if ($categoryComponents.Count -eq 0) { continue }
-            Write-InstallConsoleLine -Progress $Progress -Text $(if ($category -eq 'Personal') { '個人 Codex Settings' } else { '社區／開源元件' })
+            Write-InstallConsoleLine -Progress $Progress -Text $(if ($category -eq 'Personal') { '個人 Codex Settings' } elseif ($category -eq 'Other Settings') { 'Other Settings' } else { '社區／開源元件' })
             foreach ($component in $categoryComponents) {
                 $componentResult = [string]$component.Result
                 if ($componentResult -match '[\r\n]') {
@@ -481,12 +481,14 @@ function Write-InstallationPlan {
         [switch]$InstallRequestExecutionOptimizer,
         [switch]$InstallMattPocockSkills,
         [switch]$EnableDefaultModeRequestUserInput,
+        [ValidateSet('Install', 'Remove', 'Skip')][string]$LongRunningAsyncWaitAction = 'Install',
         [switch]$SkipContext7Key,
         [AllowNull()]$SerenaDashboard = $null
     )
 
     $ccusageStatus = if ($null -eq $CcusageBefore) { '待偵測' } elseif ([bool]$CcusageBefore.Installed) { "已存在，沿用 $($CcusageBefore.Version)" } else { '未安裝，將安裝' }
-    Write-InstallLog -Progress $Progress -Message ("PLAN environment={0}; style={1}; notifications={2}; targets={3}; skills={4}; defaultModeRequestUserInput={5}" -f $Context.DevelopmentEnvironment, $Context.InstallStyle, $Context.InstallWindowsNotifications, $Targets.Count, ($InstallRequestExecutionOptimizer -or $InstallMattPocockSkills), $EnableDefaultModeRequestUserInput)
+    Write-InstallLog -Progress $Progress -Message ("PLAN environment={0}; style={1}; notifications={2}; targets={3}; skills={4}; defaultModeRequestUserInput={5}; longRunningAsyncWait={6}" -f $Context.DevelopmentEnvironment, $Context.InstallStyle, $Context.InstallWindowsNotifications, $Targets.Count, ($InstallRequestExecutionOptimizer -or $InstallMattPocockSkills), $EnableDefaultModeRequestUserInput, $LongRunningAsyncWaitAction)
+    Write-InstallLog -Progress $Progress -Message "PLAN Other Settings; Long-running async wait policy=$LongRunningAsyncWaitAction"
     Write-InstallLog -Progress $Progress -Message ("PLAN targetRoots={0}; ccusage={1}; context7={2}" -f ((@($Targets | ForEach-Object { $_.Root }) -join ',')), $ccusageStatus, $(if ($SkipContext7Key) { 'skipped-by-user' } else { 'configure-or-existing' }))
     if ($null -ne $SerenaDashboard -and [bool]$SerenaDashboard.Selected) {
         $dashboardAction = switch ([string]$SerenaDashboard.DashboardConfigStatus) { 'Disabled' { 'Already configured' }; 'Invalid' { 'ConfigurationConflict' }; default { 'Configure: do not auto-open' } }

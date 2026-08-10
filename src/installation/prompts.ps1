@@ -131,6 +131,37 @@ function Select-OptionalDefaultModeRequestUserInput {
     return Read-YesNoChoice -Prompt '要啟用嗎？[y/N]' -Default $false
 }
 
+function Select-LongRunningAsyncWaitPolicy([string]$Root, [string]$SourceRoot) {
+    Write-Host ''
+    Write-Host 'Other Settings'
+    Write-Host ''
+    Write-Host 'Long-running async wait / Token-saving policy'
+    Write-Host '減少長時間非同步工作尚未完成時的不必要模型喚醒。'
+    Write-Host '會在全域 AGENTS.md 加入獨立受管理區塊。'
+    $content = if (Test-Path -LiteralPath (Join-Path $Root 'AGENTS.md') -PathType Leaf) { [IO.File]::ReadAllText((Join-Path $Root 'AGENTS.md')) } else { '' }
+    $template = Get-LongRunningAsyncWaitPolicyTemplate -SourceRoot $SourceRoot
+    $state = Get-LongRunningAsyncWaitPolicyState -Content $content -ManagedContent $template
+    if ($state.Status -eq 'NotInstalled') {
+        Write-Host '尚未安裝。'
+        return $(if (Read-YesNoChoice -Prompt '要安裝嗎？[Y/n]' -Default $true) { 'Install' } else { 'Skip' })
+    }
+    if ($state.Status -eq 'Conflict') {
+        Write-Host '偵測到不完整或重複的 managed block；本次不修改。'
+        return 'Skip'
+    }
+    Write-Host $(if ($state.Status -eq 'InstalledCurrent') { '已安裝目前版本。' } else { '已安裝舊版，可更新。' })
+    Write-Host '[1] 保留／更新至目前版本（建議）'
+    Write-Host '[2] 移除此設定'
+    Write-Host '[3] 本次不變更'
+    switch (Read-Host '請選擇 [1]') {
+        '' { return 'Install' }
+        '1' { return 'Install' }
+        '2' { return 'Remove' }
+        '3' { return 'Skip' }
+        default { throw 'Long-running async wait 設定選項無效。' }
+    }
+}
+
 function Test-WindowsNotificationsInstalled([string]$Root = (Join-Path $HOME '.codex')) {
     $configPath = Join-Path $Root 'config.toml'
     if ((Test-Path -LiteralPath (Join-Path $Root 'hooks\show-codex-notification.ps1') -PathType Leaf) -and (Test-Path -LiteralPath $configPath -PathType Leaf) -and (Test-WindowsNotificationCommandConfig -Content ([IO.File]::ReadAllText($configPath)) -Root $Root)) { return $true }

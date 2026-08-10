@@ -35,7 +35,7 @@ try {
     }
 
     $target = New-InstallTarget -Id 'contract-target' -Mode Global -Root $testRoot -TemplateRoot $script:ScriptRoot -DevelopmentEnvironment Git -SourceRoot $script:ScriptRoot
-    foreach ($propertyName in @('schemaVersion', 'id', 'mode', 'root', 'templateRoot', 'environmentTemplateRoot', 'developmentEnvironment', 'cwd', 'installWindowsNotifications', 'enableDefaultModeRequestUserInput')) {
+    foreach ($propertyName in @('schemaVersion', 'id', 'mode', 'root', 'templateRoot', 'environmentTemplateRoot', 'developmentEnvironment', 'cwd', 'installWindowsNotifications', 'enableDefaultModeRequestUserInput', 'longRunningAsyncWaitAction')) {
         if ($target.PSObject.Properties.Name -notcontains $propertyName) { throw "InstallTarget 缺少欄位：$propertyName" }
     }
     if (-not (Test-CodexSettingsContract -InputObject $target -Kind InstallTarget)) { throw 'InstallTarget contract failed.' }

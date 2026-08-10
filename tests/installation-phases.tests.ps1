@@ -30,6 +30,7 @@ try {
     foreach ($path in @('windowsUsageNotifications', 'mattpocockSkills', 'ponytail', 'codexOrchestration', 'serena')) {
         if ($manifest.community.PSObject.Properties.Name -notcontains $path) { throw "manifest 缺少 Community ownership：$path" }
     }
+    if ($manifest.otherSettings.longRunningAsyncWait.Category -ne 'Other Settings' -or @($manifest.otherSettings.longRunningAsyncWait.ManagedPaths) -notcontains 'AGENTS.md') { throw 'manifest 缺少獨立的 async-wait Other Settings ownership。' }
     if ($manifest.community.PSObject.Properties.Name -contains 'windowsStatusNotifications' -or $manifest.community.PSObject.Properties.Name -contains 'tokenCostNotifications') {
         throw 'manifest 不得拆分 Windows status 與 Token / Cost notification ownership。'
     }

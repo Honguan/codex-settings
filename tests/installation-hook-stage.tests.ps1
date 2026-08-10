@@ -78,6 +78,9 @@ try {
     & $installPath -Mode Global -DevelopmentEnvironment Git -InstallStyle Merge -InstallWindowsNotifications $true -SkipContext7Key -SkipCcusageInstall -NoPause
     Assert-LogContains -Log (Get-LatestInstallLog) -Markers @('STEP END Hooks: Hook 未變更，略過重新 trust', 'STEP END Notifications: 腳本、Hook 與使用量工具未變更', 'STEP END Final: Manifest 與交易驗證通過')
 
+    $policyRemovalOutput = (& $installPath -Mode Global -DevelopmentEnvironment Git -InstallStyle Merge -InstallWindowsNotifications $true -LongRunningAsyncWaitAction Remove -SkipContext7Key -SkipCcusageInstall -NoPause 6>&1 | Out-String)
+    if ($policyRemovalOutput -notmatch 'Long-running async wait policy\s+Removed' -or [IO.File]::ReadAllText((Join-Path $HOME '.codex\AGENTS.md')) -match 'CODEX-SETTINGS:OTHER:LONG-RUNNING-ASYNC-WAIT') { throw 'Global installer did not report and apply independent async-wait removal.' }
+
     $manifestPath = Join-Path $HOME '.codex\.codex-settings-manifest.json'
     $legacyManifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
     $legacyManifest.Version = 5
@@ -121,6 +124,12 @@ try {
     $latestTransaction = Get-ChildItem -LiteralPath (Join-Path $env:LOCALAPPDATA 'CodexSettingsBackup') -Directory | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
     $rollbackMetadata = Get-Content -LiteralPath (Join-Path $latestTransaction.FullName 'backup-meta.json') -Raw | ConvertFrom-Json
     if ([string]$rollbackMetadata.Status -ne 'RolledBack') { throw 'Failed Hook trust transaction was not rolled back.' }
+
+    $agentsPath = Join-Path $HOME '.codex\AGENTS.md'
+    [IO.File]::AppendAllText($agentsPath, "`r`n# User content after install`r`n`r`n- keep me`r`n", [Text.UTF8Encoding]::new($false))
+    & (Join-Path $repositoryRoot 'src\commands\uninstall-settings.ps1') -Mode Global -Force
+    $agentsAfterUninstall = [IO.File]::ReadAllText($agentsPath)
+    if ($agentsAfterUninstall -match 'CODEX-SETTINGS:OTHER:LONG-RUNNING-ASYNC-WAIT' -or -not $agentsAfterUninstall.Contains('keep me')) { throw 'Global uninstall did not remove only the async-wait managed block.' }
 
     Write-Host 'Installation Hook stage Git/CVS Merge/Replace, legacy manifest, diagnostics, and rollback tests passed.'
 } catch {

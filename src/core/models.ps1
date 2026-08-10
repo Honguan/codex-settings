@@ -169,6 +169,7 @@ function New-InstallTarget {
         [bool]$InstallWindowsNotifications = $false,
         [bool]$ManageWindowsNotifications = $true,
         [bool]$EnableDefaultModeRequestUserInput = $false,
+        [ValidateSet('Install', 'Remove', 'Skip')][string]$LongRunningAsyncWaitAction = 'Skip',
         [AllowEmptyString()][string]$SourceRoot = ''
     )
 
@@ -184,6 +185,7 @@ function New-InstallTarget {
         installWindowsNotifications = [bool]$InstallWindowsNotifications
         manageWindowsNotifications = [bool]$ManageWindowsNotifications
         enableDefaultModeRequestUserInput = [bool]$EnableDefaultModeRequestUserInput
+        longRunningAsyncWaitAction = $LongRunningAsyncWaitAction
         sourceRoot = if ([string]::IsNullOrWhiteSpace($SourceRoot)) { $null } else { $SourceRoot }
     }
 }

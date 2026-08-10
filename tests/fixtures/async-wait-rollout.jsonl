@@ -1,0 +1,9 @@
+{"phase":"before","tool":"functions.wait","yield_time_ms":10000,"result":"still-running","modelResumed":true}
+{"phase":"before","tool":"functions.wait","yield_time_ms":10000,"result":"still-running","modelResumed":true}
+{"phase":"before","tool":"functions.wait","yield_time_ms":10000,"result":"still-running","modelResumed":true}
+{"phase":"after","tool":"functions.wait","yield_time_ms":180000,"actual_elapsed_ms":24000,"result":"completed","modelResumed":true}
+{"phase":"after","tool":"write_stdin","chars":"","yield_time_ms":300000,"actual_elapsed_ms":12000,"result":"completed","modelResumed":true}
+{"phase":"after","tool":"functions.exec","outer_yield_time_ms":210000,"nested_wait_ms":180000,"result":"completed"}
+{"phase":"after","tool":"write_stdin","chars":"y\n","yield_time_ms":1000,"interactive":true,"result":"accepted"}
+{"phase":"after","tool":"shell_command","yield_time_ms":1000,"policyApplied":false,"result":"completed"}
+{"phase":"evidence","source":"sanitized-local-rollout","before_wait_calls":114,"before_below_180000":114,"after_wait_calls":2,"after_below_180000":0,"wait_requested_ms":180000,"wait_actual_elapsed_ms":15500,"outer_exec_requested_ms":210000,"outer_exec_actual_elapsed_ms":132500,"workload_wall_clock_ms":132500,"token_comparison":"not-comparable"}

@@ -85,7 +85,7 @@ try {
         Write-InstallationSummary -InstallStyle Merge -DevelopmentEnvironment Git -Results $installationResults -Ccusage $ccusage -CcusageBefore $ccusageBefore -HookTrust $hookTrust -TransactionRoot 'C:\backup' -InstallWindowsNotifications $true -Progress $runnerProgress -NotificationStatus '測試通知已顯示' -SkippedCount 0 -SkipContext7Key $true -InstallMattPocockSkills $false -InstallRequestExecutionOptimizer $false -EnableDefaultModeRequestUserInput $true
     } 6>&1 | Out-String)
     if (@([regex]::Matches($runnerOutput, '(?m)^安裝完成')).Count -ne 1) { throw 'runner 不應先輸出舊摘要再輸出第二份最終摘要。' }
-    foreach ($expected in @('config.toml', 'hooks.json', '個人 Codex Settings', '社區／開源元件', 'Codex Settings', 'MCP / Context7', 'request-execution-optimizer', 'mattpocock/skills', 'request_user_input feature', 'Windows 開發狀態與使用量通知')) {
+    foreach ($expected in @('config.toml', 'hooks.json', '個人 Codex Settings', 'Other Settings', 'Long-running async wait policy', '社區／開源元件', 'Codex Settings', 'MCP / Context7', 'request-execution-optimizer', 'mattpocock/skills', 'request_user_input feature', 'Windows 開發狀態與使用量通知')) {
         if (-not $runnerOutput.Contains($expected)) { throw "runner 最終摘要缺少處理結果：$expected" }
     }
     foreach ($expected in @('PersonalResult: SUCCESS', 'CommunityResult: SUCCESS', 'OverallResult: SUCCESS', 'Personal', 'Community')) {
@@ -99,6 +99,7 @@ try {
     if (-not [string]::IsNullOrWhiteSpace($planOutput)) { throw '安裝計畫不得在互動執行期間繞過單一 progress renderer 輸出歷史內容。' }
     $planLog = Get-Content -LiteralPath $planProgress.LogPath -Raw
     if ($planLog -notmatch 'PLAN environment=Git; style=Merge; notifications=True; targets=1') { throw '精簡 console 後 installer log 仍須保留完整 PLAN。' }
+    if ($planLog -notmatch 'PLAN Other Settings; Long-running async wait policy=Install') { throw '安裝計畫未獨立列出 async-wait Other Setting。' }
 
     $lineProgress = Start-InstallProgress -Steps @(New-InstallationProgressSteps) -Root (Join-Path $testRoot 'line-mode') -RendererMode Line
     $lineOutput = (& {
