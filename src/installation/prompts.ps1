@@ -71,11 +71,12 @@ function Select-DevelopmentEnvironment([ValidateSet('Git', 'CVS')][string]$Defau
     }
 }
 
-function Select-OptionalComponentAction([string]$Name, [string]$State) {
+function Select-OptionalComponentAction([string]$Name, [string]$State, [bool]$DefaultInstall = $true) {
     if ($State -in @('TrueUnmanagedConflict', 'MalformedUserOwnedState', 'Conflict', 'Unknown')) { throw "$Name 的安裝狀態無法安全判定，請先排除衝突。" }
     if ($State -eq 'NotInstalled') {
         Write-Host "$Name 尚未安裝。"
-        $selection = if (Read-YesNoChoice -Prompt '要安裝嗎？[Y/n]' -Default $true) { 'Yes' } else { 'No' }
+        $prompt = if ($DefaultInstall) { '要安裝嗎？[Y/n]' } else { '要安裝嗎？[y/N]' }
+        $selection = if (Read-YesNoChoice -Prompt $prompt -Default $DefaultInstall) { 'Yes' } else { 'No' }
     } else {
         Write-Host "$Name 已安裝。"
         Write-Host '選擇 No 會解除安裝此元件；只移除安裝器管理的內容。'
@@ -127,9 +128,9 @@ function Select-OptionalMattPocockSkills([bool]$AlreadyInstalled = (Test-MattPoc
 
 function Select-OptionalDefaultModeRequestUserInput([bool]$AlreadyInstalled = $false) {
     Write-Host ''
-    Write-Host '選用功能：預設啟用 request_user_input'
+    Write-Host '選用功能：request_user_input（預設關閉）'
     Write-Host '會在 config.toml 的 [features] 加入 default_mode_request_user_input = true。'
-    return Select-OptionalComponentAction -Name 'request_user_input' -State (Get-OptionalComponentState -Installed $AlreadyInstalled)
+    return Select-OptionalComponentAction -Name 'request_user_input' -State (Get-OptionalComponentState -Installed $AlreadyInstalled) -DefaultInstall $false
 }
 
 function Select-LongRunningAsyncWaitPolicy([string]$Root, [string]$SourceRoot) {

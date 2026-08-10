@@ -29,6 +29,8 @@ function Read-Host([string]$Prompt) { if ($script:answers.Count) { return $scrip
 if ((Select-OptionalComponentAction -Name Test -State NotInstalled) -ne 'Install') { throw 'First-install Enter did not install.' }
 $script:answers.Enqueue('y'); if ((Select-OptionalComponentAction -Name Test -State NotInstalled) -ne 'Install') { throw 'First-install Yes did not install.' }
 $script:answers.Enqueue('n'); if ((Select-OptionalComponentAction -Name Test -State NotInstalled) -ne 'SkipNotInstalled') { throw 'First-install No did not skip.' }
+if ((Select-OptionalDefaultModeRequestUserInput -AlreadyInstalled:$false) -ne 'SkipNotInstalled') { throw 'request_user_input first-install Enter did not skip.' }
+$script:answers.Enqueue('y'); if ((Select-OptionalDefaultModeRequestUserInput -AlreadyInstalled:$false) -ne 'Install') { throw 'request_user_input first-install Yes did not install.' }
 foreach ($state in @('InstalledCurrent', 'InstalledUpdateAvailable', 'InstalledNeedsMigration', 'InstalledNeedsRepair', 'ManagedPartialState', 'ManagedDuplicateState')) {
     $expected = Resolve-OptionalComponentAction -State $state
     if ((Select-OptionalComponentAction -Name Test -State $state) -ne $expected) { throw "$state Enter did not select $expected." }
