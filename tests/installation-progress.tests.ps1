@@ -6,12 +6,12 @@ $script:ScriptRoot = Join-Path $repositoryRoot 'src'
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('codex-settings-installation-progress-' + [guid]::NewGuid().ToString('N'))
 try {
     $baseSteps = @(New-InstallationProgressSteps)
-    if ($baseSteps.Id -contains 'Context7' -or $baseSteps.Id -contains 'Skills' -or $baseSteps.Id -contains 'CodexOrchestration' -or $baseSteps.Id -contains 'Serena' -or $baseSteps.Id -contains 'Notifications') {
+    if ($baseSteps.Id -contains 'Skills' -or $baseSteps.Id -contains 'CodexOrchestration' -or $baseSteps.Id -contains 'Serena' -or $baseSteps.Id -contains 'Notifications') {
         throw '未選用的選配階段不應佔用安裝進度。'
     }
 
-    $fullSteps = @(New-InstallationProgressSteps -TargetCount 2 -IncludeContext7 -IncludeSkills -IncludeCodexOrchestration -IncludeSerena -IncludeNotifications)
-    foreach ($requiredId in @('Prerequisites', 'Plan', 'Lock', 'Backup', 'Targets', 'Hooks', 'Context7', 'PersonalCheckpoint', 'Skills', 'CodexOrchestration', 'Serena', 'Notifications', 'Final')) {
+    $fullSteps = @(New-InstallationProgressSteps -TargetCount 2 -IncludeSkills -IncludeCodexOrchestration -IncludeSerena -IncludeNotifications)
+    foreach ($requiredId in @('Prerequisites', 'Plan', 'Lock', 'Backup', 'Targets', 'Hooks', 'PersonalCheckpoint', 'Skills', 'CodexOrchestration', 'Serena', 'Notifications', 'Final')) {
         if ($fullSteps.Id -notcontains $requiredId) { throw "缺少安裝進度階段：$requiredId" }
     }
     if (@($fullSteps | Where-Object Id -eq 'Targets')[0].TargetCount -ne 2) { throw '安裝進度未記錄目標數量。' }
@@ -64,11 +64,10 @@ try {
     $components = @(
         [pscustomobject]@{ Name = 'ccusage'; Status = 'Existing'; Result = '20.0.19' },
         [pscustomobject]@{ Name = 'ccsessions'; Status = 'Updated'; Result = 'Profile 已更新' },
-        [pscustomobject]@{ Name = 'Context7'; Status = 'SkippedByUser'; Result = '使用者略過' },
         [pscustomobject]@{ Name = 'Windows notifications'; Status = 'Unchanged'; Result = 'Hook 未變更' }
     )
     $contentOutput = (& { Write-InstallResult -Progress $interactiveProgress -Status SUCCESS -Summary @{ Installed = 1; Updated = 1; Unchanged = 1; Skipped = 1 } -Results $installationResults -Components $components } 6>&1 | Out-String)
-    foreach ($expected in @('[=] config.toml', '[~] hooks.json', '[+] hooks\show-codex-notification.ps1', '[-] optional.txt', '[=] ccusage', '[~] ccsessions', '[-] Context7', '[=] Windows notifications')) {
+    foreach ($expected in @('[=] config.toml', '[~] hooks.json', '[+] hooks\show-codex-notification.ps1', '[-] optional.txt', '[=] ccusage', '[~] ccsessions', '[=] Windows notifications')) {
         if (-not $contentOutput.Contains($expected)) { throw "最終摘要缺少安裝內容：$expected" }
     }
     $staleSummaryResult = [pscustomobject]@{ Files = $fileResults; Summary = [pscustomobject]@{ Created = 4; Installed = 4; Updated = 0; Unchanged = 0; Failed = 0 } }
@@ -82,10 +81,10 @@ try {
     $ccusage = [pscustomobject]@{ PackageInstalledNow = $false; CommandsUpdated = $true; PackageAfter = [pscustomobject]@{ Version = '20.0.19' } }
     $hookTrust = [pscustomobject]@{ Skipped = $false; TrustedCount = 3; UpdatedCount = 1 }
     $runnerOutput = (& {
-        Write-InstallationSummary -InstallStyle Merge -DevelopmentEnvironment Git -Results $installationResults -Ccusage $ccusage -CcusageBefore $ccusageBefore -HookTrust $hookTrust -TransactionRoot 'C:\backup' -InstallWindowsNotifications $true -Progress $runnerProgress -NotificationStatus '測試通知已顯示' -SkippedCount 0 -SkipContext7Key $true -InstallMattPocockSkills $false -InstallRequestExecutionOptimizer $false -EnableDefaultModeRequestUserInput $true
+        Write-InstallationSummary -InstallStyle Merge -DevelopmentEnvironment Git -Results $installationResults -Ccusage $ccusage -CcusageBefore $ccusageBefore -HookTrust $hookTrust -TransactionRoot 'C:\backup' -InstallWindowsNotifications $true -Progress $runnerProgress -NotificationStatus '測試通知已顯示' -SkippedCount 0 -InstallMattPocockSkills $false -InstallRequestExecutionOptimizer $false -EnableDefaultModeRequestUserInput $true
     } 6>&1 | Out-String)
     if (@([regex]::Matches($runnerOutput, '(?m)^安裝完成')).Count -ne 1) { throw 'runner 不應先輸出舊摘要再輸出第二份最終摘要。' }
-    foreach ($expected in @('config.toml', 'hooks.json', '個人 Codex Settings', 'Other Settings', 'Long-running async wait policy', '社區／開源元件', 'Codex Settings', 'MCP / Context7', 'request-execution-optimizer', 'mattpocock/skills', 'request_user_input feature', 'Windows 開發狀態與使用量通知')) {
+    foreach ($expected in @('config.toml', 'hooks.json', '個人 Codex Settings', 'Other Settings', 'Long-running async wait policy', '社區／開源元件', 'Codex Settings', 'request-execution-optimizer', 'mattpocock/skills', 'request_user_input feature', 'Windows 開發狀態與使用量通知')) {
         if (-not $runnerOutput.Contains($expected)) { throw "runner 最終摘要缺少處理結果：$expected" }
     }
     foreach ($expected in @('PersonalResult: SUCCESS', 'CommunityResult: SUCCESS', 'OverallResult: SUCCESS', 'Personal', 'Community')) {
@@ -95,7 +94,7 @@ try {
     $planProgress = Start-InstallProgress -Steps @(New-InstallationProgressSteps) -Root (Join-Path $testRoot 'plan-output') -RendererMode Interactive
     $planContext = [pscustomobject]@{ DevelopmentEnvironment = 'Git'; InstallStyle = 'Merge'; GlobalRoot = 'C:\Users\tester\.codex'; InstallWindowsNotifications = $true }
     $planTargets = @([pscustomobject]@{ Mode = 'Global'; Root = $planContext.GlobalRoot })
-    $planOutput = (& { Write-InstallationPlan -Progress $planProgress -Context $planContext -Targets $planTargets -CcusageBefore $ccusageBefore -SkipContext7Key } 6>&1 | Out-String)
+    $planOutput = (& { Write-InstallationPlan -Progress $planProgress -Context $planContext -Targets $planTargets -CcusageBefore $ccusageBefore } 6>&1 | Out-String)
     if (-not [string]::IsNullOrWhiteSpace($planOutput)) { throw '安裝計畫不得在互動執行期間繞過單一 progress renderer 輸出歷史內容。' }
     $planLog = Get-Content -LiteralPath $planProgress.LogPath -Raw
     if ($planLog -notmatch 'PLAN environment=Git; style=Merge; notifications=True; targets=1') { throw '精簡 console 後 installer log 仍須保留完整 PLAN。' }
@@ -136,7 +135,7 @@ try {
     Complete-InstallStep -Progress $progress -Result '通過'
     Set-InstallProgress -Progress $progress -StepId 'Hooks' -Detail '測試錯誤診斷'
     try {
-        throw 'Hook trust failed with CONTEXT7_API_KEY=do-not-log-this-secret'
+        throw 'Hook trust failed with SERVICE_API_KEY=do-not-log-this-secret'
     } catch {
         Write-InstallErrorRecord -Progress $progress -ErrorRecord $_ -CurrentSubOperation 'HookTrust'
     }
@@ -152,7 +151,7 @@ try {
         'STEP END Plan',
         'ERROR CurrentStepId=Hooks; CurrentSubOperation=HookTrust',
         'ExceptionType=System.Management.Automation.RuntimeException',
-        'Message=Hook trust failed with CONTEXT7_API_KEY=<REDACTED>',
+        'Message=Hook trust failed with SERVICE_API_KEY=<REDACTED>',
         'FullyQualifiedErrorId=',
         'CategoryInfo=',
         'InvocationInfo.MyCommand=',

@@ -2,7 +2,6 @@
 param(
     [ValidateSet('Interactive', 'Global', 'Backup', 'Restore', 'Uninstall')]
     [string]$Mode = 'Interactive',
-    [switch]$SkipContext7Key,
     [switch]$SkipCcusageInstall,
     [switch]$InstallRequestExecutionOptimizer,
     [switch]$InstallMattPocockSkills,

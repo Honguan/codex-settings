@@ -78,13 +78,6 @@ function Select-OptionalGlobalSkill {
     return Select-OptionalComponentAction -Name 'request-execution-optimizer' -State (Get-OptionalComponentState -Installed $AlreadyInstalled)
 }
 
-function Select-OptionalContext7 {
-    $installed = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable('CONTEXT7_API_KEY', 'User'))
-    Write-Host ''
-    Write-Host '選用 MCP：Context7'
-    return Select-OptionalComponentAction -Name 'Context7' -State (Get-OptionalComponentState -Installed $installed)
-}
-
 function Select-OptionalComponentAction([string]$Name, [string]$State) {
     if ($State -in @('TrueUnmanagedConflict', 'MalformedUserOwnedState', 'Conflict', 'Unknown')) { throw "$Name 的安裝狀態無法安全判定，請先排除衝突。" }
     if ($State -eq 'NotInstalled') {

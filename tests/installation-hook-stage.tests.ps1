@@ -65,7 +65,7 @@ try {
         return ($hashes | ConvertTo-Json -Compress)
     }
 
-    & $installPath -Mode Global -DevelopmentEnvironment Git -InstallStyle Merge -InstallWindowsNotifications $true -SkipContext7Key -SkipCcusageInstall -NoPause
+    & $installPath -Mode Global -DevelopmentEnvironment Git -InstallStyle Merge -InstallWindowsNotifications $true -SkipCcusageInstall -NoPause
     $gitChangedLog = Get-LatestInstallLog
     Assert-LogContains -Log $gitChangedLog -Markers @(
         'HOOKS subOperation=ResolveGlobalResult',
@@ -101,7 +101,7 @@ try {
     Undo-FileTransaction -Transaction $migrationTransaction
     if ((Get-WindowsNotificationLifecycleState -Root $globalRoot).State -ne 'InstalledNeedsMigration') { throw 'Notification migration rollback did not restore the legacy state.' }
 
-    & $installPath -Mode Global -DevelopmentEnvironment Git -InstallStyle Merge -InstallWindowsNotifications $true -SkipContext7Key -SkipCcusageInstall -NoPause
+    & $installPath -Mode Global -DevelopmentEnvironment Git -InstallStyle Merge -InstallWindowsNotifications $true -SkipCcusageInstall -NoPause
     $migratedConfig = [IO.File]::ReadAllText($configPath)
     $migratedHooks = Get-Content -LiteralPath $hooksPath -Raw | ConvertFrom-Json
     $migratedHandlers = @($migratedHooks.hooks.PSObject.Properties | ForEach-Object { $_.Value } | ForEach-Object { $_.hooks })
@@ -111,10 +111,10 @@ try {
     if ($migrationManifest.Community.windowsUsageNotifications.DiscoveredState -ne 'InstalledNeedsMigration' -or $migrationManifest.Community.windowsUsageNotifications.Action -ne 'Update') { throw 'Legacy notification lifecycle state/action were not persisted.' }
     Assert-LogContains -Log (Get-LatestInstallLog) -Markers @('notificationLifecycleState=InstalledNeedsMigration', 'plannedNotificationAction=Update', 'validationPhase=PreCommunity', 'migrationPending=True', 'STEP END Notifications:')
 
-    & $installPath -Mode Global -DevelopmentEnvironment Git -InstallStyle Merge -InstallWindowsNotifications $true -SkipContext7Key -SkipCcusageInstall -NoPause
+    & $installPath -Mode Global -DevelopmentEnvironment Git -InstallStyle Merge -InstallWindowsNotifications $true -SkipCcusageInstall -NoPause
     Assert-LogContains -Log (Get-LatestInstallLog) -Markers @('STEP END Hooks: Hook 未變更，略過重新 trust', 'STEP END Notifications: 腳本、Hook 與使用量工具未變更', 'STEP END Final: Manifest 與交易驗證通過')
 
-    $policyRemovalOutput = (& $installPath -Mode Global -DevelopmentEnvironment Git -InstallStyle Merge -InstallWindowsNotifications $true -LongRunningAsyncWaitAction Uninstall -SkipContext7Key -SkipCcusageInstall -NoPause 6>&1 | Out-String)
+    $policyRemovalOutput = (& $installPath -Mode Global -DevelopmentEnvironment Git -InstallStyle Merge -InstallWindowsNotifications $true -LongRunningAsyncWaitAction Uninstall -SkipCcusageInstall -NoPause 6>&1 | Out-String)
     if ($policyRemovalOutput -notmatch 'Long-running async wait policy\s+Uninstalled' -or [IO.File]::ReadAllText((Join-Path $HOME '.codex\AGENTS.md')) -match 'CODEX-SETTINGS:OTHER:LONG-RUNNING-ASYNC-WAIT') { throw 'Global installer did not report and apply independent async-wait removal.' }
 
     $manifestPath = Join-Path $HOME '.codex\.codex-settings-manifest.json'
@@ -123,21 +123,21 @@ try {
     $legacyManifest.PSObject.Properties.Remove('ManagedHooks')
     [IO.File]::WriteAllText($manifestPath, ($legacyManifest | ConvertTo-Json -Depth 16), [Text.UTF8Encoding]::new($false))
 
-    & $installPath -Mode Global -DevelopmentEnvironment Git -InstallStyle Merge -InstallWindowsNotifications $true -SkipContext7Key -SkipCcusageInstall -NoPause
+    & $installPath -Mode Global -DevelopmentEnvironment Git -InstallStyle Merge -InstallWindowsNotifications $true -SkipCcusageInstall -NoPause
     $legacyUpgradeLog = Get-LatestInstallLog
     Assert-LogContains -Log $legacyUpgradeLog -Markers @('STEP END Notifications:', 'STEP END Final: Manifest 與交易驗證通過')
 
-    & $installPath -Mode Global -DevelopmentEnvironment CVS -InstallStyle Merge -InstallWindowsNotifications $true -SkipContext7Key -SkipCcusageInstall -NoPause
+    & $installPath -Mode Global -DevelopmentEnvironment CVS -InstallStyle Merge -InstallWindowsNotifications $true -SkipCcusageInstall -NoPause
     Assert-LogContains -Log (Get-LatestInstallLog) -Markers @('HOOKS subOperation=HookTrust', 'STEP END Hooks: 已驗證 3 個', 'STEP END Notifications:')
 
-    & $installPath -Mode Global -DevelopmentEnvironment CVS -InstallStyle Replace -InstallWindowsNotifications $true -SkipContext7Key -SkipCcusageInstall -NoPause
+    & $installPath -Mode Global -DevelopmentEnvironment CVS -InstallStyle Replace -InstallWindowsNotifications $true -SkipCcusageInstall -NoPause
     Assert-LogContains -Log (Get-LatestInstallLog) -Markers @('HOOKS subOperation=HookTrust', 'STEP END Final: Manifest 與交易驗證通過')
 
     $beforeFailureHashes = Get-ManagedStateHashes
     $env:CODEX_SETTINGS_APP_SERVER_TEST_COMMAND = Join-Path $PSScriptRoot 'fixtures\failing-app-server.ps1'
     $failureMessage = ''
     try {
-        & $installPath -Mode Global -DevelopmentEnvironment Git -InstallStyle Replace -InstallWindowsNotifications $true -SkipContext7Key -SkipCcusageInstall -NoPause
+        & $installPath -Mode Global -DevelopmentEnvironment Git -InstallStyle Replace -InstallWindowsNotifications $true -SkipCcusageInstall -NoPause
         throw 'Expected Hook trust failure did not occur.'
     } catch {
         $failureMessage = $_.Exception.Message

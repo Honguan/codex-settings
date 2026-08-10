@@ -11,14 +11,6 @@ $SourceRoot = Split-Path -Parent $ScriptRoot
 $BackupBase = Join-Path $env:LOCALAPPDATA 'CodexSettingsBackup'
 . (Join-Path $SourceRoot 'load-operations.ps1')
 
-function Get-Context7BackupState {
-    $value = [Environment]::GetEnvironmentVariable('CONTEXT7_API_KEY', 'User')
-    return [pscustomobject]@{
-        WasPresent = -not [string]::IsNullOrWhiteSpace($value)
-        ProtectedValue = if ([string]::IsNullOrWhiteSpace($value)) { $null } else { Protect-LocalSecret -Value $value }
-    }
-}
-
 function Uninstall-ManagedTarget {
     param(
         [Parameter(Mandatory = $true)][string]$TargetRoot,
@@ -34,15 +26,11 @@ function Uninstall-ManagedTarget {
     $backupRoot = Join-Path $BackupBase ((Get-Date -Format 'yyyyMMdd-HHmmss-fff') + "-uninstall-$TargetLabel")
     $transaction = New-FileTransaction -Root $backupRoot -Mode "Uninstall-$TargetLabel"
     $ccusageBefore = $null
-    $context7Before = $null
     $externalResults = [ordered]@{}
 
     if ($manifest.PSObject.Properties.Name -contains 'External' -and $null -ne $manifest.External) {
         if ($null -ne $manifest.External.Ccusage -and [bool]$manifest.External.Ccusage.Managed) {
             $ccusageBefore = Get-CcusageState
-        }
-        if ($null -ne $manifest.External.Context7 -and [bool]$manifest.External.Context7.CreatedByInstaller) {
-            $context7Before = Get-Context7BackupState
         }
     }
 
@@ -51,7 +39,6 @@ function Uninstall-ManagedTarget {
         Status = 'InProgress'
         TargetRoot = $TargetRoot
         CcusageBefore = $ccusageBefore
-        Context7Before = $context7Before
     }
 
     $removedCount = 0
@@ -202,11 +189,6 @@ function Uninstall-ManagedTarget {
                 $externalResults.Ccusage = if ($originalState.Installed) { "restored $($originalState.Version)" } else { 'uninstalled' }
             }
 
-            if ($null -ne $manifest.External.Context7 -and [bool]$manifest.External.Context7.CreatedByInstaller) {
-                [Environment]::SetEnvironmentVariable('CONTEXT7_API_KEY', $null, 'User')
-                [Environment]::SetEnvironmentVariable('CONTEXT7_API_KEY', $null, 'Process')
-                $externalResults.Context7 = 'removed installer-created user environment variable'
-            }
         }
 
         if ($remainingEntries.Count -eq 0) {
