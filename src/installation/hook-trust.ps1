@@ -21,7 +21,7 @@ function Read-CodexAppServerResponse($Process, [int]$RequestId, [int]$TimeoutMil
 
 function Set-CodexSettingsHookTrust([string]$Root, [string]$Cwd = (Get-Location).Path, [ValidateSet('All', 'Personal', 'Notification')][string]$Kind = 'All') {
     $hooksPath = [IO.Path]::GetFullPath((Join-Path $Root 'hooks.json'))
-    if (-not (Test-Path -LiteralPath $hooksPath -PathType Leaf)) { throw "找不到 Hook 設定：$hooksPath" }
+    if (-not (Test-Path -LiteralPath $hooksPath -PathType Leaf)) { return [pscustomobject]@{ TrustedCount = 0; UpdatedCount = 0; Verified = $true; Skipped = $true; Hooks = @() } }
     $configPath = Join-Path $Root 'config.toml'
     if (Test-Path -LiteralPath $configPath -PathType Leaf) {
         $configShape = Get-TomlShape -Content ([IO.File]::ReadAllText($configPath))

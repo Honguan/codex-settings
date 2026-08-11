@@ -41,6 +41,10 @@ try {
     foreach ($path in @('templates\core\hooks.json', 'templates\core\hooks\runtime-core.ps1', 'templates\core\hooks\show-codex-notification.ps1', 'templates\environments\cvs\hooks.json', 'templates\environments\cvs\hooks\mixed-line-ending-hook.ps1', 'templates\environments\cvs\hooks\preserve-line-endings.ps1')) {
         if (Test-Path -LiteralPath (Join-Path $script:ScriptRoot $path)) { throw "Active Hook template still exists: $path" }
     }
+    $emptyTrustRoot = Join-Path $testRoot 'empty-trust'
+    New-Item -ItemType Directory -Path $emptyTrustRoot -Force | Out-Null
+    $emptyTrust = Set-CodexSettingsHookTrust -Root $emptyTrustRoot -Kind Personal
+    if (-not $emptyTrust.Skipped -or -not $emptyTrust.Verified) { throw 'Hook trust did not skip a Hook-free installation.' }
     Write-Host 'Hook-free global environment tests passed.'
 } finally {
     if (Test-Path -LiteralPath $testRoot) { Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue }
