@@ -46,7 +46,6 @@ Stop immediately when the preview or result contains `C`, an error, an unexpecte
 
 - Start from the requested file, function, method, class, or line range.
 - Read only direct callers, callees, inheritance, and required dependencies.
-- Detect the file encoding and line endings before editing.
 - Preserve PHP 7.2 syntax compatibility and the existing application architecture.
 - Inspect existing SQL, bindings, indexes, and execution plans before changing query logic.
 - Prefer CVS read-only commands before any write operation.

@@ -1,15 +1,6 @@
 function Remove-GlobalLineEndingHooks([string]$Root, $Transaction) {
-    $hooksPath = Join-Path $Root 'hooks.json'
-    if (Test-Path -LiteralPath $hooksPath -PathType Leaf) {
-        $state = Get-TextFileState $hooksPath
-        $cleaned = Remove-ManagedLineEndingHooksJson -Content $state.Content
-        if ($cleaned -ne $state.Content) {
-            Save-TransactionFile -Transaction $Transaction -Path $hooksPath
-            Write-TextFileState -Path $hooksPath -Content $cleaned -Encoding $state.Encoding
-        }
-    }
-
-    foreach ($scriptName in @('crlf-updated-files.ps1', 'normalize-cvs-crlf.ps1', 'preserve-line-endings.ps1')) {
+    Remove-GlobalLineEndingHookEntries -Root $Root -Transaction $Transaction
+    foreach ($scriptName in @('mixed-line-ending-hook.ps1', 'crlf-updated-files.ps1', 'normalize-cvs-crlf.ps1', 'preserve-line-endings.ps1')) {
         $scriptPath = Join-Path $Root ("hooks\$scriptName")
         if (Test-Path -LiteralPath $scriptPath -PathType Leaf) {
             Save-TransactionFile -Transaction $Transaction -Path $scriptPath
@@ -210,6 +201,7 @@ function Get-HookConfigurationCounts([string]$HooksPath, [string[]]$Notification
         NotificationStop = 0
         LegacyNotificationStop = 0
         Token = 0
+        LineEndingSessionStart = 0
         LineEndingPreToolUse = 0
         LineEndingPostToolUse = 0
         LineEndingStop = 0
@@ -231,6 +223,7 @@ function Get-HookConfigurationCounts([string]$HooksPath, [string[]]$Notification
                 if ($property.Name -eq 'Stop' -and $isLegacyNotification) { $counts.LegacyNotificationStop++ }
                 if (Test-ManagedTokenHookEntry -Entry $entry -ManagedHookFingerprints $TokenFingerprints) { $counts.Token++ }
                 if (Test-ManagedLineEndingHookEntry -Entry $entry) {
+                    if ($property.Name -eq 'SessionStart') { $counts.LineEndingSessionStart++ }
                     if ($property.Name -eq 'PreToolUse') { $counts.LineEndingPreToolUse++ }
                     if ($property.Name -eq 'PostToolUse') { $counts.LineEndingPostToolUse++ }
                     if ($property.Name -eq 'Stop') { $counts.LineEndingStop++ }
@@ -323,6 +316,7 @@ function Assert-GlobalLineEndingHook([ValidateSet('Git', 'CVS')][string]$Develop
     $configContent = if (Test-Path -LiteralPath $configPath -PathType Leaf) { [IO.File]::ReadAllText($configPath) } else { '' }
     $notificationCommandConfigured = Test-WindowsNotificationCommandConfig -Content $configContent -Root $Root
     $globalCounts = Get-HookConfigurationCounts -HooksPath $hooksPath -NotificationFingerprints $ManagedNotificationFingerprints -TokenFingerprints $ManagedTokenFingerprints
+    $sessionStartHookCount = [int]$globalCounts.LineEndingSessionStart
     $trackHookCount = [int]$globalCounts.LineEndingPreToolUse
     $restoreHookCount = [int]$globalCounts.LineEndingPostToolUse
     $finalizeHookCount = [int]$globalCounts.LineEndingStop
@@ -330,7 +324,7 @@ function Assert-GlobalLineEndingHook([ValidateSet('Git', 'CVS')][string]$Develop
     $notificationQuestionHookCount = [int]$globalCounts.NotificationPreToolUse
     $notificationPermissionHookCount = [int]$globalCounts.NotificationPermissionRequest
     $notificationCompletedHookCount = [int]$globalCounts.NotificationStop
-    $preserveScriptCount = if (Test-Path -LiteralPath (Join-Path $Root 'hooks\preserve-line-endings.ps1') -PathType Leaf) { 1 } else { 0 }
+    $preserveScriptCount = @(@('mixed-line-ending-hook.ps1', 'preserve-line-endings.ps1') | Where-Object { Test-Path -LiteralPath (Join-Path $Root "hooks\$_") -PathType Leaf }).Count
     $notificationScriptCount = if (Test-Path -LiteralPath (Join-Path $Root 'hooks\show-codex-notification.ps1') -PathType Leaf) { 1 } else { 0 }
     $expectedNotificationCount = 0
     $notificationLifecycle = Get-WindowsNotificationLifecycleState -Root $Root -ManagedNotificationFingerprints $ManagedNotificationFingerprints
@@ -339,12 +333,13 @@ function Assert-GlobalLineEndingHook([ValidateSet('Git', 'CVS')][string]$Develop
     if ($notificationQuestionHookCount -ne 0 -or $notificationPermissionHookCount -ne 0 -or $notificationCompletedHookCount -ne 0 -or $notificationCommandConfigured -or $notificationScriptCount -ne 0) {
         throw "封存的 Windows 通知 Hook 仍存在：QuestionHookCount=$notificationQuestionHookCount PermissionHookCount=$notificationPermissionHookCount CompletedStopHookCount=$notificationCompletedHookCount NotificationCommandConfigured=$notificationCommandConfigured NotificationScriptCount=$notificationScriptCount"
     }
-    $projectCounts = [pscustomobject]@{ NotificationStop = 0; LegacyNotificationStop = 0; Token = 0; LineEndingPreToolUse = 0; LineEndingPostToolUse = 0; LineEndingStop = 0; LegacyCrlf = 0 }
+    $projectCounts = [pscustomobject]@{ NotificationStop = 0; LegacyNotificationStop = 0; Token = 0; LineEndingSessionStart = 0; LineEndingPreToolUse = 0; LineEndingPostToolUse = 0; LineEndingStop = 0; LegacyCrlf = 0 }
     if (-not [string]::IsNullOrWhiteSpace($ProjectRoot)) {
         $projectHooksPath = Join-Path $ProjectRoot '.codex\hooks.json'
         if (Test-Path -LiteralPath $projectHooksPath -PathType Leaf) { $projectCounts = Get-HookConfigurationCounts -HooksPath $projectHooksPath }
     }
     $projectNotificationStopHookCount = [int]$projectCounts.NotificationStop
+    $projectLineEndingSessionStartHookCount = [int]$projectCounts.LineEndingSessionStart
     $projectLineEndingPreToolUseHookCount = [int]$projectCounts.LineEndingPreToolUse
     $projectLineEndingPostToolUseHookCount = [int]$projectCounts.LineEndingPostToolUse
     $projectLineEndingStopHookCount = [int]$projectCounts.LineEndingStop
@@ -362,7 +357,7 @@ function Assert-GlobalLineEndingHook([ValidateSet('Git', 'CVS')][string]$Develop
         throw "仍包含受管理的舊 Hook：LegacyCompletedNotification=$legacyCompletedNotificationHookCount LegacyCrlf=$legacyCrlfHookCount LegacyToken=$legacyTokenHookCount"
     }
     if ($effectiveCompletedNotificationHookCount -ne 0) { throw "專案仍包含封存的 Windows 通知 Hook：Global=$notificationCompletedHookCount Project=$projectNotificationStopHookCount" }
-    if ($trackHookCount -ne 0 -or $restoreHookCount -ne 0 -or $finalizeHookCount -ne 0 -or $preserveScriptCount -ne 0 -or $legacyHookCount -ne 0 -or $projectLineEndingPreToolUseHookCount -ne 0 -or $projectLineEndingPostToolUseHookCount -ne 0 -or $projectLineEndingStopHookCount -ne 0) {
+    if ($sessionStartHookCount -ne 0 -or $trackHookCount -ne 0 -or $restoreHookCount -ne 0 -or $finalizeHookCount -ne 0 -or $preserveScriptCount -ne 0 -or $legacyHookCount -ne 0 -or $projectLineEndingSessionStartHookCount -ne 0 -or $projectLineEndingPreToolUseHookCount -ne 0 -or $projectLineEndingPostToolUseHookCount -ne 0 -or $projectLineEndingStopHookCount -ne 0) {
         throw '仍包含封存的 CVS 換行保護 Hook。'
     }
     return [pscustomobject]@{
@@ -376,15 +371,17 @@ function Assert-GlobalLineEndingHook([ValidateSet('Git', 'CVS')][string]$Develop
         StandaloneTokenUsageHookCount = $legacyTokenHookCount
         EffectiveCompletedNotificationHookCount = $effectiveCompletedNotificationHookCount
         ProjectLineEndingPreToolUseHookCount = $projectLineEndingPreToolUseHookCount
+        ProjectLineEndingSessionStartHookCount = $projectLineEndingSessionStartHookCount
         ProjectLineEndingPostToolUseHookCount = $projectLineEndingPostToolUseHookCount
         ProjectLineEndingStopHookCount = $projectLineEndingStopHookCount
         ProjectLineEndingFinalizeHookCount = $projectLineEndingStopHookCount
         GlobalLineEndingPreToolUseHookCount = $trackHookCount
+        GlobalLineEndingSessionStartHookCount = $sessionStartHookCount
         GlobalLineEndingPostToolUseHookCount = $restoreHookCount
         GlobalLineEndingStopHookCount = $finalizeHookCount
         LegacyCrlfHookCount = $legacyCrlfHookCount
         LegacyTokenHookCount = $legacyTokenHookCount
-        DuplicateManagedHookCount = [Math]::Max(0, $notificationQuestionHookCount - 1) + [Math]::Max(0, $notificationPermissionHookCount - 1) + [Math]::Max(0, $notificationCompletedHookCount - 1) + [Math]::Max(0, $trackHookCount - 1) + [Math]::Max(0, $restoreHookCount - 1) + [Math]::Max(0, $finalizeHookCount - 1)
+        DuplicateManagedHookCount = [Math]::Max(0, $notificationQuestionHookCount - 1) + [Math]::Max(0, $notificationPermissionHookCount - 1) + [Math]::Max(0, $notificationCompletedHookCount - 1) + $sessionStartHookCount + $trackHookCount + $restoreHookCount + $finalizeHookCount
         DetachedToastCleanup = $detachedToastCleanup
     }
 }

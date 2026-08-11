@@ -6,5 +6,5 @@
 - `tests/notification-token-usage.tests.ps1`：上述實作的歷史整合測試。
 - `request-execution-optimizer/`：已停止由安裝器部署的舊 Skill 範本。
 - `windows-notification/`：舊 Windows 狀態通知 Hook 與測試。
-- `cvs-line-endings/`：舊 CVS 換行正規化 Hook 與測試。
+- `cvs-line-endings/`：舊 CVS 換行正規化 Hook、`mixed-line-ending` Hook 與測試。
 - `hooks/`：舊共用 Hook runtime 與安裝整合測試。

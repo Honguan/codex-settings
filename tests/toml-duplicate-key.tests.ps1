@@ -34,8 +34,8 @@ try {
     $installed = [IO.File]::ReadAllText($configPath)
     $installedShape = Get-TomlShape -Content $installed
     if (@($installedShape.Duplicates).Count -gt 0) { throw "Global Merge duplicated an existing MCP section: $($installedShape.Duplicates -join ', ')" }
-    if ([regex]::Matches($installed, '(?m)^\[mcp_servers\.playwright\]\s*$').Count -ne 1 -or $installed -notmatch 'command = "user-playwright"' -or $installed -notmatch '(?m)^model = "gpt-5\.6-terra"\r?$') {
-        throw 'Global Merge did not preserve the existing MCP section while installing non-conflicting defaults.'
+    if ([regex]::Matches($installed, '(?m)^\[mcp_servers\.playwright\]\s*$').Count -ne 1 -or $installed -notmatch 'command = "user-playwright"' -or $installed -match '(?m)^model\s*=') {
+        throw 'Global Merge did not preserve the existing MCP section or remove the model preset.'
     }
 } finally {
     Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue

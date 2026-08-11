@@ -4,7 +4,7 @@ $script:ManagedNotificationId = 'codex-settings-notification'
 $script:ManagedNotificationVersion = 6
 $script:WindowsNotificationConfigStartMarker = '# >>> CODEX-SETTINGS:WINDOWS-NOTIFICATIONS:CONFIG >>>'
 $script:WindowsNotificationConfigEndMarker = '# <<< CODEX-SETTINGS:WINDOWS-NOTIFICATIONS:CONFIG <<<'
-$script:ManagedLineEndingHookSignaturePattern = '(?i)((?:crlf-updated-files|normalize-cvs-crlf|preserve-line-endings)\.ps1|Converting updated files? to CRLF|Normalizing updated files to CRLF|Finalizing CRLF normalization|CodexSettings CRLF (?:track|finalize)|Restoring original line endings)'
+$script:ManagedLineEndingHookSignaturePattern = '(?i)((?:mixed-line-ending-hook|crlf-updated-files|normalize-cvs-crlf|preserve-line-endings)\.ps1|Converting updated files? to CRLF|Normalizing updated files to CRLF|Finalizing CRLF normalization|CodexSettings CRLF (?:track|finalize)|Restoring original line endings)'
 $script:PreserveLineEndingHookSignaturePattern = '(?i)(preserve-line-endings\.ps1|Restoring original line endings)'
 $script:LegacyCrlfHookSignaturePattern = '(?i)((?:crlf-updated-files|normalize-cvs-crlf)\.ps1|Converting updated files? to CRLF|Normalizing updated files to CRLF|Finalizing CRLF normalization|CodexSettings CRLF (?:track|finalize))'
 $script:ManagedNotificationHookSignaturePattern = '(?i)(show-codex-notification\.ps1|CodexSettings Windows notification)'
@@ -148,7 +148,7 @@ function Get-CanonicalHookHandlerDescriptor {
             'Stop' { 'completed-toast' }
             default { 'notification-toast' }
         }
-    } elseif (($command + ' ' + $commandWindows) -match '(?i)preserve-line-endings\.ps1') {
+    } elseif (($command + ' ' + $commandWindows) -match '(?i)(?:mixed-line-ending-hook|preserve-line-endings)\.ps1') {
         $kind = 'line-ending'
         $managedId = $script:ManagedHookManifestId
         $handlerId = 'line-ending-' + $EventName.ToLowerInvariant()

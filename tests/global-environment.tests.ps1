@@ -18,6 +18,7 @@ try {
     $hooks = [ordered]@{ hooks = [ordered]@{
         SessionStart = @([ordered]@{ hooks = @([ordered]@{ type = 'command'; command = 'custom-session-start.ps1' }) })
         PreToolUse = @([ordered]@{ matcher = '*'; hooks = @([ordered]@{ type = 'command'; command = 'pwsh preserve-line-endings.ps1 -Mode Track' }) })
+        PostToolUse = @([ordered]@{ matcher = '*'; hooks = @([ordered]@{ type = 'command'; command = 'pwsh mixed-line-ending-hook.ps1 -Mode Fix' }) })
         PermissionRequest = @([ordered]@{ hooks = @([ordered]@{ type = 'command'; command = 'pwsh show-codex-notification.ps1 -Type PermissionRequired' }) })
         Stop = @([ordered]@{ hooks = @(
             [ordered]@{ type = 'command'; command = 'pwsh preserve-line-endings.ps1 -Mode Finalize' },
@@ -25,7 +26,7 @@ try {
         ) })
     } }
     Write-JsonFileAtomic -Path (Join-Path $globalRoot 'hooks.json') -Value $hooks -Depth 10
-    foreach ($name in @('preserve-line-endings.ps1', 'show-codex-notification.ps1')) { [IO.File]::WriteAllText((Join-Path $globalRoot "hooks\$name"), '# retired', [Text.UTF8Encoding]::new($false)) }
+    foreach ($name in @('mixed-line-ending-hook.ps1', 'preserve-line-endings.ps1', 'show-codex-notification.ps1')) { [IO.File]::WriteAllText((Join-Path $globalRoot "hooks\$name"), '# retired', [Text.UTF8Encoding]::new($false)) }
 
     foreach ($environment in @('Git', 'CVS')) {
         Install-TestEnvironment -Environment $environment
@@ -33,11 +34,11 @@ try {
         $managedCount = @($installed.hooks.PSObject.Properties.Value | ForEach-Object { @($_) } | Where-Object { (Test-ManagedLineEndingHookEntry $_) -or (Test-ManagedNotificationHookEntry $_) }).Count
         if ($managedCount -ne 0) { throw "$environment installation retained managed hooks." }
         if (@($installed.hooks.SessionStart).Count -ne 1 -or @($installed.hooks.Stop | ForEach-Object { @($_.hooks) } | Where-Object command -eq 'custom-stop.ps1').Count -ne 1) { throw "$environment installation removed unrelated hooks." }
-        foreach ($name in @('preserve-line-endings.ps1', 'show-codex-notification.ps1')) { if (Test-Path -LiteralPath (Join-Path $globalRoot "hooks\$name")) { throw "$environment installation retained $name." } }
+        foreach ($name in @('mixed-line-ending-hook.ps1', 'preserve-line-endings.ps1', 'show-codex-notification.ps1')) { if (Test-Path -LiteralPath (Join-Path $globalRoot "hooks\$name")) { throw "$environment installation retained $name." } }
         Assert-GlobalLineEndingHook -DevelopmentEnvironment $environment -Root $globalRoot -InstallWindowsNotifications $true -ProjectRoot '' | Out-Null
     }
 
-    foreach ($path in @('templates\core\hooks.json', 'templates\core\hooks\runtime-core.ps1', 'templates\core\hooks\show-codex-notification.ps1', 'templates\environments\cvs\hooks.json', 'templates\environments\cvs\hooks\preserve-line-endings.ps1')) {
+    foreach ($path in @('templates\core\hooks.json', 'templates\core\hooks\runtime-core.ps1', 'templates\core\hooks\show-codex-notification.ps1', 'templates\environments\cvs\hooks.json', 'templates\environments\cvs\hooks\mixed-line-ending-hook.ps1', 'templates\environments\cvs\hooks\preserve-line-endings.ps1')) {
         if (Test-Path -LiteralPath (Join-Path $script:ScriptRoot $path)) { throw "Active Hook template still exists: $path" }
     }
     Write-Host 'Hook-free global environment tests passed.'

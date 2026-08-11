@@ -29,13 +29,8 @@
 - Start from the requested function, method, class, file, or line range.
 - Follow direct call relationships and required dependencies only.
 - Expand incrementally instead of scanning the entire project.
-- Detect and preserve file encoding and line endings.
 - Assume files may contain Traditional Chinese, Simplified Chinese, English, Japanese, or Korean.
 - For files larger than 1000 lines, inspect only the relevant section first.
-
-## Line endings
-
-Preserve each file's original CRLF or LF format. Never introduce mixed line endings.
 
 # Validation
 

@@ -1,0 +1,31 @@
+{
+  "description": "Archived CVS mixed-line-ending Hook configuration.",
+  "hooks": {
+    "PreToolUse": [{
+      "matcher": "*",
+      "hooks": [{
+        "type": "command",
+        "command": "pwsh -NoLogo -NoProfile -NonInteractive -File \"$HOME/.codex/hooks/mixed-line-ending-hook.ps1\" -Mode Track",
+        "commandWindows": "pwsh.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"%USERPROFILE%\\.codex\\hooks\\mixed-line-ending-hook.ps1\" -Mode Track",
+        "timeout": 60
+      }]
+    }],
+    "PostToolUse": [{
+      "matcher": "*",
+      "hooks": [{
+        "type": "command",
+        "command": "pwsh -NoLogo -NoProfile -NonInteractive -File \"$HOME/.codex/hooks/mixed-line-ending-hook.ps1\" -Mode Fix",
+        "commandWindows": "pwsh.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"%USERPROFILE%\\.codex\\hooks\\mixed-line-ending-hook.ps1\" -Mode Fix",
+        "timeout": 60
+      }]
+    }],
+    "Stop": [{
+      "hooks": [{
+        "type": "command",
+        "command": "pwsh -NoLogo -NoProfile -NonInteractive -File \"$HOME/.codex/hooks/mixed-line-ending-hook.ps1\" -Mode Finalize",
+        "commandWindows": "pwsh.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"%USERPROFILE%\\.codex\\hooks\\mixed-line-ending-hook.ps1\" -Mode Finalize",
+        "timeout": 60
+      }]
+    }]
+  }
+}
