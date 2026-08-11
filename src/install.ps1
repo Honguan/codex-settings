@@ -17,8 +17,8 @@ param(
     [switch]$ForceValidation,
     [switch]$ForceNotificationTest,
     [switch]$NoPause,
-    [Nullable[bool]]$InstallWindowsNotifications,
-    [Nullable[bool]]$InstallUsageTools,
+    [object]$InstallWindowsNotifications,
+    [object]$InstallUsageTools,
     [ValidateSet('Git', 'CVS')]
     [string]$DevelopmentEnvironment,
     [string]$TargetUserProfile,
@@ -31,5 +31,9 @@ $ErrorActionPreference = 'Stop'
 $installerParameters = @{} + $PSBoundParameters
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $ScriptRoot 'load-installation.ps1')
+
+foreach ($name in @('InstallWindowsNotifications', 'InstallUsageTools')) {
+    if ($installerParameters.ContainsKey($name)) { $installerParameters[$name] = ConvertTo-InstallerBoolean -Value $installerParameters[$name] -ParameterName $name }
+}
 
 Invoke-Installer @installerParameters

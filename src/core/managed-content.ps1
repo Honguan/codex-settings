@@ -101,10 +101,20 @@ function Get-TomlShape {
     $keysBySection = @{}
     $duplicates = New-Object 'System.Collections.Generic.List[string]'
     $currentSection = $null
+    $multilineDelimiter = $null
 
     foreach ($line in ($Content -split '\r?\n')) {
+        if ($null -ne $multilineDelimiter) {
+            if ($line.Contains($multilineDelimiter)) { $multilineDelimiter = $null }
+            continue
+        }
         $trimmed = $line.Trim()
         if ($trimmed -eq '' -or $trimmed.StartsWith('#')) { continue }
+        if ($trimmed -match '^[A-Za-z0-9_.-]+\s*=\s*(?<delimiter>"""|'''')') {
+            $delimiter = $matches.delimiter
+            $remainder = $trimmed.Substring($trimmed.IndexOf($delimiter) + 3)
+            if (-not $remainder.Contains($delimiter)) { $multilineDelimiter = $delimiter }
+        }
         if ($trimmed -match '^\[([^\]]+)\]\s*(?:#.*)?$') {
             $currentSection = $matches[1].Trim()
             if (-not $sections.Add($currentSection)) { [void]$duplicates.Add("section:$currentSection") }

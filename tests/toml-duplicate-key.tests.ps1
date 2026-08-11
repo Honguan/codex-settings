@@ -23,6 +23,19 @@ if (@((Get-TomlShape -Content $valid).Duplicates).Count -ne 0) {
     throw 'Get-TomlShape rejected distinct keys in distinct TOML sections.'
 }
 
+$multiline = @'
+[features.multi_agent_v2]
+first = """
+[codex-orchestration managed-policy v1]
+"""
+second = """
+[codex-orchestration managed-policy v1]
+"""
+'@
+if (@((Get-TomlShape -Content $multiline).Duplicates).Count -ne 0) {
+    throw 'Get-TomlShape treated TOML multiline string content as sections.'
+}
+
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('codex-settings-existing-mcp-' + [guid]::NewGuid().ToString('N'))
 try {
     New-Item -ItemType Directory -Path $testRoot -Force | Out-Null

@@ -3,6 +3,12 @@ $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $script:ScriptRoot = Join-Path $repositoryRoot 'src'
 . (Join-Path $script:ScriptRoot 'load-installation.ps1')
 
+foreach ($case in @(@('True', $true), @('$false', $false), @('1', $true), @('0', $false))) {
+    $value = if ($case[0] -eq '$false') { $false } else { $case[0] }
+    if ((ConvertTo-InstallerBoolean -Value $value -ParameterName Test) -ne $case[1]) { throw "Installer Boolean conversion failed: $($case[0])" }
+}
+try { ConvertTo-InstallerBoolean -Value invalid -ParameterName Test | Out-Null; throw 'Invalid installer Boolean was accepted.' } catch { if ($_.Exception.Message -notmatch 'true、false、1 或 0') { throw } }
+
 $matrix = @(
     @('NotInstalled', 'Default', 'Install'), @('NotInstalled', 'Yes', 'Install'), @('NotInstalled', 'No', 'SkipNotInstalled'),
     @('InstalledCurrent', 'Default', 'KeepCurrent'), @('InstalledCurrent', 'Yes', 'KeepCurrent'), @('InstalledCurrent', 'No', 'Uninstall'),

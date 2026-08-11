@@ -1,3 +1,12 @@
+function ConvertTo-InstallerBoolean([object]$Value, [string]$ParameterName) {
+    if ($Value -is [bool]) { return $Value }
+    if ([string]$Value -eq '1') { return $true }
+    if ([string]$Value -eq '0') { return $false }
+    $parsed = $false
+    if ([bool]::TryParse([string]$Value, [ref]$parsed)) { return $parsed }
+    throw "$ParameterName 必須是 true、false、1 或 0。"
+}
+
 function New-InstallerContext {
     [CmdletBinding()]
     param(
